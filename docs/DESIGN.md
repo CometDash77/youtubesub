@@ -13,7 +13,7 @@ YouTube 页面 (Tampermonkey 脚本, userscript/youtubesub.user.js)
   ├─ server.py      WS 服务 + /health + Origin 检查
   ├─ store.py       按 source_id 存 cue 表 (排序, trans 随 cue)
   ├─ clock.py       播放时钟: base + elapsed*rate, transit-delay 补偿, gap-hold 带 TTL
-  ├─ sentences.py   lastOff 分句 -> 句子组 (翻译单位)
+  ├─ sentences.py   断句判据 (对齐 kiss-translator 规则分支, 见 ADR-006) -> 句子组 (翻译单位)
   ├─ provider.py    OpenAI-compatible 客户端 (protocol auto, SSE-or-JSON, 超时/重试/backoff/429)
   ├─ queue_cache.py 翻译队列 (urgent/seek > 附近 > 远处) + SQLite 持久缓存 (SHA-256 identity, 不含 Key)
   ├─ overlay.py     PySide6 浮窗 (置顶/拖动/resize/描边/双语/历史/hover 工具栏/click-through+解锁)
@@ -24,7 +24,7 @@ YouTube 页面 (Tampermonkey 脚本, userscript/youtubesub.user.js)
 
 ### 直接复用 (copy/adapt, 保留版权声明)
 - json3 解析 + lastOff 产出 <- yt-dual-subs inject.js:195-228 (MIT).
-- lastOff 分句算法与常量 (600ms/32词/280字符/最大停顿回切) <- yt-dual-subs content.js:4221-4265 (MIT).
+- (已作废, 见 ADR-006) lastOff 分句算法与常量 (600ms/32词/280字符/最大停顿回切) <- yt-dual-subs content.js:4221-4265 (MIT). 判据已改为 kiss-translator 规则分支的行为等价实现 (clean-room).
 - trans 随 cue + 排序后不脱钩 <- yt-dual-subs inject.js:473-481 (MIT).
 - nearestTcue 1200ms 时间戳回退 (计数不一致时禁止按位置配对) <- yt-dual-subs content.js:4172-4183 (MIT).
 - 对齐翻译协议 (整句进/N 行出/严格计数校验/逐 cue 缓存/失败不拆句重试) <- yt-dual-subs background.js (MIT).
@@ -56,7 +56,7 @@ YouTube 页面 (Tampermonkey 脚本, userscript/youtubesub.user.js)
 - Mock 翻译服务 (无真实 Key 时的验证替身) 与集成测试.
 
 ## 3. 翻译请求形态 (v1)
-- unit = 句子组 (ADR-004). urgent: 当前组; normal: 后方 4 组/12 cues; seek: 当前组提 urgent, 旧 urgent 取消.
+- unit = 句子组 (ADR-004; 组的划分判据见 ADR-006). urgent: 当前组; normal: 后方 4 组/12 cues; seek: 当前组提 urgent, 旧 urgent 取消.
 - prompt: system(可配模板) + 本组全文 + 上一组/下一组各一段 (上下文, 至多各 1 组, 防膨胀).
 - 对齐模式 (组内多 cue): 要求 `N|译文` 行, 校验行数 == 组内 cue 数, 失败则整组降级为单行存组级翻译 (不逐 cue 拆).
 - 并发 5, 超时 180s(可配), 429/5xx 退避 + Retry-After, 同一 identity 合并在途请求 (无取消信号时).

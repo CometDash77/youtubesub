@@ -1,7 +1,7 @@
 # CONTEXT — youtubesub (自包含, 新 session 从这里读起)
 
 ## 事实
-- 用户工作目录 D:\Documents\vibe 建项目时为空; 落地目录为 `d:\Documents\vibe\youtubesub`. **不是 git 仓库** (无 .git)。
+- 用户工作目录 D:\Documents\vibe 建项目时为空; 落地目录为 `d:\Documents\vibe\youtubesub`. 现为 **git 仓库** (origin: github.com/CometDash77/youtubesub, 分支 master; 早期"不是 git 仓库"的记录已过时)。
 - 本机: Windows 10, Node 22.23.1, Python 3.12.10 (pytest 9.1.1 / websockets 16.1.1 / requests / PySide6_Essentials 6.11.2 已装)。无 Rust/.NET。
 - 浏览器: Chrome **153.0.8010.48** 位于 `C:\Program Files\Google\Chrome\Application\chrome.exe`; Edge 153。
   Chrome User Data 里**没有 Tampermonkey** (未装任何扩展) -> "真 Tampermonkey" 场景需要用户手动装。
@@ -47,6 +47,7 @@
 - ⚠ 仍未验证: **真 Tampermonkey** (本机没装扩展)、**真实 AI Key 翻译链路** (等 Base URL+Key+Model)、
   **真实 youtube.com 抓不到 cue 的根因** (注入成功、站点确实在发 timedtext、但 bridge 没抓到; 根因未定论, 用户已归入手动验收)。
 - 手动验收入口: `docs/MANUAL-ACCEPTANCE.md` (四层); 一键启动 `start-desktop.cmd`; 依赖 `requirements.txt`。
+- ✅ (2026-09-21) **断句判据已定**: 对齐 kiss-translator 的规则分支 (ADR-006 取代 ADR-004 的判据部分; 翻译单位不变), 规格 = issue「字幕断句判据对齐 kiss-translator（规格）」#22。**代码尚未改动**。
 
 ## 下一步 (断点, 完整清单见 `.scratch/handoff/` 下最新交接文档 §5)
 0. **(已落盘, 待裁决)** P0 思维对齐: `.scratch/alignment/20260921-112756-E2E与手测入口.md` (D/K/C/O/F + 可疑遗漏 A/B);
@@ -56,4 +57,5 @@
    headed 下同一 URL 给 `200 + application/json + 8079 字节`、桥接 61 条 cue、浮窗显示真实歌词 + 【译】。
    所以 `--live` **不要加 `--headless`**; 失败原因现在会以 `capture_error` 上浮 (浮窗状态行 + `/status` + 面板 `[NO CAPTION BODY]`)。
 3. 剩余 P2 打磨: 历史字幕行渲染 / 打包分发 / 多标签 source UI。
-4. 收尾双轴评审: 本项目不是 git 仓库、没有 fixed point, 改为对交接文档 §1 的文件清单评审 (需用户确认这种替代)。
+4. 收尾双轴评审: 当时本项目还不是 git 仓库、没有 fixed point, 故改为对交接文档 §1 的文件清单评审 (需用户确认这种替代)。**注: 仓库现已建立并有提交历史, 此事可用 git fixed point 重议**。
+5. (2026-09-21 新增) 断句判据对齐 kiss 的**实现**尚未开始: 规格 #22 (ready-for-agent) → 拆票 → 逐票实现 (TDD); 验收按规格里的判据表。
