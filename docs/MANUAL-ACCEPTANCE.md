@@ -13,12 +13,12 @@
 ## L0 · 自动基线（不需要人，先跑这个）
 
 ```
-python -m pytest desktop/tests -q                       # 期望 83 passed（含 7 条真浏览器 E2E；无 Chrome 则 skip）
-cd userscript; node --test "tests/*.test.mjs"           # 期望 33 pass / 0 fail（必须用 glob 形式）
+python -m pytest desktop/tests -q                       # 期望全绿：当前 88 passed（含 7 条真浏览器 E2E；无 Chrome 会 skip，不算通过）
+cd userscript; node --test "tests/*.test.mjs"           # 期望全绿：当前 38 pass / 0 fail（必须用 glob 形式）
 node --check userscript/youtubesub.user.js              # 语法检查
 ```
 
-通过标准：pytest 83 passed；node 33 pass 0 fail；7 条 E2E 没有被 skip
+通过标准：pytest **0 failed / 0 skipped**（当前 88 passed，数字随提交增长）；node 38 pass 0 fail；7 条 E2E 没有被 skip
 （skip 说明 harness 没找到 Chrome，这时浏览器侧**等于没验**，要记下来）。
 
 E2E 用的测试特权（`--disable-web-security`、CDP `Page.setBypassCSP`）**只存在于测试 harness**，

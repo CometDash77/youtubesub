@@ -5,7 +5,8 @@ import threading, time
 from .clock import SyncState, apply_sync, estimate_ms, find_cue_at
 from .protocol import coerce_cues, parse_json3, repair_cue_ends
 from .sentences import compute_sentence_groups
-from .queue_cache import TranslationCache, TranslationJob, TranslationQueue, URGENT, NORMAL
+from .queue_cache import (TranslationCache, TranslationJob, TranslationQueue,
+                          ProviderContext, cache_identity, URGENT, NORMAL)
 from . import provider as provider_mod
 
 SEEK_JUMP_MS = 2500.0
@@ -141,14 +142,15 @@ class Engine:
         nxt_t = src.groups[gi + 1].text if gi + 1 < len(src.groups) else ""
         prompt_ctx = (prev_t, nxt_t) if self.settings.get("prompt", {}).get("context_groups", 1) else ("", "")
         ident = self._identity(prov, instructions, self._client_key(src, g), g, prompt_ctx)
+        # Identity and namespace come from the one snapshot above, so a job can
+        # never describe one provider in its identity and another in its context.
         job = TranslationJob(ident, priority, src.source_id, gi, g.text,
                              prev=prompt_ctx[0], nxt=prompt_ctx[1],
                              expected=(g.end_idx - g.start_idx + 1),
-                             provider=prov, namespace=self._provider_ns)
+                             context=ProviderContext(prov, self._namespace_of(prov, instructions)))
         self._queue.submit(job)
 
     def _identity(self, prov, instructions, client_key, g, prompt_ctx):
-        from .queue_cache import cache_identity
         prompt = g.text
         if prompt_ctx[0] or prompt_ctx[1]:
             prompt = " || ".join([x for x in prompt_ctx if x]) + " || " + g.text
@@ -156,23 +158,26 @@ class Engine:
 
     def _provider_snapshot(self):
         """(provider copy, instructions) - the inputs both the cache identity and
-        the translation namespace are computed from, taken in one place so the two
-        cannot disagree about which provider this run is."""
+        the translation namespace are computed from. Taken in one place, so a job
+        cannot describe one provider in its identity and another in its context."""
         prov = dict(self.settings.get("provider", {}))
         instructions = (self.settings.get("prompt", {}).get("system")
                         or provider_mod.DEFAULT_SYSTEM_PROMPT)
         return prov, instructions
 
-    def _provider_namespace(self):
-        """The provider + instructions namespace every translation derives from.
+    def _namespace_of(self, prov, instructions):
+        """The provider + instructions namespace for one provider snapshot.
 
-        The persistent cache identity is this namespace plus the per-sentence
-        parts (client_key / prompt), so a namespace change changes every identity
-        in it - but not the converse: one sentence's identity can change while the
-        namespace stays put."""
-        from .queue_cache import cache_identity
-        prov, instructions = self._provider_snapshot()
+        This is the cache identity with the per-sentence parts (client_key /
+        prompt) blanked, so any identity in the namespace changes when the
+        namespace does - but not the converse: one sentence's identity can change
+        while the namespace stays put."""
         return cache_identity(prov, "", instructions, "")
+
+    def _provider_namespace(self):
+        """The namespace the live settings currently describe."""
+        prov, instructions = self._provider_snapshot()
+        return self._namespace_of(prov, instructions)
 
     def _sync_namespace(self):
         """Issue #31: translations are provider-derived. Toggling Mock - or editing
@@ -192,7 +197,7 @@ class Engine:
         # Issue #31: the job carries the provider its identity was computed from,
         # so the result written under that identity always came from that
         # provider - even if Settings changed while the job sat in the queue.
-        prov = (dict(job.provider) if job.provider is not None
+        prov = (dict(job.context.provider) if job.context is not None
                 else dict(self.settings.get("provider", {})))
         if not _provider_usable(prov):
             # Defence in depth for a job queued without a provider snapshot.
@@ -220,7 +225,7 @@ class Engine:
         if result.get("error") or not job or job.cancelled:
             return
         with self._lock:
-            if job.namespace is not None and job.namespace != self._provider_ns:
+            if job.context is not None and job.context.namespace != self._provider_ns:
                 # Issue #31: the namespace moved while this job was in flight (Mock
                 # toggled, endpoint edited). Its text came from the old provider and
                 # must not land among the new provider's translations.
@@ -257,8 +262,13 @@ class Engine:
         """Read-only snapshot for the /status route (never raises). The Qt tick
         keeps last_display fresh, so this must not drive scheduling itself."""
         with self._lock:
+            display = dict(self.last_display or {})
+            # Issue #1 contract (docs/PROTOCOL.md): /status always answers "can this
+            # run translate at all", even before the first tick has anything to show.
+            display.setdefault("trans_available",
+                               _provider_usable(self.settings.get("provider", {})))
             return {"sources": len(self.sources), "active_source": self.active_source,
-                    "display": dict(self.last_display or {})}
+                    "display": display}
 
     def _tick_locked(self):
         with self._lock:

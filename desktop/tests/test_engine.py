@@ -396,3 +396,17 @@ def test_engine_reports_whether_a_translation_is_possible_at_all():
     assert display_with({"mock": True})["trans_available"] is True
     assert display_with({"base_url": "https://api.example.test/v1",
                          "model": "test-model"})["trans_available"] is True
+
+
+def test_status_always_carries_a_translation_authority():
+    """The documented /status contract (docs/PROTOCOL.md): trans_available is
+    _provider_usable even before the first tick produced a display state - a
+    configured provider must not read as "no translation" on a fresh app."""
+    from suboverlay.queue_cache import TranslationCache
+    s = default_settings()
+    e = Engine(s, cache=TranslationCache(os.path.join(tempfile.mkdtemp(), "t.db")), workers=1)
+    assert e.last_display is None
+    assert e.status()["display"]["trans_available"] is False
+    s["provider"]["mock"] = True
+    assert e.status()["display"]["trans_available"] is True
+    e._queue.shutdown()

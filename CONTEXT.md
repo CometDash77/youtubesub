@@ -33,10 +33,10 @@
 - local-screen-translator: DOM 回显是错误架构, 仅复用 LRU/dpi/overlay flag 思路; localhost sink 教训: JSON + Origin 检查.
 
 ## 状态 (详见 PROGRESS.md 与 `.scratch/handoff/` 下最新交接文档, 随做随更)
-- 桌面端全部实现完毕; **pytest 86 passed** (~20s)。含真实 WS 集成、引擎全管线(mock)、浮窗 resize 回归、
+- 桌面端全部实现完毕; **pytest 88 passed** (~20s)。含真实 WS 集成、引擎全管线(mock)、浮窗 resize 回归、
   /health 与 /status 路由、无 provider 不泄露、provider 抛错不 500、跨语言解析夹具 11 例、
   **真浏览器 E2E 7 条 (夹具页 + 真 userscript + 真 app.py, 只经 /status 黑盒观察; 无 Chrome 则 skip)**、热键 4 条、浮窗状态 2 条。
-- **Node 测试台: 33 passed** (命令 `cd userscript; node --test "tests/*.test.mjs"`; 传目录会 MODULE_NOT_FOUND)。
+- **Node 测试台: 38 passed** (命令 `cd userscript; node --test "tests/*.test.mjs"`; 传目录会 MODULE_NOT_FOUND)。
   共享夹具 `userscript/tests/fixtures/parse_cases.json` 被 JS 与 Python 两侧断言同一份内容 (解析一致性)。
 - userscript 现在 **471 行**。上一轮修了 3 处: (1) 去重改为内容签名 (`cuesSignature`) —— 修"同 cue 数不同轨道被误判为重复";
   (2) 无 GM_xmlhttpRequest 时 health 回退为直接尝试 WS; (3) `trackLangFromUrl` 优先 tlang。
@@ -45,8 +45,10 @@
   根因是真实 youtube.com 上 `el.textContent = code` 被 `require-trusted-types-for script` 拒绝, 页面钩子静默失败 (详见交接文档 §2 bug#4)。
 - 浮窗已真实运行并经假浏览器驱动验证 (截图像素证据: 原文白字+译文黄字均渲染; 暂停后清空)。
 - 用户反馈已修: 无窗口尺寸限制; 字号下限6/默认10可设; 放大后无法缩小的 resize bug (按下锁定边缘)。
-- **`GET /status`**: `{ok,version,stats}` + `state/orig/trans/playing/rate/title/mode/order/history/click_through/hook_error/capture_error`。
+- **`GET /status`**: `{ok,version,stats}` + `state/orig/trans/trans_available/playing/rate/title/mode/order/history/click_through/hook_error/capture_error`。
   用途: 不截图就能看"连上了吗/浮窗在显示什么"; 也是浏览器 E2E 的黑盒观察口。会回显字幕文本 (仅 loopback, 无 provider 时不回显)。
+  `trans_available` = `_provider_usable` (显式 Mock, 或 base_url+model 非空), 浮窗据此在没有译文可显示时回退显示原文
+  (issue #1: 行带常驻【原】/【译】标签; bilingual 两行之间恒画一条横向分割线; 没有 provider 的默认设置不再表现成空白)。
 - ✅ **浏览器侧已在真 Chrome 里跑过** (E2E 7 条全绿 + `--demo`/`--live` 人工入口): 页面钩子在真实主世界抓到 timedtext、
   真实 Origin 过 WS 白名单、真 cue 走到浮窗显示态、play/pause/seek/rate/SPA 语义均经 `/status` 黑盒断言。
   该会话据此修掉 4 个真 bug (cues 清零时钟 / click-through 无解锁路径 / 菜单时序 / YouTube Trusted Types 静默失败)。
