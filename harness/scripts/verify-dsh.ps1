@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
   [string]$DshHome = (Join-Path $env:USERPROFILE '.dsh-community'),
-  [string]$AppRoot  = 'C:\Users\Administrator\AppData\Local\Programs\DeepSeek Harness Desktop\resources\app.asar.unpacked'
+  [string]$AppRoot  = 'C:\Users\Administrator\AppData\Local\Programs\DeepSeek Harness Desktop\resources\app.asar.unpacked',
+  [string]$ResourcesRoot = 'C:\Users\Administrator\AppData\Local\Programs\DeepSeek Harness Desktop\resources'
 )
 $ErrorActionPreference = 'Continue'
 
@@ -74,12 +75,73 @@ else { Add-Result 'Session' $false 'no contextBreakdown for the newest session' 
 
 Write-Host ''
 $results | Format-Table -AutoSize | Out-String -Width 200 | Write-Host
-$expected = 4
+# ---- 5. RuntimeIntegrity: installed runtime files must match known-good hashes ----
+# This is the P0 gate for the failure mode the audit found: hand-patching a file inside the
+# installed runtime leaves no trace and is silently overwritten by the next upgrade.
+$rtIssues = New-Object System.Collections.ArrayList
+$kgPath = Join-Path $ResourcesRoot 'runtime-support/known-good.json'
+$rtRoot = Join-Path $DshHome 'profiles/node_modules/@deepseek-ai/dsh'
+if (-not (Test-Path -LiteralPath $kgPath)) { Add-Result 'RuntimeIntegrity' $false "known-good.json not found at $kgPath" }
+elseif (-not (Test-Path -LiteralPath $rtRoot)) { Add-Result 'RuntimeIntegrity' $false "runtime not found at $rtRoot" }
+else {
+  $kg = Get-Content -LiteralPath $kgPath -Raw -Encoding UTF8 | ConvertFrom-Json
+  $checked = 0
+  foreach ($p in $kg.runtime.files.PSObject.Properties) {
+    $f = Join-Path $rtRoot ($p.Name -replace '/', '\')
+    if (-not (Test-Path -LiteralPath $f)) { [void]$rtIssues.Add("missing " + $p.Name); continue }
+    $h = (Get-FileHash -LiteralPath $f -Algorithm SHA256).Hash.ToLower()
+    $want = ([string]$p.Value).ToLower()
+    if ($h -ne $want) { [void]$rtIssues.Add("drift " + $p.Name) }
+    $checked++
+  }
+  $liveVer = 'unknown'
+  $livePkg = Join-Path $rtRoot 'package.json'
+  if (Test-Path -LiteralPath $livePkg) { try { $liveVer = (Get-Content -LiteralPath $livePkg -Raw -Encoding UTF8 | ConvertFrom-Json).version } catch {} }
+  if ($liveVer -ne $kg.runtime.version) { [void]$rtIssues.Add("version " + $liveVer + " != known-good " + $kg.runtime.version) }
+  Add-Result 'RuntimeIntegrity' ($rtIssues.Count -eq 0) $(if ($rtIssues.Count -eq 0) { "runtime " + $liveVer + " matches known-good ($checked files)" } else { $rtIssues -join '; ' })
+}
+
+# ---- 6. SnapshotIntegrity: the newest baseline snapshot must still verify ----
+$bkRoot = Join-Path (Split-Path -Parent $scriptDir) 'backups'
+$snaps = @(Get-ChildItem -LiteralPath $bkRoot -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -notlike 'pre-restore-*' } | Sort-Object Name -Descending)
+if ($snaps.Count -eq 0) { Add-Result 'SnapshotIntegrity' $false "no snapshot under $bkRoot" }
+else {
+  $s = $snaps[0]
+  $mp = Join-Path $s.FullName 'manifest.json'
+  $bad = 0
+  if (-not (Test-Path -LiteralPath $mp)) { Add-Result 'SnapshotIntegrity' $false "manifest.json missing in $($s.Name)" }
+  else {
+    $meta = Get-Content -LiteralPath $mp -Raw -Encoding UTF8 | ConvertFrom-Json
+    foreach ($m in $meta.files) {
+      $f = Join-Path $s.FullName ($m.rel -replace '/', '\')
+      if (-not (Test-Path -LiteralPath $f)) { $bad++; continue }
+      if ((Get-FileHash -LiteralPath $f -Algorithm SHA256).Hash -ne $m.sha256) { $bad++ }
+    }
+    # drift is informational, not a gate: after a deliberate config change the live files SHOULD differ
+    $drift = 0
+    foreach ($m in $meta.files) { if (Test-Path -LiteralPath $m.src) { if ((Get-FileHash -LiteralPath $m.src -Algorithm SHA256).Hash -ne $m.sha256) { $drift++ } } }
+    # Files ADDED under a snapshotted tree since the baseline are drift too - the manifest
+    # can only see what existed when it was written. This is what catches an install.
+    $treeRel = 'config/.agent-presets/'
+    $treeSrc = Join-Path $DshHome '.agent-presets'
+    $inManifest = @{}
+    foreach ($m in $meta.files) { if ($m.rel.StartsWith($treeRel)) { $inManifest[$m.rel.Substring($treeRel.Length)] = $true } }
+    $added = 0
+    foreach ($f in (Get-ChildItem -LiteralPath $treeSrc -Recurse -File -Force -ErrorAction SilentlyContinue)) {
+      $rel = $f.FullName.Substring($treeSrc.Length + 1).Replace('\', '/')
+      if (-not $inManifest.ContainsKey($rel)) { $added++ }
+    }
+    Add-Result 'SnapshotIntegrity' ($bad -eq 0) ("baseline=" + $s.Name + " files=" + @($meta.files).Count + " corrupt=" + $bad + " liveDrift=" + $drift + " addedUnderAgentPresets=" + $added)
+  }
+}
+
+$expected = 6
 $failed = @($results | Where-Object { $_.Result -ne 'PASS' }).Count
 if ($results.Count -ne $expected) {
   Write-Host ("FAIL: expected $expected checks, collected $($results.Count) - a check did not run")
   $failed += ($expected - $results.Count)
 }
+Write-Host ("CHECKS=" + (($results | ForEach-Object { $_.Check + ':' + $_.Result }) -join ','))
 Write-Host ("RESULT: " + $(if ($failed -eq 0) { "OK ($($results.Count)/$expected)" } else { "FAIL ($failed of $expected)" }))
 if ($failed -gt 0) { exit 1 }
 exit 0

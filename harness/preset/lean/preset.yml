@@ -1,0 +1,3 @@
+name: Lean（PTC + 收窄工具面）
+description: 与 PTC 模式同源，但按能力家族收窄模型可见工具面：去掉 MCP/浏览器、SSH、Agent Teams、job、goal、consult_expert、spawn_teammate 共 42 个工具，实测 tools:sdk 段省 24053 字符 / 约 6014 tokens（系统提示 14452 -> 约 8438 tokens）。
+order: 90
