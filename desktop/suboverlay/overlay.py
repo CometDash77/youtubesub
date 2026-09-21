@@ -13,6 +13,8 @@ GWL_EXSTYLE = -20
 WS_EX_TRANSPARENT = 0x00000020
 RESIZE_MARGIN = 10
 DELTA_MODE_HEIGHT = 40
+ROW_LABELS = {"orig": "【原】", "trans": "【译】"}
+DIVIDER_RGBA = (255, 255, 255, 80)
 
 class OverlayWindow(QtWidgets.QWidget):
     modes = ("bilingual", "trans", "orig")
@@ -28,6 +30,8 @@ class OverlayWindow(QtWidgets.QWidget):
         self.orig_text = ""
         self.trans_text = ""
         self.status_text = ""
+        # Engine's answer to "can this run translate at all?"; see display_rows().
+        self.trans_available = True
         self._press_pos = None
         self._resizing = False
         self._resize_edge = None
@@ -78,6 +82,7 @@ class OverlayWindow(QtWidgets.QWidget):
             self.update()
             return
         self.status_text = "" if d.get("playing") else "[Paused]"
+        self.trans_available = bool(d.get("trans_available", self.trans_available))
         o, t = d.get("orig", ""), d.get("trans", "")
         if o and (o != self.orig_text or t != self.trans_text):
             if self.history and self.history[-1] != (self.orig_text, self.trans_text):
@@ -107,11 +112,8 @@ class OverlayWindow(QtWidgets.QWidget):
         margin = 14
         area = self.rect().adjusted(margin, margin, -margin, -margin)
         y = area.top()
-        rows = self._rows()
-        fm_scale = 1.0
-        for text, role in rows:
-            if not text:
-                continue
+        rows, divider_after = self.display_rows()
+        for i, (role, text) in enumerate(rows):
             size = float(disp.get("font_size", 15))
             if role == "trans":
                 size = size * 1.25
@@ -122,6 +124,8 @@ class OverlayWindow(QtWidgets.QWidget):
             color = QtGui.QColor(255, 255, 255) if role == "orig" else QtGui.QColor(255, 224, 130)
             y = self._draw_wrapped(p, font, text, area, y, color,
                                     float(disp.get("stroke", 2.0)))
+            if i == divider_after:
+                y = self._draw_divider(p, area, y)
         if self.status_text:
             font = QtGui.QFont("Consolas", 9)
             p.setFont(font)
@@ -130,16 +134,48 @@ class OverlayWindow(QtWidgets.QWidget):
                        QtCore.Qt.AlignLeft, self.status_text)
         p.end()
 
-    def _rows(self):
-        orig, trans = self.orig_text, self.trans_text
+    def display_rows(self):
+        """Rows to paint, in order, plus the index the divider is drawn under.
+
+        Returns ([(role, text), ...], divider_after); text already carries the
+        row's constant 【原】/【译】 label. This is the single place that decides
+        what a mode shows when there is no translation to show (issue #1): a
+        missing translation must not blank the overlay, so trans mode falls back
+        to the original instead of drawing nothing. `trans_available` is the
+        engine's word on whether this run can translate at all - the display
+        layer never infers it from provider config, and an empty translation row
+        is not evidence that none is coming.
+        """
+        orig, trans = self.orig_text or "", self.trans_text or ""
         if self.mode == "orig":
-            return [(orig, "orig")]
-        if self.mode == "trans":
-            return [(trans, "trans")]
-        rows = [(trans, "trans"), (orig, "orig")]
-        if self.order == "orig_first":
-            rows.reverse()
-        return rows
+            rows = [("orig", orig)]
+        elif self.mode == "trans" and not trans and not self.trans_available:
+            rows = [("orig", orig)]
+        elif self.mode == "trans":
+            rows = [("trans", trans)]
+        else:
+            rows = [("trans", trans), ("orig", orig)]
+            if self.order == "orig_first":
+                rows.reverse()
+        if not any(text for _, text in rows):
+            return [], None  # between cues: no floating labels, no divider
+        divider_after = 0 if len(rows) == 2 else None
+        return [(role, self._labelled(role, text)) for role, text in rows], divider_after
+
+    def _labelled(self, role, text):
+        """Row text with its constant label. Text that already carries it (the
+        mock translator writes 【译】 into its own output) is left alone, so the
+        label never doubles up on itself."""
+        label = ROW_LABELS.get(role, "")
+        return text if text.startswith(label) else label + text
+
+    def _draw_divider(self, p, area, y):
+        """The bilingual separator (issue #1 Q2a): drawn between the two rows
+        whenever the mode has two, even while one of them is still empty."""
+        mid = y + 2
+        p.setPen(QtGui.QPen(QtGui.QColor(*DIVIDER_RGBA), 1))
+        p.drawLine(area.left(), mid, area.right(), mid)
+        return mid + 4
 
     def _draw_wrapped(self, p, font, text, area, y, color, stroke_w):
         fm = QtGui.QFontMetrics(font)

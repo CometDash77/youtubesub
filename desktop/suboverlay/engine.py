@@ -223,7 +223,8 @@ class Engine:
                 # capture_error = the hook ran but the caption response was unusable.
                 return {"state": "no_cues", "title": src.meta.get("tab_title") if src else "",
                         "hook_error": (src.meta.get("hook_error") or "") if src else "",
-                        "capture_error": (src.meta.get("capture_error") or "") if src else ""}
+                        "capture_error": (src.meta.get("capture_error") or "") if src else "",
+                        "trans_available": _provider_usable(self.settings.get("provider", {}))}
             t = estimate_ms(src.sync)
             cue = find_cue_at(src.cues, t)
             if cue is not None:
@@ -245,7 +246,12 @@ class Engine:
                         trans = cue.trans
             title = src.meta.get("tab_title") or ""
             return {"state": "ok", "orig": cue.text if cue else "",
-                    "trans": trans, "playing": src.sync.playing,
+                    "trans": trans,
+                    # Issue #1: the one authority on whether this run can translate
+                    # at all, so the overlay never reads provider config itself and
+                    # never has to guess "no translation" from an empty string.
+                    "trans_available": _provider_usable(self.settings.get("provider", {})),
+                    "playing": src.sync.playing,
                     "rate": src.sync.playback_rate, "title": title,
                     "hook_error": src.meta.get("hook_error") or "",
                     "capture_error": src.meta.get("capture_error") or ""}

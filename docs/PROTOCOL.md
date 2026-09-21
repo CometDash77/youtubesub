@@ -3,8 +3,11 @@
 传输: WebSocket, `ws://127.0.0.1:9877/ws`. 每帧一个 JSON 对象, 按 `type` 分发 (沿用 dkitle 的设计, 自实现).
 另有 `GET http://127.0.0.1:9877/health` -> `{"ok":true,"version":1}` 供脚本连接前做存活探测.
 诊断端点 `GET http://127.0.0.1:9877/status` -> `{"ok":true,"version":1,"stats":{frames,bad_frames,error},
-"state":"ok|no_cues","orig":"...","trans":"...","playing":bool,"rate":num,"title":"...",
+"state":"ok|no_cues","orig":"...","trans":"...","trans_available":bool,"playing":bool,"rate":num,"title":"...",
 "sources":n,"active_source":"...","mode":"...","order":"...","history":[[orig,trans],...],"click_through":bool,"hook_error":"...","capture_error":"..."}`
+`trans_available` = 这一轮究竟会不会产出译文 (`_provider_usable`: 显式 Mock, 或 base_url 与 model 都非空)。
+`trans` 为空只表示「这一刻没有译文」, 不表示「没有翻译可用」—— 浮窗的 trans 模式据此决定译文为空时回退显示原文 (issue #1);
+显示层不解析 provider 配置, 只读这个字段。
 `hook_error` 非空 = 脚本连上了、但页面钩子没装成功; `capture_error` 非空 = 钩子装上了、也看到了字幕请求, 但响应没有可用正文 (都见 register); 两者都空 = 正常。
 — 用于人工/自动化确认"脚本连上了吗、浮窗现在显示什么", 免截图. 会回显字幕文本, 因此**仅 loopback 可用**;
 未注入 status provider 的实例只回 `ok/version/stats`; provider 抛错时记 `status_error` 且仍返回 200 (诊断路由永不 500).

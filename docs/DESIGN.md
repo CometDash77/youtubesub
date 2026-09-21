@@ -16,7 +16,7 @@ YouTube 页面 (Tampermonkey 脚本, userscript/youtubesub.user.js)
   ├─ sentences.py   断句判据 (对齐 kiss-translator 规则分支, 见 ADR-006) -> 句子组 (翻译单位)
   ├─ provider.py    OpenAI-compatible 客户端 (protocol auto, SSE-or-JSON, 超时/重试/backoff/429)
   ├─ queue_cache.py 翻译队列 (urgent/seek > 附近 > 远处) + SQLite 持久缓存 (SHA-256 identity, 不含 Key)
-  ├─ overlay.py     PySide6 浮窗 (置顶/拖动/resize/描边/双语/历史/hover 工具栏/click-through+解锁)
+  ├─ overlay.py     PySide6 浮窗 (置顶/拖动/resize/描边/双语/常驻【原】/【译】行标签 + 双语行间分割线/历史/hover 工具栏/click-through+解锁)
   └─ settings.py    %APPDATA%/SubOverlay/setting.json (Key 只存这里; 损坏 -> .bak)
 ```
 

@@ -157,7 +157,9 @@ class App:
         s = self.engine.status()
         d = s.get("display") or {}
         return {"state": d.get("state", ""), "orig": d.get("orig", ""),
-                "trans": d.get("trans", ""), "playing": d.get("playing"),
+                "trans": d.get("trans", ""),
+                "trans_available": bool(d.get("trans_available", False)),
+                "playing": d.get("playing"),
                 "rate": d.get("rate"), "title": d.get("title", ""),
                 "hook_error": d.get("hook_error", ""),
                 "capture_error": d.get("capture_error", ""),

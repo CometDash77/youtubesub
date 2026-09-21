@@ -13,12 +13,12 @@
 ## L0 · 自动基线（不需要人，先跑这个）
 
 ```
-python -m pytest desktop/tests -q                       # 期望 65 passed（含 7 条真浏览器 E2E；无 Chrome 则 skip）
+python -m pytest desktop/tests -q                       # 期望 83 passed（含 7 条真浏览器 E2E；无 Chrome 则 skip）
 cd userscript; node --test "tests/*.test.mjs"           # 期望 33 pass / 0 fail（必须用 glob 形式）
 node --check userscript/youtubesub.user.js              # 语法检查
 ```
 
-通过标准：pytest 65 passed；node 33 pass 0 fail；7 条 E2E 没有被 skip
+通过标准：pytest 83 passed；node 33 pass 0 fail；7 条 E2E 没有被 skip
 （skip 说明 harness 没找到 Chrome，这时浏览器侧**等于没验**，要记下来）。
 
 E2E 用的测试特权（`--disable-web-security`、CDP `Page.setBypassCSP`）**只存在于测试 harness**，
@@ -58,6 +58,29 @@ python desktop/tests/browser_e2e.py --demo [--seconds 30]
 harness 只 kill 自己启动的 Chrome；**不要 kill 你自己常驻的 chrome.exe**。
 
 **失败时记什么**：哪一步、`/status` 的 `state/orig/trans/playing/rate/hook_error` 原文、控制台里 `[youtubesub]` 开头的行。
+
+---
+
+### L1b · 未配置 provider（issue #1：没有译文时原文必须还看得见）
+
+**目的**：base_url / model 都空、也没勾 Mock（= 装完第一次运行的状态）时，「没有译文」不得表现成「没有字幕」。
+**状态**：显示层已改，自动验证见 `desktop/tests/test_overlay_labels.py`；**待你本人眼看一次**。
+
+```
+start-desktop.cmd          # 默认设置，不填任何模型
+```
+
+1. 打开任意带 CC 字幕的视频，等浮窗出原文；
+2. 右键浮窗 → **Mode: original/translation/bilingual** 切到 `translation`。
+
+核对：
+
+- [ ] trans 模式下显示的是**原文**，不是空白（回退生效）
+- [ ] 原文行前面是 **【原】**；整窗**不出现【译】**任何字样（没有编造的译文）
+- [ ] bilingual 模式：原文行与译文槽之间有一条**常驻横向分割线**（译文为空时也在）
+- [ ] 有真实译文时（L4 配好 provider）：translation 模式仍只显示译文，行为与以前一致
+
+**失败时记什么**：`/status` 的 `state/orig/trans/trans_available/mode` 原文，以及浮窗截图。
 
 ---
 

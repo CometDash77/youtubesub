@@ -181,3 +181,30 @@ def test_unconfigured_provider_never_fabricates_a_translation():
     assert d["orig"].startswith("the cat"), "the original must still be shown"
     assert d["trans"] == "", "an unconfigured provider must not produce a translation"
     e._queue.shutdown()
+
+
+def test_engine_reports_whether_a_translation_is_possible_at_all():
+    """Issue #1 (display half): the overlay must not read provider config to decide
+    whether a translation is coming, so the display state carries the engine's one
+    authority - _provider_usable(). An empty translation is not evidence by itself:
+    with a usable provider it means "still in flight"."""
+    from suboverlay.queue_cache import TranslationCache
+
+    def display_with(provider_update):
+        s = default_settings()
+        s["provider"].update(provider_update)
+        # stub translator: this test is about the flag, never about the wire
+        e = Engine(s, cache=TranslationCache(os.path.join(tempfile.mkdtemp(), "t.db")),
+                   workers=1, translate_fn=lambda job: {"aligned": False, "text": "",
+                                                        "error": "STUB"})
+        e.ingest_json3("s1", {"video_id": "v1", "track_kind": "asr"}, JSON3)
+        e.handle_event({"type": "sync", "source_id": "s1", "video_time_ms": 1500.0,
+                        "playing": True, "playback_rate": 1.0, "timestamp": time.time() * 1000})
+        d = e.tick()
+        e._queue.shutdown()
+        return d
+
+    assert display_with({})["trans_available"] is False
+    assert display_with({"mock": True})["trans_available"] is True
+    assert display_with({"base_url": "https://api.example.test/v1",
+                         "model": "test-model"})["trans_available"] is True
