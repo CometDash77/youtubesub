@@ -2,3 +2,6 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+
+# DSH config snapshots may contain account/endpoint data - never commit them
+harness/backups/
