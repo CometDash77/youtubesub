@@ -1,0 +1,4 @@
+﻿clean worktree @ 2dcef88371af8e6d52e0a306508d4dfb6a925562 ; cmd: python -m pytest desktop/tests -q
+........................................................................ [ 88%]
+.........                                                                [100%]
+81 passed in 21.52s

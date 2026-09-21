@@ -1,0 +1,215 @@
+﻿red: parent fdb98f1 + the committed desktop/tests/test_overlay_labels.py (from 2dcef88)
+cmd: python -m pytest desktop/tests/test_overlay_labels.py -q
+F.FFFF.F.F.                                                              [100%]
+================================== FAILURES ===================================
+__________ test_trans_mode_without_a_translation_shows_the_original ___________
+
+    def test_trans_mode_without_a_translation_shows_the_original():
+        """The reported bug: default settings (no provider), trans mode, blank window."""
+        log = paint("trans", "FIXTURE ALPHA one", "", trans_available=False)
+>       assert log.texts == [ORIG_LABEL + "FIXTURE ALPHA one"]
+E       AssertionError: assert [] == ['��ԭ��FIXTURE ALPHA one']
+E         
+E         Right contains one more item: '��ԭ��FIXTURE ALPHA one'
+E         
+E         Full diff:
+E         + []
+E         - [
+E         -     '��ԭ��FIXTURE ALPHA one',
+E         - ]
+
+desktop\tests\test_overlay_labels.py:71: AssertionError
+_____ test_trans_mode_with_a_translation_still_shows_only_the_translation _____
+
+    def test_trans_mode_with_a_translation_still_shows_only_the_translation():
+        log = paint("trans", "Hello", "\u4f60\u597d", trans_available=True)
+>       assert log.texts == [TRANS_LABEL + "\u4f60\u597d"]
+E       AssertionError: assert ['���'] == ['���롿���']
+E         
+E         At index 0 diff: '���' != '���롿���'
+E         
+E         Full diff:
+E           [
+E         -     '���롿���',
+E         ?      ---
+E         +     '���',
+E           ]
+
+desktop\tests\test_overlay_labels.py:85: AssertionError
+___ test_bilingual_without_a_translation_keeps_both_labels_and_the_divider ____
+
+    def test_bilingual_without_a_translation_keeps_both_labels_and_the_divider():
+        log = paint("bilingual", "Hello there", "", trans_available=False)
+>       assert log.texts == [TRANS_LABEL, ORIG_LABEL + "Hello there"]
+E       AssertionError: assert ['Hello there'] == ['���롿', '��ԭ��Hello there']
+E         
+E         At index 0 diff: 'Hello there' != '���롿'
+E         Right contains one more item: '��ԭ��Hello there'
+E         
+E         Full diff:
+E           [
+E         -     '���롿',
+E         -     '��ԭ��Hello there',
+E         ?      ---
+E         +     'Hello there',
+E           ]
+
+desktop\tests\test_overlay_labels.py:91: AssertionError
+________ test_bilingual_divider_sits_between_the_rows_in_either_order _________
+
+    def test_bilingual_divider_sits_between_the_rows_in_either_order():
+        first = paint("bilingual", "Hello", "\u4f60\u597d", order="trans_first")
+>       assert first.texts == [TRANS_LABEL + "\u4f60\u597d", ORIG_LABEL + "Hello"]
+E       AssertionError: assert ['���', 'Hello'] == ['���롿���', '��ԭ��Hello']
+E         
+E         At index 0 diff: '���' != '���롿���'
+E         
+E         Full diff:
+E           [
+E         -     '���롿���',
+E         ?      ---
+E         +     '���',
+E         -     '��ԭ��Hello',
+E         ?      ---
+E         +     'Hello',
+E           ]
+
+desktop\tests\test_overlay_labels.py:97: AssertionError
+_____________ test_orig_mode_keeps_its_label_and_draws_no_divider _____________
+
+    def test_orig_mode_keeps_its_label_and_draws_no_divider():
+        log = paint("orig", "Hello", "\u4f60\u597d")
+>       assert log.texts == [ORIG_LABEL + "Hello"]
+E       AssertionError: assert ['Hello'] == ['��ԭ��Hello']
+E         
+E         At index 0 diff: 'Hello' != '��ԭ��Hello'
+E         
+E         Full diff:
+E           [
+E         -     '��ԭ��Hello',
+E         ?      ---
+E         +     'Hello',
+E           ]
+
+desktop\tests\test_overlay_labels.py:106: AssertionError
+______________ test_a_none_text_is_treated_as_empty_not_a_crash _______________
+
+    def test_a_none_text_is_treated_as_empty_not_a_crash():
+        """set_display copies whatever the engine sent; a falsy side must not take the
+        paint slot down (the old renderer skipped it)."""
+        log = paint("bilingual", None, "\u4f60\u597d")
+>       assert log.texts == [TRANS_LABEL + "\u4f60\u597d", ORIG_LABEL]
+E       AssertionError: assert ['���'] == ['���롿���', '��ԭ��']
+E         
+E         At index 0 diff: '���' != '���롿���'
+E         Right contains one more item: '��ԭ��'
+E         
+E         Full diff:
+E           [
+E         -     '���롿���',
+E         ?      ---
+E         +     '���',
+E         -     '��ԭ��',
+E           ]
+
+desktop\tests\test_overlay_labels.py:121: AssertionError
+_____________ test_set_display_hands_the_engines_word_to_the_rows _____________
+
+    def test_set_display_hands_the_engines_word_to_the_rows():
+        """The flag travels on the display state, so the overlay never has to read
+        provider config itself (Engine is the only authority on _provider_usable)."""
+        w = OverlayWindow(default_settings())
+        w.resize(420, 140)
+        w.mode = "trans"
+        w.set_display({"state": "ok", "orig": "Hello", "trans": "", "trans_available": False})
+        log = PaintLog(w)
+        w.paintEvent(None)
+>       assert log.texts == [ORIG_LABEL + "Hello"]
+E       AssertionError: assert [] == ['��ԭ��Hello']
+E         
+E         Right contains one more item: '��ԭ��Hello'
+E         
+E         Full diff:
+E         + []
+E         - [
+E         -     '��ԭ��Hello',
+E         - ]
+
+desktop\tests\test_overlay_labels.py:140: AssertionError
+=========================== short test summary info ===========================
+FAILED desktop/tests/test_overlay_labels.py::test_trans_mode_without_a_translation_shows_the_original - AssertionError: assert [] == ['��ԭ��FIXTURE ALPHA one']
+  
+  Right contains one more item: '��ԭ��FIXTURE ALPHA one'
+  
+  Full diff:
+  + []
+  - [
+  -     '��ԭ��FIXTURE ALPHA one',
+  - ]
+FAILED desktop/tests/test_overlay_labels.py::test_trans_mode_with_a_translation_still_shows_only_the_translation - AssertionError: assert ['���'] == ['���롿���']
+  
+  At index 0 diff: '���' != '���롿���'
+  
+  Full diff:
+    [
+  -     '���롿���',
+  ?      ---
+  +     '���',
+    ]
+FAILED desktop/tests/test_overlay_labels.py::test_bilingual_without_a_translation_keeps_both_labels_and_the_divider - AssertionError: assert ['Hello there'] == ['���롿', '��ԭ��Hello there']
+  
+  At index 0 diff: 'Hello there' != '���롿'
+  Right contains one more item: '��ԭ��Hello there'
+  
+  Full diff:
+    [
+  -     '���롿',
+  -     '��ԭ��Hello there',
+  ?      ---
+  +     'Hello there',
+    ]
+FAILED desktop/tests/test_overlay_labels.py::test_bilingual_divider_sits_between_the_rows_in_either_order - AssertionError: assert ['���', 'Hello'] == ['���롿���', '��ԭ��Hello']
+  
+  At index 0 diff: '���' != '���롿���'
+  
+  Full diff:
+    [
+  -     '���롿���',
+  ?      ---
+  +     '���',
+  -     '��ԭ��Hello',
+  ?      ---
+  +     'Hello',
+    ]
+FAILED desktop/tests/test_overlay_labels.py::test_orig_mode_keeps_its_label_and_draws_no_divider - AssertionError: assert ['Hello'] == ['��ԭ��Hello']
+  
+  At index 0 diff: 'Hello' != '��ԭ��Hello'
+  
+  Full diff:
+    [
+  -     '��ԭ��Hello',
+  ?      ---
+  +     'Hello',
+    ]
+FAILED desktop/tests/test_overlay_labels.py::test_a_none_text_is_treated_as_empty_not_a_crash - AssertionError: assert ['���'] == ['���롿���', '��ԭ��']
+  
+  At index 0 diff: '���' != '���롿���'
+  Right contains one more item: '��ԭ��'
+  
+  Full diff:
+    [
+  -     '���롿���',
+  ?      ---
+  +     '���',
+  -     '��ԭ��',
+    ]
+FAILED desktop/tests/test_overlay_labels.py::test_set_display_hands_the_engines_word_to_the_rows - AssertionError: assert [] == ['��ԭ��Hello']
+  
+  Right contains one more item: '��ԭ��Hello'
+  
+  Full diff:
+  + []
+  - [
+  -     '��ԭ��Hello',
+  - ]
+7 failed, 4 passed in 0.37s

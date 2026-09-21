@@ -1,0 +1,3 @@
+﻿=== green: python -m pytest desktop/tests/test_overlay_labels.py desktop/tests/test_engine.py -q @ fdb98f1edeaf030e06b4ddf6db08935ebd290bc6
+.....................                                                    [100%]
+21 passed in 2.08s
