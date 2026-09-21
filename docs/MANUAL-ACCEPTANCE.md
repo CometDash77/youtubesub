@@ -174,6 +174,7 @@ Protocol 先留 `auto`，**取消勾选** "Mock mode (no real API)" → OK（写
 |---|---|---|---|---|
 | L0 自动基线 | | | | |
 | L1 夹具演示 | | | | |
+| L1b 无 provider 回退 | | | | |
 | L2 真实站点诊断 | | | | |
 | L3 真 Tampermonkey | | | | |
 | L4 真实 Key | | | | |

@@ -5,25 +5,25 @@ from suboverlay.engine import Engine
 from suboverlay.settings import default_settings
 
 
-def mk_engine(tmpdir):
-    from suboverlay.queue_cache import TranslationCache
-    s = default_settings()
-    s["provider"]["mock"] = True
-    cache = TranslationCache(os.path.join(tmpdir, "t.db"))
-    return Engine(s, cache=cache, workers=2)
+CFG_URL = "https://api.example.test/v1"
+CFG_MODEL = "test-model"
 
 
-def mk_configured_engine(tmpdir, mock, db=None, workers=2):
-    """An engine with Mock on *and* a real endpoint configured - the overlap issue
-    #31 is about: _provider_usable() accepts either, and the Mock branch is the one
-    taken. The settings dict belongs to that engine, so a test can edit it in place
-    the way the Settings dialog does."""
+def mk_engine(tmpdir, mock=True, base_url="", model="", db=None, workers=2,
+              translate_fn=None):
+    """An engine over a SQLite cache in tmpdir.
+
+    Mock on *and* a real endpoint configured (base_url + model) is the overlap
+    issue #31 is about: _provider_usable() accepts either, and the Mock branch is
+    the one taken. The settings dict belongs to that engine, so a test can edit
+    it in place the way the Settings dialog does."""
     from suboverlay.queue_cache import TranslationCache
     s = default_settings()
-    s["provider"].update({"base_url": "https://api.example.test/v1", "api_key": "sk-test",
-                          "model": "test-model", "mock": mock})
+    s["provider"].update({"mock": mock, "base_url": base_url, "model": model})
+    if base_url:
+        s["provider"]["api_key"] = "sk-test"
     cache = TranslationCache(db or os.path.join(str(tmpdir), "t.db"))
-    return Engine(s, cache=cache, workers=workers)
+    return Engine(s, cache=cache, workers=workers, translate_fn=translate_fn)
 
 
 def wait_trans(e, want=None, timeout=5.0):
@@ -199,7 +199,7 @@ def test_mock_echo_is_never_served_as_a_real_translation(tmp_path, monkeypatch):
     monkeypatch.setattr(P, "translate_group", fake_translate)
     db = os.path.join(str(tmp_path), "t.db")
 
-    e1 = mk_configured_engine(tmp_path, mock=True, db=db)
+    e1 = mk_engine(tmp_path, mock=True, base_url=CFG_URL, model=CFG_MODEL, db=db)
     s = e1.settings
     e1.ingest_json3("s1", {"video_id": "v1", "track_kind": "asr"}, JSON3)
     e1.handle_event({"type": "sync", "source_id": "s1", "video_time_ms": 1500.0,
@@ -241,11 +241,7 @@ def test_pure_mock_translation_is_still_cached(tmp_path):
     behaviour - a second engine replaying the same sentence reuses the cached
     echo. Counted at the translator: the Mock translator is fast, so only the
     call count can tell a cache hit from a fresh translation."""
-    from suboverlay.queue_cache import TranslationCache
     db = os.path.join(str(tmp_path), "t.db")
-    s = default_settings()
-    s["provider"]["mock"] = True           # no base_url, no model: pure Mock
-    s["prompt"]["context_groups"] = 0      # one job per run, so the count is exact
     calls, holder = [], {}
 
     def counting(job):
@@ -253,7 +249,10 @@ def test_pure_mock_translation_is_still_cached(tmp_path):
         return holder["default"](job)      # the real Mock translator
 
     def run():
-        e = Engine(s, cache=TranslationCache(db), workers=2, translate_fn=counting)
+        # no base_url, no model: pure Mock. context_groups=0 keeps it one job per
+        # run, so the call count is exact.
+        e = mk_engine(tmp_path, mock=True, db=db, translate_fn=counting)
+        e.settings["prompt"]["context_groups"] = 0
         holder["default"] = e._default_translate
         e.ingest_json3("s1", {"video_id": "v1", "track_kind": "asr"}, JSON3)
         e.handle_event({"type": "sync", "source_id": "s1", "video_time_ms": 1500.0,
@@ -282,7 +281,7 @@ def test_turning_mock_off_retranslates_the_current_sentence(tmp_path, monkeypatc
         return {"aligned": False, "text": "REAL:" + text, "error": None}
 
     monkeypatch.setattr(P, "translate_group", fake_translate)
-    e = mk_configured_engine(tmp_path, mock=True)
+    e = mk_engine(tmp_path, mock=True, base_url=CFG_URL, model=CFG_MODEL)
     s = e.settings
     e.ingest_json3("s1", {"video_id": "v1", "track_kind": "asr"}, JSON3)
     e.handle_event({"type": "sync", "source_id": "s1", "video_time_ms": 1500.0,
@@ -302,10 +301,11 @@ def test_a_queued_job_uses_the_provider_its_identity_was_computed_from(tmp_path)
     worker used to translate with the *live* settings. A Mock toggle while a job
     sat in the queue therefore cached a Mock echo under the real identity (or a
     real translation under the Mock one). The job carries its provider snapshot."""
-    from suboverlay.queue_cache import TranslationJob, URGENT
-    e = mk_configured_engine(tmp_path, mock=True)
+    from suboverlay.queue_cache import TranslationJob, ProviderContext, URGENT
+    e = mk_engine(tmp_path, mock=True, base_url=CFG_URL, model=CFG_MODEL)
     s = e.settings
-    job = TranslationJob("id", URGENT, "s1", 0, "hello", provider=dict(s["provider"]))
+    job = TranslationJob("id", URGENT, "s1", 0, "hello",
+                         context=ProviderContext(dict(s["provider"]), "ns"))
     s["provider"]["mock"] = False  # toggled while the job waits in the queue
     r = e._default_translate(job)
     assert r["text"] == "【译】hello", \
@@ -322,10 +322,10 @@ def test_a_result_from_the_previous_provider_namespace_is_dropped(tmp_path):
     """Issue #31 (concurrency): a job already in flight when Mock is toggled must
     not paint the old provider's text over the new namespace - and a result from
     the current namespace must still land."""
-    from suboverlay.queue_cache import TranslationCache, TranslationJob, URGENT
+    from suboverlay.queue_cache import TranslationCache, TranslationJob, ProviderContext, URGENT
     s = default_settings()
-    s["provider"].update({"base_url": "https://api.example.test/v1", "api_key": "sk-test",
-                          "model": "test-model", "mock": True})
+    s["provider"].update({"base_url": CFG_URL, "api_key": "sk-test",
+                          "model": CFG_MODEL, "mock": True})
     # a stub translator that never returns a usable result: this test drives
     # _on_done itself, so nothing may land from the queue on its own
     e = Engine(s, cache=TranslationCache(os.path.join(str(tmp_path), "t.db")), workers=2,
@@ -337,10 +337,12 @@ def test_a_result_from_the_previous_provider_namespace_is_dropped(tmp_path):
     src = e.sources["s1"]
     gi = src.last_group_idx
     assert gi is not None and e._provider_ns, "a tick must have established the namespace"
-    stale = TranslationJob("stale", URGENT, "s1", gi, "x", namespace="OLD-NS")
+    stale = TranslationJob("stale", URGENT, "s1", gi, "x",
+                           context=ProviderContext(dict(s["provider"]), "OLD-NS"))
     e._on_done(stale, {"aligned": False, "text": "【译】old provider", "error": None})
     assert not src.group_trans.get(gi), "the old namespace's result must be dropped"
-    fresh = TranslationJob("fresh", URGENT, "s1", gi, "x", namespace=e._provider_ns)
+    fresh = TranslationJob("fresh", URGENT, "s1", gi, "x",
+                           context=ProviderContext(dict(s["provider"]), e._provider_ns))
     e._on_done(fresh, {"aligned": False, "text": "REAL", "error": None})
     assert src.group_trans.get(gi) == "REAL", "the current namespace must still land"
     e._queue.shutdown()
@@ -409,4 +411,10 @@ def test_status_always_carries_a_translation_authority():
     assert e.status()["display"]["trans_available"] is False
     s["provider"]["mock"] = True
     assert e.status()["display"]["trans_available"] is True
+    # the no_cues display state carries it too, so /status never goes stale while
+    # a source is registered but its cues have not arrived yet
+    e.handle_event({"type": "register", "source_id": "s1", "video_id": "v1", "tab_title": "T"})
+    d = e.tick()
+    assert d["state"] == "no_cues"
+    assert d["trans_available"] is True and e.status()["display"]["trans_available"] is True
     e._queue.shutdown()

@@ -33,7 +33,7 @@
 逐项手测清单见 `docs/MANUAL-ACCEPTANCE.md`.
 
 ## 测试
-- `python -m pytest desktop/tests -q` — 65 passed (含 7 条真浏览器 E2E, 无 Chrome 则 skip).
+- `python -m pytest desktop/tests -q` — 全绿 (当前 88 passed; 含 7 条真浏览器 E2E, 无 Chrome 会 skip, 不算通过).
 - `cd userscript; node --test "tests/*.test.mjs"` — 33 pass (必须用 glob 形式; 传目录会 MODULE_NOT_FOUND).
 
 ## 硬约束 (不做)
