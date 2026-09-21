@@ -1,0 +1,88 @@
+== dialog 01-unconfigured.png  size=640x383
+   [in]   11, 11  618x 30  未配置 —— 浮窗只显示原文，不显示译文（不会假装翻译）
+   [in]   71, 51   96x 21  Base URL
+   [in]  177, 51  452x 22  placeholder: https://api.example.com/v1  （未设置）
+   [in]  107, 83   60x 21  Model
+   [in]  177, 83  452x 22  placeholder: gpt-4o-mini  （未设置）
+   [in]   83,115   84x 21  API Key
+   [in]  177,115  390x 22  placeholder: 尚未设置（明文不会回显）
+   [in]  573,116   56x 19  清除
+   [in]   71,147   96x 21  Protocol
+   [in]  177,147  452x 22  combo:auto
+   [in]   11,179  156x 21  System Prompt
+   [in]  177,263  452x 17  Mock mode (no real API) —— 本地回声，用于验证链路
+   [in]   59,290  108x 21  Font size
+   [in]  180,293  432x 17  10
+   [in]   11,323   36x 19  无改动
+   [in]   57,323  458x 19  C:\Users\Administrator\AppData\Roaming\SubOverlay\setting.json
+   [in]  525,323  104x 19  打开配置目录
+   [in]   11,352   80x 20  测试连接…
+   [in]  459,352   80x 20  保存
+   [in]  549,352   80x 20  关闭
+== dialog 02-configured-just-saved.png  size=640x383
+   [in]   11, 11  618x 30  已配置 —— 译文来自 api.example.com · gpt-4o-mini
+   [in]   71, 51   96x 21  Base URL
+   [in]  177, 51  452x 22  https://api.example.com/v1
+   [in]  107, 83   60x 21  Model
+   [in]  177, 83  452x 22  gpt-4o-mini
+   [in]   83,115   84x 21  API Key
+   [in]  177,115  390x 22  placeholder: ••••••••••••  已保存 51 字符 · 留空 = 不改动 · 输入 = 覆盖
+   [in]  573,116   56x 19  清除
+   [in]   71,147   96x 21  Protocol
+   [in]  177,147  452x 22  combo:auto
+   [in]   11,179  156x 21  System Prompt
+   [in]  177,263  452x 17  Mock mode (no real API) —— 本地回声，用于验证链路
+   [in]   59,290  108x 21  Font size
+   [in]  180,293  432x 17  10
+   [in]   11,323  168x 19  ✔ 已保存 12:03:45
+   [in]  189,323  326x 19  C:\Users\Administrator\AppData\Roaming\SubOverlay\setting.json
+   [in]  525,323  104x 19  打开配置目录
+   [in]   11,352   80x 20  测试连接…
+   [in]  459,352   80x 20  保存
+   [in]  549,352   80x 20  关闭
+== dialog 03-mock-mode-dirty.png  size=640x383
+   [in]   11, 11  618x 30  Mock 模式 —— 译文是本地回声（带【译】前缀），不代表真实翻译质量
+   [in]   71, 51   96x 21  Base URL
+   [in]  177, 51  452x 22  placeholder: https://api.example.com/v1  （未设置）
+   [in]  107, 83   60x 21  Model
+   [in]  177, 83  452x 22  placeholder: gpt-4o-mini  （未设置）
+   [in]   83,115   84x 21  API Key
+   [in]  177,115  390x 22  placeholder: 尚未设置（明文不会回显）
+   [in]  573,116   56x 19  清除
+   [in]   71,147   96x 21  Protocol
+   [in]  177,147  452x 22  combo:auto
+   [in]   11,179  156x 21  System Prompt
+   [in]  177,263  452x 17  Mock mode (no real API) —— 本地回声，用于验证链路
+   [in]   59,290  108x 21  Font size
+   [in]  180,293  432x 17  10
+   [in]   11,323  108x 19  ● 有未保存的改动
+   [in]  129,323  386x 19  C:\Users\Administrator\AppData\Roaming\SubOverlay\setting.json
+   [in]  525,323  104x 19  打开配置目录
+   [in]   11,352   80x 20  测试连接…
+   [in]  459,352   80x 20  保存
+   [in]  549,352   80x 20  关闭
+== banner state mapping
+  OK   empty provider -> 未配置 banner
+  OK   mock=true -> Mock banner
+  OK   configured -> 已配置 banner names host
+  OK   saved feedback shows timestamp
+  OK   dirty feedback shows 未保存
+  OK   key echo is length, not value
+  OK   api key never echoed as text
+  OK   empty key shows 尚未设置
+== overlay three states (real OverlayWindow paint path)
+   unconfigured status_line='未配置翻译 · 右键 → 设置'  yellow_px=0
+  OK   unconfigured yellow translation line absent
+  OK   unconfigured status line shown
+   mock         status_line='Mock 模式 · 译文为本地回声'  yellow_px=980
+  OK   mock yellow translation line present
+  OK   mock status line shown
+   configured   status_line=''  yellow_px=343
+  OK   configured yellow translation line present
+  OK   configured status line silent
+== artifacts
+  OK   01-unconfigured.png written (5967 bytes)
+  OK   02-configured-just-saved.png written (5916 bytes)
+  OK   03-mock-mode-dirty.png written (6168 bytes)
+  OK   04-overlay-three-states.png written (3829 bytes)
+ACCEPTANCE_FAIL=0
