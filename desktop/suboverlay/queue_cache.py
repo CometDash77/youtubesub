@@ -8,12 +8,23 @@ cancel-pending-by-source (seek / source switch), prefetch shedding
 """
 import hashlib, json, os, sqlite3, threading, time, itertools
 
-CACHE_VERSION = 1
+# Identity-scheme version. 2 = "mock" is a dimension of the provider namespace
+# (issue #31): it retires every row written under the old scheme, real-provider
+# rows included. There is no way to keep those and retire only the Mock-poisoned
+# ones, because the old scheme gave both the same key.
+CACHE_VERSION = 2
 TTL_S = 30 * 24 * 3600.0
 
 
 def cache_identity(provider_cfg, client_key, instructions, prompt):
-    """SHA-256 identity; api_key intentionally excluded."""
+    """SHA-256 identity; api_key intentionally excluded.
+
+    "mock" is a dimension of the identity (issue #31): a Mock echo is a stand-in
+    that wears a 【译】 label, not a translation, so it must not be addressable
+    under the identity a real request would use - unchecking Mock would otherwise
+    serve the echo as the real translation and never ask the provider. The
+    identity-scheme version went 1 -> 2 with it, which is what makes a Mock echo
+    cached *before* this fix unreachable."""
     p = provider_cfg or {}
     payload = {
         "version": CACHE_VERSION,
@@ -21,6 +32,7 @@ def cache_identity(provider_cfg, client_key, instructions, prompt):
             "base_url": p.get("base_url") or "",
             "model": p.get("model") or "",
             "protocol": p.get("protocol") or "auto",
+            "mock": bool(p.get("mock")),
         },
         "client_key": client_key,
         "instructions": instructions or "",
@@ -90,11 +102,22 @@ URGENT, NORMAL = 0, 1
 
 class TranslationJob:
     __slots__ = ("identity", "priority", "seq", "source_id", "group_idx",
-                 "group_text", "prev", "nxt", "expected", "cancelled")
+                 "group_text", "prev", "nxt", "expected", "provider", "namespace",
+                 "cancelled")
 
     def __init__(self, identity, priority, source_id, group_idx, group_text,
-                 prev="", nxt="", expected=0):
+                 prev="", nxt="", expected=0, provider=None, namespace=None):
         self.identity = identity
+        # The provider snapshot this job's identity was computed from (issue
+        # #31). The worker translates with this, never with live settings, so a
+        # Mock toggle while the job waits in the queue cannot put one provider's
+        # result under the other provider's identity. None = fall back to live
+        # settings (callers that submit a job without a provider).
+        self.provider = provider
+        # The provider namespace at submit time. A result that arrives after the
+        # namespace moved belongs to a provider that is no longer configured and
+        # is dropped by Engine._on_done instead of painting over the new one.
+        self.namespace = namespace
         self.priority = priority
         self.seq = next(_SEQ)
         self.source_id = source_id

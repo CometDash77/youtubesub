@@ -18,6 +18,7 @@
 - **预取 (prefetch)**: 调度行为 —— 在播放点到达之前把前方尚未播出的句子组送去翻译, 使到达时译文已就绪或已在途。
 - **批量 (batch)**: 请求形态 —— 把多个句子组放进**同一次** provider 请求。
 - 两者正交、可独立取舍。注意参照实现 kiss-translator 的 `batchSize=20` 是它 DOM 段落翻译的通用参数, **与字幕预取无关** (取证见 #3); 讨论"批大小"时先确认说的是哪一个。
+- **翻译命名空间 (provider namespace)**: 由 provider 配置 + 系统提示词确定的缓存身份前缀 —— 同一命名空间内按 identity 命中缓存, 跨命名空间绝不命中。`mock` 是它的一个维度 (ADR-008), 所以"勾 Mock 跑过的句子"与"真实 provider 的同一句"是两个命名空间; 命名空间变动时内存里的旧译文同样作废。
 
 ## 许可证边界
 - dkitle: Rust 端无 LICENSE (GitHub license:null) -> 只参考设计, 不抄代码; 其 userscript 有 @license MIT 头, 可改写适配。
@@ -32,7 +33,7 @@
 - local-screen-translator: DOM 回显是错误架构, 仅复用 LRU/dpi/overlay flag 思路; localhost sink 教训: JSON + Origin 检查.
 
 ## 状态 (详见 PROGRESS.md 与 `.scratch/handoff/` 下最新交接文档, 随做随更)
-- 桌面端全部实现完毕; **pytest 65 passed** (~16s)。含真实 WS 集成、引擎全管线(mock)、浮窗 resize 回归、
+- 桌面端全部实现完毕; **pytest 86 passed** (~20s)。含真实 WS 集成、引擎全管线(mock)、浮窗 resize 回归、
   /health 与 /status 路由、无 provider 不泄露、provider 抛错不 500、跨语言解析夹具 11 例、
   **真浏览器 E2E 7 条 (夹具页 + 真 userscript + 真 app.py, 只经 /status 黑盒观察; 无 Chrome 则 skip)**、热键 4 条、浮窗状态 2 条。
 - **Node 测试台: 33 passed** (命令 `cd userscript; node --test "tests/*.test.mjs"`; 传目录会 MODULE_NOT_FOUND)。
@@ -54,6 +55,8 @@
 - 手动验收入口: `docs/MANUAL-ACCEPTANCE.md` (四层); 一键启动 `start-desktop.cmd`; 依赖 `requirements.txt`。
 - ✅ (2026-09-21) **断句判据已定**: 对齐 kiss-translator 的规则分支 (ADR-006 取代 ADR-004 的判据部分; 翻译单位不变), 规格 = issue「字幕断句判据对齐 kiss-translator（规格）」#22。**代码尚未改动**。
 - ✅ (2026-09-21) **提前批翻译已定**: 预取改用**时间量纲** (默认 90 秒 + 组数硬上限 20), 触发保持事件原生增量 + seek 去抖 (不照搬它的 30s 扫描节流), **新增批请求** (只在填充爆发点同步切块, 全局连续编号 + 精确全覆盖, 失败整批作废交紧急补翻, 批内保留每组上下文以维持 cache identity 不变式), 在途请求一律不中断 (ADR-007)。规格 = issue「提前批翻译：预取窗口与批请求契约（规格）」#24。**代码尚未改动**。
+
+- ✅ (2026-09-21) **#31 已修**: Mock 回显与真实译文不再共用缓存身份 (mock 进 identity, 身份方案版本 1 -> 2, 见 ADR-008); 队列任务改为携带提交时的 provider 快照与命名空间, 命名空间变动时内存里的旧译文作废并重取, 晚到的旧命名空间结果被丢弃。升级后本地缓存全量失效一次 (旧库里两类行同 key, 无法只作废被污染的那类)。**待人工验收** (L4: 勾 Mock 跑一句 -> 取消勾选 -> 同一句必须真实请求)。
 
 ## 下一步 (断点, 完整清单见 `.scratch/handoff/` 下最新交接文档 §5)
 0. **(已落盘, 待裁决)** P0 思维对齐: `.scratch/alignment/20260921-112756-E2E与手测入口.md` (D/K/C/O/F + 可疑遗漏 A/B);

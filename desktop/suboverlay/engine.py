@@ -35,6 +35,13 @@ class _Source:
         self.sync = SyncState()
         self.last_group_idx = None
 
+    def reset_translations(self):
+        """Drop everything a provider produced; keep the cues and the live clock."""
+        self.group_trans = {}
+        for c in self.cues:
+            c.trans = ""
+        self.last_group_idx = None
+
 
 class Engine:
     def __init__(self, settings, cache=None, workers=5, translate_fn=None):
@@ -49,6 +56,7 @@ class Engine:
                                        translate_fn=self._translate_fn)
         self.display_cb = None   # called on translation arrivals (UI refresh)
         self.last_display = None  # latest tick() result, for /status diagnostics
+        self._provider_ns = None  # provider namespace the in-memory translations belong to
 
     # ---- event ingestion (called from WS thread via queue) ----
     def handle_event(self, ev):
@@ -105,8 +113,7 @@ class Engine:
         for gi, g in enumerate(src.groups):
             for ci in range(g.start_idx, g.end_idx + 1):
                 src.cue_to_group[ci] = gi
-        src.group_trans = {}
-        src.last_group_idx = None
+        src.reset_translations()
 
     def ingest_json3(self, source_id, meta, json3):
         """Helper for tests/tools: parse a timedtext payload and feed as cues event."""
@@ -124,20 +131,20 @@ class Engine:
         g = src.groups[gi]
         if gi in src.group_trans or all(c.trans for c in src.cues[g.start_idx:g.end_idx + 1]):
             return
-        prov = dict(self.settings.get("provider", {}))
+        prov, instructions = self._provider_snapshot()
         if not _provider_usable(prov):
             # Issue #1: "not configured" is not mock mode. The mock translator
             # echoes the original behind a fake translation label, which reads as
             # a broken translation; showing the original alone is the honest state.
             return
-        instructions = self.settings.get("prompt", {}).get("system") or provider_mod.DEFAULT_SYSTEM_PROMPT
         prev_t = src.groups[gi - 1].text if gi > 0 else ""
         nxt_t = src.groups[gi + 1].text if gi + 1 < len(src.groups) else ""
         prompt_ctx = (prev_t, nxt_t) if self.settings.get("prompt", {}).get("context_groups", 1) else ("", "")
         ident = self._identity(prov, instructions, self._client_key(src, g), g, prompt_ctx)
         job = TranslationJob(ident, priority, src.source_id, gi, g.text,
                              prev=prompt_ctx[0], nxt=prompt_ctx[1],
-                             expected=(g.end_idx - g.start_idx + 1))
+                             expected=(g.end_idx - g.start_idx + 1),
+                             provider=prov, namespace=self._provider_ns)
         self._queue.submit(job)
 
     def _identity(self, prov, instructions, client_key, g, prompt_ctx):
@@ -147,10 +154,48 @@ class Engine:
             prompt = " || ".join([x for x in prompt_ctx if x]) + " || " + g.text
         return cache_identity(prov, client_key, instructions, prompt)
 
-    def _default_translate(self, job):
+    def _provider_snapshot(self):
+        """(provider copy, instructions) - the inputs both the cache identity and
+        the translation namespace are computed from, taken in one place so the two
+        cannot disagree about which provider this run is."""
         prov = dict(self.settings.get("provider", {}))
+        instructions = (self.settings.get("prompt", {}).get("system")
+                        or provider_mod.DEFAULT_SYSTEM_PROMPT)
+        return prov, instructions
+
+    def _provider_namespace(self):
+        """The provider + instructions namespace every translation derives from.
+
+        The persistent cache identity is this namespace plus the per-sentence
+        parts (client_key / prompt), so a namespace change changes every identity
+        in it - but not the converse: one sentence's identity can change while the
+        namespace stays put."""
+        from .queue_cache import cache_identity
+        prov, instructions = self._provider_snapshot()
+        return cache_identity(prov, "", instructions, "")
+
+    def _sync_namespace(self):
+        """Issue #31: translations are provider-derived. Toggling Mock - or editing
+        base_url / model / system prompt - moves to another namespace, so the
+        translations held in memory came from a provider that is no longer
+        configured: drop them and let the current sentence be requested again.
+        Otherwise the Mock echo stays on screen and the real provider is never
+        asked. Caller holds self._lock."""
+        ns = self._provider_namespace()
+        if ns == self._provider_ns:
+            return
+        self._provider_ns = ns
+        for src in self.sources.values():
+            src.reset_translations()
+
+    def _default_translate(self, job):
+        # Issue #31: the job carries the provider its identity was computed from,
+        # so the result written under that identity always came from that
+        # provider - even if Settings changed while the job sat in the queue.
+        prov = (dict(job.provider) if job.provider is not None
+                else dict(self.settings.get("provider", {})))
         if not _provider_usable(prov):
-            # Defence in depth for settings edited after jobs were queued.
+            # Defence in depth for a job queued without a provider snapshot.
             return {"aligned": False, "text": "", "error": "NOT_CONFIGURED"}
         if prov.get("mock"):
             time.sleep(0.02)  # simulate latency so queue/priority is exercised
@@ -175,6 +220,11 @@ class Engine:
         if result.get("error") or not job or job.cancelled:
             return
         with self._lock:
+            if job.namespace is not None and job.namespace != self._provider_ns:
+                # Issue #31: the namespace moved while this job was in flight (Mock
+                # toggled, endpoint edited). Its text came from the old provider and
+                # must not land among the new provider's translations.
+                return
             src = self.sources.get(job.source_id)
             if src is None or job.group_idx >= len(src.groups):
                 return
@@ -212,6 +262,7 @@ class Engine:
 
     def _tick_locked(self):
         with self._lock:
+            self._sync_namespace()
             sid = self.active_source
             if sid is None:
                 return None

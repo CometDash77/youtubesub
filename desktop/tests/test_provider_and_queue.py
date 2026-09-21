@@ -74,6 +74,23 @@ def test_cache_identity_excludes_api_key_and_is_stable():
     assert d == e  # key-order insensitive
 
 
+def test_cache_identity_separates_mock_from_real():
+    """Issue #31 (bug): the Mock translator echoes the original behind a 【译】
+    label - a different product from a real translation. Sharing one cache
+    identity made unchecking Mock serve the echo as the real translation, so
+    "this run was Mock" has to be a dimension of the identity."""
+    real = cache_identity({"base_url": "u", "model": "m", "mock": False}, "k", "i", "p")
+    mocked = cache_identity({"base_url": "u", "model": "m", "mock": True}, "k", "i", "p")
+    assert real != mocked, "a Mock product must not be addressable as the real one"
+    # an absent mock key means "off": a plain config is a real config
+    assert cache_identity({"base_url": "u", "model": "m"}, "k", "i", "p") == real
+    # and the API key still never enters the identity on either side
+    assert cache_identity({"base_url": "u", "model": "m", "mock": True,
+                           "api_key": "SECRET-A"}, "k", "i", "p") == mocked
+    assert cache_identity({"base_url": "u", "model": "m", "mock": True,
+                           "api_key": "SECRET-B"}, "k", "i", "p") == mocked
+
+
 def test_translation_cache_roundtrip_and_ttl(tmp_path=None):
     import tempfile
     db = os.path.join(tempfile.mkdtemp(), "t.db")
