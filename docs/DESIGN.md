@@ -60,7 +60,7 @@ YouTube 页面 (Tampermonkey 脚本, userscript/youtubesub.user.js)
 - prompt: system(可配模板) + 本组全文 + 上一组/下一组各一段 (上下文, 至多各 1 组, 防膨胀).
 - 对齐模式 (组内多 cue): 要求 `N|译文` 行, 校验行数 == 组内 cue 数, 失败则整组降级为单行存组级翻译 (不逐 cue 拆).
 - 并发 5, 超时 180s(可配), 429/5xx 退避 + Retry-After, 同一 identity 合并在途请求 (无取消信号时).
-- 缓存 identity = SHA-256(version, kind, {base_url, model, protocol, mock}, clientKey(video_id+track+组起止+原文), instructions, prompt). 永不含 Key.
+- 缓存 identity = SHA-256(version, {base_url, model, protocol, mock}, clientKey(video_id+track+组起止+原文), instructions, prompt). 永不含 Key.
   **mock 是身份的维度** (ADR-008): Mock 回显与真实译文是两个不可能互相命中的命名空间; 身份方案随之上到 version 2, 旧方案写下的行全部不可达.
 
 ## 4. 验证计划 (摘要, 证据为准)

@@ -100,24 +100,32 @@ class TranslationCache:
 URGENT, NORMAL = 0, 1
 
 
+class ProviderContext:
+    """What a queued job must remember about the provider its identity came from.
+
+    Both halves travel together because a job cannot honour one without the
+    other: the worker translates with the provider snapshot instead of live
+    settings, and the namespace is what tells a late result apart from a current
+    one (issue #31). One value, so a job cannot carry one and forget the other.
+    """
+
+    __slots__ = ("provider", "namespace")
+
+    def __init__(self, provider, namespace):
+        self.provider = provider
+        self.namespace = namespace
+
+
 class TranslationJob:
     __slots__ = ("identity", "priority", "seq", "source_id", "group_idx",
-                 "group_text", "prev", "nxt", "expected", "provider", "namespace",
-                 "cancelled")
+                 "group_text", "prev", "nxt", "expected", "context", "cancelled")
 
     def __init__(self, identity, priority, source_id, group_idx, group_text,
-                 prev="", nxt="", expected=0, provider=None, namespace=None):
+                 prev="", nxt="", expected=0, context=None):
         self.identity = identity
-        # The provider snapshot this job's identity was computed from (issue
-        # #31). The worker translates with this, never with live settings, so a
-        # Mock toggle while the job waits in the queue cannot put one provider's
-        # result under the other provider's identity. None = fall back to live
-        # settings (callers that submit a job without a provider).
-        self.provider = provider
-        # The provider namespace at submit time. A result that arrives after the
-        # namespace moved belongs to a provider that is no longer configured and
-        # is dropped by Engine._on_done instead of painting over the new one.
-        self.namespace = namespace
+        # The provider context this identity was computed from (issue #31). None =
+        # fall back to live settings (a caller that submits a job without one).
+        self.context = context
         self.priority = priority
         self.seq = next(_SEQ)
         self.source_id = source_id
