@@ -1,0 +1,9 @@
+# youtubesub — Python dependencies (desktop app + test suites)
+# Verified on the dev machine: Python 3.12.10 / PySide6-Essentials 6.11.2 /
+# websockets 16.1.1 / pytest 9.1.1.
+#
+# Note: no "requests". Outbound HTTP uses urllib (provider.py) and loopback calls
+# use http.client (tests), so a proxy-aware third-party client is not needed.
+PySide6-Essentials>=6.11.2
+websockets>=16.1.1
+pytest>=9.1.1

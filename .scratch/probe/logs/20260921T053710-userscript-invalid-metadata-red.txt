@@ -1,0 +1,257 @@
+# cmd: cd userscript; node --test "tests/*.test.mjs"
+# exit: 1
+
+TAP version 13
+# Subtest: harness: userscript evaluates in the sandbox and exposes the test surface
+ok 1 - harness: userscript evaluates in the sandbox and exposes the test surface
+  ---
+  duration_ms: 2.7584
+  type: 'test'
+  ...
+# Subtest: boot: page hook injected, timedtext listener + panel + poll timer wired
+ok 2 - boot: page hook injected, timedtext listener + panel + poll timer wired
+  ---
+  duration_ms: 1.6182
+  type: 'test'
+  ...
+# Subtest: boot without GM_addElement falls back to a script element in head
+ok 3 - boot without GM_addElement falls back to a script element in head
+  ---
+  duration_ms: 0.7902
+  type: 'test'
+  ...
+# Subtest: boot: TrustedScript policy installs the hook when GM_addElement is gone
+ok 4 - boot: TrustedScript policy installs the hook when GM_addElement is gone
+  ---
+  duration_ms: 0.7004
+  type: 'test'
+  ...
+# Subtest: boot: falls back to direct evaluation when the element is blocked
+ok 5 - boot: falls back to direct evaluation when the element is blocked
+  ---
+  duration_ms: 0.8497
+  type: 'test'
+  ...
+# Subtest: boot: an uninstallable page hook is reported, not hidden
+ok 6 - boot: an uninstallable page hook is reported, not hidden
+  ---
+  duration_ms: 1.0826
+  type: 'test'
+  ...
+# Subtest: boot: a successful injection reports no hook error
+ok 7 - boot: a successful injection reports no hook error
+  ---
+  duration_ms: 0.841
+  type: 'test'
+  ...
+# Subtest: parseJson3: shared fixtures match the desktop parser contract
+ok 8 - parseJson3: shared fixtures match the desktop parser contract
+  ---
+  duration_ms: 2.9438
+  type: 'test'
+  ...
+# Subtest: parseJson3: null / non-object payloads yield an empty list
+ok 9 - parseJson3: null / non-object payloads yield an empty list
+  ---
+  duration_ms: 1.2265
+  type: 'test'
+  ...
+# Subtest: parseJson3: last_off follows the last NON-BLANK seg with an offset
+ok 10 - parseJson3: last_off follows the last NON-BLANK seg with an offset
+  ---
+  duration_ms: 1.25
+  type: 'test'
+  ...
+# Subtest: normKey: rotating pot/fmt/tlang/c/sig params do not create a new track
+ok 11 - normKey: rotating pot/fmt/tlang/c/sig params do not create a new track
+  ---
+  duration_ms: 1.5899
+  type: 'test'
+  ...
+# Subtest: normKey: garbage input never throws and resolves against the page URL
+ok 12 - normKey: garbage input never throws and resolves against the page URL
+  ---
+  duration_ms: 1.6086
+  type: 'test'
+  ...
+# Subtest: url helpers: kind, lang, timedtext detection and video id extraction
+ok 13 - url helpers: kind, lang, timedtext detection and video id extraction
+  ---
+  duration_ms: 0.943
+  type: 'test'
+  ...
+# Subtest: videoIdFromLocation: v param, order and length guard
+ok 14 - videoIdFromLocation: v param, order and length guard
+  ---
+  duration_ms: 0.5984
+  type: 'test'
+  ...
+# Subtest: cuesSignature: distinct for same-count-different-content tracks
+ok 15 - cuesSignature: distinct for same-count-different-content tracks
+  ---
+  duration_ms: 0.699
+  type: 'test'
+  ...
+# Subtest: page hook: generated code executes and intercepts fetch + XHR
+ok 16 - page hook: generated code executes and intercepts fetch + XHR
+  ---
+  duration_ms: 23.9455
+  type: 'test'
+  ...
+# Subtest: page hook: an empty caption body is reported, not swallowed
+ok 17 - page hook: an empty caption body is reported, not swallowed
+  ---
+  duration_ms: 1.9443
+  type: 'test'
+  ...
+# Subtest: page hook: a non-JSON caption body is reported
+ok 18 - page hook: a non-JSON caption body is reported
+  ---
+  duration_ms: 12.7284
+  type: 'test'
+  ...
+# Subtest: bridge: a capture failure reaches the desktop as capture_error
+ok 19 - bridge: a capture failure reaches the desktop as capture_error
+  ---
+  duration_ms: 2.0293
+  type: 'test'
+  ...
+# Subtest: boot: inside a userscript sandbox the direct-eval path is refused
+ok 20 - boot: inside a userscript sandbox the direct-eval path is refused
+  ---
+  duration_ms: 0.9636
+  type: 'test'
+  ...
+# Subtest: bridge: healthy /health probe opens a socket to the documented URL
+ok 21 - bridge: healthy /health probe opens a socket to the documented URL
+  ---
+  duration_ms: 0.9511
+  type: 'test'
+  ...
+# Subtest: bridge: failed /health probe schedules a reconnect and opens no socket
+ok 22 - bridge: failed /health probe schedules a reconnect and opens no socket
+  ---
+  duration_ms: 0.7794
+  type: 'test'
+  ...
+# Subtest: bridge: reconnect backoff is exponential and capped at 30s
+ok 23 - bridge: reconnect backoff is exponential and capped at 30s
+  ---
+  duration_ms: 0.8017
+  type: 'test'
+  ...
+# Subtest: bridge: ws close reconnects, retryNow resets attempts, stop is terminal
+ok 24 - bridge: ws close reconnects, retryNow resets attempts, stop is terminal
+  ---
+  duration_ms: 0.7593
+  type: 'test'
+  ...
+# Subtest: bridge: status panel click retries, double-click stops
+ok 25 - bridge: status panel click retries, double-click stops
+  ---
+  duration_ms: 0.6602
+  type: 'test'
+  ...
+# Subtest: bridge: sync reflects live player state (time/playing/rate)
+ok 26 - bridge: sync reflects live player state (time/playing/rate)
+  ---
+  duration_ms: 0.7683
+  type: 'test'
+  ...
+# Subtest: bridge: send() is a no-op while the socket is not open
+ok 27 - bridge: send() is a no-op while the socket is not open
+  ---
+  duration_ms: 0.6666
+  type: 'test'
+  ...
+# Subtest: bridge: onTimedtext pushes register+cues and validates on the wire
+ok 28 - bridge: onTimedtext pushes register+cues and validates on the wire
+  ---
+  duration_ms: 0.8283
+  type: 'test'
+  ...
+# Subtest: bridge: rotating pot with identical content does not re-push cues
+ok 29 - bridge: rotating pot with identical content does not re-push cues
+  ---
+  duration_ms: 0.861
+  type: 'test'
+  ...
+# Subtest: bridge: same cue count but different text re-pushes (tlang switch regression)
+ok 30 - bridge: same cue count but different text re-pushes (tlang switch regression)
+  ---
+  duration_ms: 0.9158
+  type: 'test'
+  ...
+# Subtest: bridge: empty or non-timedtext payloads are ignored
+ok 31 - bridge: empty or non-timedtext payloads are ignored
+  ---
+  duration_ms: 0.7545
+  type: 'test'
+  ...
+# Subtest: bridge: reconnect replays cached register/cues and KEEPS the sync timestamp
+ok 32 - bridge: reconnect replays cached register/cues and KEEPS the sync timestamp
+  ---
+  duration_ms: 1.0399
+  type: 'test'
+  ...
+# Subtest: bridge: SPA navigation starts a new source and drops stale cues
+ok 33 - bridge: SPA navigation starts a new source and drops stale cues
+  ---
+  duration_ms: 0.9307
+  type: 'test'
+  ...
+# Subtest: bridge: poll binds a video element that appears later
+ok 34 - bridge: poll binds a video element that appears later
+  ---
+  duration_ms: 0.8369
+  type: 'test'
+  ...
+# Subtest: bridge: works without GM_xmlhttpRequest (no /health probe, connects anyway)
+ok 35 - bridge: works without GM_xmlhttpRequest (no /health probe, connects anyway)
+  ---
+  duration_ms: 1.0439
+  type: 'test'
+  ...
+# Subtest: bridge: every frame produced during a full session is wire-valid
+ok 36 - bridge: every frame produced during a full session is wire-valid
+  ---
+  duration_ms: 2.7729
+  type: 'test'
+  ...
+# Subtest: bridge: cue frames from the real userscript satisfy the desktop coercer
+ok 37 - bridge: cue frames from the real userscript satisfy the desktop coercer
+  ---
+  duration_ms: 2.1828
+  type: 'test'
+  ...
+# Subtest: userscript metadata block is installable by Tampermonkey
+not ok 38 - userscript metadata block is installable by Tampermonkey
+  ---
+  duration_ms: 0.7955
+  type: 'test'
+  location: 'D:\\Documents\\vibe\\youtubesub\\userscript\\tests\\userscript.test.mjs:851:1'
+  failureType: 'testCodeFailure'
+  error: 'the metadata block must be closed by "// ==/UserScript=="'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: -1
+  actual: -1
+  operator: 'notStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///D:/Documents/vibe/youtubesub/userscript/tests/userscript.test.mjs:855:10)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+1..38
+# tests 38
+# suites 0
+# pass 37
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 215.9465

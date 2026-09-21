@@ -1,0 +1,11 @@
+<!-- note: 原始文件由 pwsh `*>>` 混合写入（头部 UTF-8 + pytest 段 UTF-16LE），此处为同一内容的单一 UTF-8 规范化副本，pytest 输出逐字未改。 -->
+# run at 2026-09-21T03:55:36.860Z
+# cmd: python -m pytest desktop/tests -q
+....................................................................     [100%]
+68 passed in 16.33s
+
+# exit code: 0
+
+## 补充证据（不启动 Chrome，仅收集用例清单）
+# python -m pytest desktop/tests -q --collect-only            -> 68 tests collected
+# python -m pytest desktop/tests/test_browser_e2e.py -q --collect-only -> 7 tests collected（全部为真浏览器 E2E）

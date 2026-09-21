@@ -1,0 +1,59 @@
+# CONTEXT — youtubesub (自包含, 新 session 从这里读起)
+
+## 事实
+- 用户工作目录 D:\Documents\vibe 建项目时为空; 落地目录为 `d:\Documents\vibe\youtubesub`. **不是 git 仓库** (无 .git)。
+- 本机: Windows 10, Node 22.23.1, Python 3.12.10 (pytest 9.1.1 / websockets 16.1.1 / requests / PySide6_Essentials 6.11.2 已装)。无 Rust/.NET。
+- 浏览器: Chrome **153.0.8010.48** 位于 `C:\Program Files\Google\Chrome\Application\chrome.exe`; Edge 153。
+  Chrome User Data 里**没有 Tampermonkey** (未装任何扩展) -> "真 Tampermonkey" 场景需要用户手动装。
+- DNS 污染, 直连 YouTube 失败; 代理 `127.0.0.1:10809` 可用 (实测 youtube.com 200)。环境变量已设 HTTP(S)_PROXY 与 NO_PROXY=localhost,127.0.0.1,::1,...。
+  凡访问公网的 HTTP 客户端必须代理感知; loopback 流量不走代理 (测试里用 `http.client` 最稳, `urllib` 会读代理环境变量)。
+- 实测: 裸 `https://www.youtube.com/api/timedtext?v=...&lang=en` (无 pot) -> 200 且 **0 字节** -> 印证必须页内复用播放器带 pot 的请求。
+
+## 访谈结论 (grill-with-docs, 已锁定)
+- 桌面栈: Python + PySide6.
+- 浏览器端: Tampermonkey 用户脚本.
+- AI 凭证: 用户稍后提供真实 Key/BaseURL/Model; 在此之前用 Mock 翻译服务验证链路, AI 成功场景记为部分验证。
+
+## 许可证边界
+- dkitle: Rust 端无 LICENSE (GitHub license:null) -> 只参考设计, 不抄代码; 其 userscript 有 @license MIT 头, 可改写适配。
+- yt-dual-subs: MIT -> 可改写复用 (保留版权). transly: MIT -> 设计吸收为主, 建议 clean-room Python 重写。
+- LiveSubs / local-screen-translator: Apache-2.0 -> 可复用 (保留声明, 改动注明)。
+
+## 研究报告 (recon 要点已折入 docs/DESIGN.md)
+- dkitle: 线协议 + 桌面时钟模型 (primary). 缺陷: gap-hold 无 TTL / 重连回放旧 sync 带新 timestamp / 无 SPA 处理 / /ws 无鉴权.
+- yt-dual-subs: pot 复用抓轨 / parseJson3(lastOff) / lastOff 分句 / trans 随 cue / nearestTcue 1200ms / 对齐协议与校验 / lane 模型与实测常量.
+- transly: 配置 schema 与 Key 边界 / protocol auto 适配 / SSE-or-JSON 检测 / 缓存 identity SHA-256 / 单一并发权威 / 严格对齐校验. 缺: 重试/backoff/429/队列取消.
+- LiveSubs: WPF 浮窗 PORT PLAN (12 条, Qt 版). 注意: 透明度双重相乘 bug 不要学; click-through 要补解锁路径.
+- local-screen-translator: DOM 回显是错误架构, 仅复用 LRU/dpi/overlay flag 思路; localhost sink 教训: JSON + Origin 检查.
+
+## 状态 (详见 PROGRESS.md 与 `.scratch/handoff/` 下最新交接文档, 随做随更)
+- 桌面端全部实现完毕; **pytest 65 passed** (~16s)。含真实 WS 集成、引擎全管线(mock)、浮窗 resize 回归、
+  /health 与 /status 路由、无 provider 不泄露、provider 抛错不 500、跨语言解析夹具 11 例、
+  **真浏览器 E2E 7 条 (夹具页 + 真 userscript + 真 app.py, 只经 /status 黑盒观察; 无 Chrome 则 skip)**、热键 4 条、浮窗状态 2 条。
+- **Node 测试台: 33 passed** (命令 `cd userscript; node --test "tests/*.test.mjs"`; 传目录会 MODULE_NOT_FOUND)。
+  共享夹具 `userscript/tests/fixtures/parse_cases.json` 被 JS 与 Python 两侧断言同一份内容 (解析一致性)。
+- userscript 现在 **471 行**。上一轮修了 3 处: (1) 去重改为内容签名 (`cuesSignature`) —— 修"同 cue 数不同轨道被误判为重复";
+  (2) 无 GM_xmlhttpRequest 时 health 回退为直接尝试 WS; (3) `trackLangFromUrl` 优先 tlang。
+- userscript E2E 会话再改: 注入改为 **Trusted Types 感知的三级回退** (GM_addElement → trustedTypes policy → 主世界 new Function,
+  最后一级若身处沙箱则主动跳过以免装进错的 realm); 新增 `hookError` 状态 + 面板 `[NO PAGE HOOK]` 标记 + register 帧携带 `hook_error`。
+  根因是真实 youtube.com 上 `el.textContent = code` 被 `require-trusted-types-for script` 拒绝, 页面钩子静默失败 (详见交接文档 §2 bug#4)。
+- 浮窗已真实运行并经假浏览器驱动验证 (截图像素证据: 原文白字+译文黄字均渲染; 暂停后清空)。
+- 用户反馈已修: 无窗口尺寸限制; 字号下限6/默认10可设; 放大后无法缩小的 resize bug (按下锁定边缘)。
+- **`GET /status`**: `{ok,version,stats}` + `state/orig/trans/playing/rate/title/mode/order/history/click_through/hook_error/capture_error`。
+  用途: 不截图就能看"连上了吗/浮窗在显示什么"; 也是浏览器 E2E 的黑盒观察口。会回显字幕文本 (仅 loopback, 无 provider 时不回显)。
+- ✅ **浏览器侧已在真 Chrome 里跑过** (E2E 7 条全绿 + `--demo`/`--live` 人工入口): 页面钩子在真实主世界抓到 timedtext、
+  真实 Origin 过 WS 白名单、真 cue 走到浮窗显示态、play/pause/seek/rate/SPA 语义均经 `/status` 黑盒断言。
+  该会话据此修掉 4 个真 bug (cues 清零时钟 / click-through 无解锁路径 / 菜单时序 / YouTube Trusted Types 静默失败)。
+- ⚠ 仍未验证: **真 Tampermonkey** (本机没装扩展)、**真实 AI Key 翻译链路** (等 Base URL+Key+Model)、
+  **真实 youtube.com 抓不到 cue 的根因** (注入成功、站点确实在发 timedtext、但 bridge 没抓到; 根因未定论, 用户已归入手动验收)。
+- 手动验收入口: `docs/MANUAL-ACCEPTANCE.md` (四层); 一键启动 `start-desktop.cmd`; 依赖 `requirements.txt`。
+
+## 下一步 (断点, 完整清单见 `.scratch/handoff/` 下最新交接文档 §5)
+0. **(已落盘, 待裁决)** P0 思维对齐: `.scratch/alignment/20260921-112756-E2E与手测入口.md` (D/K/C/O/F + 可疑遗漏 A/B);
+   O 类与 A/B 类的"请裁决"项仍待用户回答。**不要重做对齐**。
+1. 用户按 `docs/MANUAL-ACCEPTANCE.md` 手动验收 (L1 夹具演示 / L2 真实站点诊断 / L3 真 Tampermonkey / L4 真实 Key)。
+2. (已定论 2026-09-21) "真实 YouTube 抓不到 cue" = **headless 指纹**, 不是产品缺陷: headless 下 youtube.com 给 `200 + text/html + 0 字节`,
+   headed 下同一 URL 给 `200 + application/json + 8079 字节`、桥接 61 条 cue、浮窗显示真实歌词 + 【译】。
+   所以 `--live` **不要加 `--headless`**; 失败原因现在会以 `capture_error` 上浮 (浮窗状态行 + `/status` + 面板 `[NO CAPTION BODY]`)。
+3. 剩余 P2 打磨: 历史字幕行渲染 / 打包分发 / 多标签 source UI。
+4. 收尾双轴评审: 本项目不是 git 仓库、没有 fixed point, 改为对交接文档 §1 的文件清单评审 (需用户确认这种替代)。

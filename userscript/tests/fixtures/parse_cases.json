@@ -1,0 +1,291 @@
+[
+  {
+    "name": "plain manual track without word offsets",
+    "json3": {
+      "events": [
+        {
+          "tStartMs": 0,
+          "dDurationMs": 2000,
+          "segs": [
+            {
+              "utf8": "Hello "
+            },
+            {
+              "utf8": "world"
+            }
+          ]
+        }
+      ]
+    },
+    "expected": [
+      {
+        "start_ms": 0,
+        "end_ms": 2000,
+        "text": "Hello world",
+        "last_off_ms": 0
+      }
+    ]
+  },
+  {
+    "name": "asr track with >> marks and word offsets",
+    "json3": {
+      "events": [
+        {
+          "tStartMs": 1000,
+          "dDurationMs": 3000,
+          "segs": [
+            {
+              "utf8": ">> "
+            },
+            {
+              "utf8": "hi there",
+              "tOffsetMs": 1800
+            },
+            {
+              "utf8": " folks",
+              "tOffsetMs": 2600
+            }
+          ]
+        }
+      ]
+    },
+    "expected": [
+      {
+        "start_ms": 1000,
+        "end_ms": 4000,
+        "text": "hi there folks",
+        "last_off_ms": 3600
+      }
+    ]
+  },
+  {
+    "name": "blank segs event dropped, later event kept",
+    "json3": {
+      "events": [
+        {
+          "tStartMs": 0,
+          "dDurationMs": 1000,
+          "segs": [
+            {
+              "utf8": "\n"
+            }
+          ]
+        },
+        {
+          "tStartMs": 1000,
+          "dDurationMs": 1000,
+          "segs": [
+            {
+              "utf8": "real",
+              "tOffsetMs": 200
+            }
+          ]
+        }
+      ]
+    },
+    "expected": [
+      {
+        "start_ms": 1000,
+        "end_ms": 2000,
+        "text": "real",
+        "last_off_ms": 1200
+      }
+    ]
+  },
+  {
+    "name": "zero duration dropped, missing tStartMs defaults to 0",
+    "json3": {
+      "events": [
+        {
+          "tStartMs": 500,
+          "dDurationMs": 0,
+          "segs": [
+            {
+              "utf8": "zero dur"
+            }
+          ]
+        },
+        {
+          "dDurationMs": 800,
+          "segs": [
+            {
+              "utf8": "no start",
+              "tOffsetMs": 50
+            }
+          ]
+        }
+      ]
+    },
+    "expected": [
+      {
+        "start_ms": 0,
+        "end_ms": 800,
+        "text": "no start",
+        "last_off_ms": 50
+      }
+    ]
+  },
+  {
+    "name": "junk events and junk segs ignored",
+    "json3": {
+      "events": [
+        null,
+        {},
+        {
+          "segs": "nope"
+        },
+        {
+          "tStartMs": 0,
+          "dDurationMs": 100,
+          "segs": [
+            {
+              "no_utf8": 1
+            },
+            {
+              "utf8": 42
+            },
+            {
+              "utf8": "ok",
+              "tOffsetMs": 10
+            }
+          ]
+        }
+      ]
+    },
+    "expected": [
+      {
+        "start_ms": 0,
+        "end_ms": 100,
+        "text": "ok",
+        "last_off_ms": 10
+      }
+    ]
+  },
+  {
+    "name": "payload without events array yields nothing",
+    "json3": {
+      "nope": 1
+    },
+    "expected": []
+  },
+  {
+    "name": "whitespace collapsed and trimmed",
+    "json3": {
+      "events": [
+        {
+          "tStartMs": 0,
+          "dDurationMs": 500,
+          "segs": [
+            {
+              "utf8": "  a\t\tb  ",
+              "tOffsetMs": 100
+            }
+          ]
+        }
+      ]
+    },
+    "expected": [
+      {
+        "start_ms": 0,
+        "end_ms": 500,
+        "text": "a b",
+        "last_off_ms": 100
+      }
+    ]
+  },
+  {
+    "name": "mid-text >> is preserved (only leading marks stripped)",
+    "json3": {
+      "events": [
+        {
+          "tStartMs": 0,
+          "dDurationMs": 900,
+          "segs": [
+            {
+              "utf8": "one>> two",
+              "tOffsetMs": 5
+            }
+          ]
+        }
+      ]
+    },
+    "expected": [
+      {
+        "start_ms": 0,
+        "end_ms": 900,
+        "text": "one>> two",
+        "last_off_ms": 5
+      }
+    ]
+  },
+  {
+    "name": "cjk text and fractional timings survive",
+    "json3": {
+      "events": [
+        {
+          "tStartMs": 1500.5,
+          "dDurationMs": 1200.25,
+          "segs": [
+            {
+              "utf8": "你好",
+              "tOffsetMs": 300.5
+            },
+            {
+              "utf8": "世界",
+              "tOffsetMs": 900.25
+            }
+          ]
+        }
+      ]
+    },
+    "expected": [
+      {
+        "start_ms": 1500.5,
+        "end_ms": 2700.75,
+        "text": "你好世界",
+        "last_off_ms": 2400.75
+      }
+    ]
+  },
+  {
+    "name": "duplicate/overlapping events keep event order",
+    "json3": {
+      "events": [
+        {
+          "tStartMs": 0,
+          "dDurationMs": 3000,
+          "segs": [
+            {
+              "utf8": "long one",
+              "tOffsetMs": 100
+            }
+          ]
+        },
+        {
+          "tStartMs": 1000,
+          "dDurationMs": 2500,
+          "segs": [
+            {
+              "utf8": "short overlap",
+              "tOffsetMs": 2400
+            }
+          ]
+        }
+      ]
+    },
+    "expected": [
+      {
+        "start_ms": 0,
+        "end_ms": 3000,
+        "text": "long one",
+        "last_off_ms": 100
+      },
+      {
+        "start_ms": 1000,
+        "end_ms": 3500,
+        "text": "short overlap",
+        "last_off_ms": 3400
+      }
+    ]
+  }
+]
