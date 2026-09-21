@@ -1,0 +1,38 @@
+$ git-revert-sim: engine.py gate + mock branch reverted to pre-fix behaviour
+F                                                                        [100%]
+================================== FAILURES ===================================
+__________ test_unconfigured_provider_never_fabricates_a_translation __________
+
+    def test_unconfigured_provider_never_fabricates_a_translation():
+        """Issue #1 (bug): with no base_url / model and Mock mode off, "no translation"
+        must mean an empty translation row - not the original text wearing a fake label.
+        Mock is a verification stand-in (DESIGN.md sec.2), so it stays opt-in: an
+        unconfigured provider must schedule nothing instead of echoing the original."""
+        from suboverlay.queue_cache import TranslationCache
+        s = default_settings()
+        assert s["provider"]["base_url"] == "" and s["provider"]["model"] == ""
+        assert not s["provider"].get("mock"), "mock must be off unless the user turns it on"
+        e = Engine(s, cache=TranslationCache(os.path.join(tempfile.mkdtemp(), "t.db")), workers=2)
+        e.ingest_json3("s1", {"video_id": "v1", "track_kind": "asr", "tab_title": "T"}, JSON3)
+        e.handle_event({"type": "sync", "source_id": "s1", "video_time_ms": 1500.0,
+                        "playing": True, "playback_rate": 1.0, "timestamp": time.time() * 1000})
+        deadline = time.time() + 0.8
+        d = e.tick()
+        while time.time() < deadline:
+            d = e.tick()
+            time.sleep(0.05)
+        assert d["state"] == "ok"
+        assert d["orig"].startswith("the cat"), "the original must still be shown"
+>       assert d["trans"] == "", "an unconfigured provider must not produce a translation"
+E       AssertionError: an unconfigured provider must not produce a translation
+E       assert '���롿the ���롿ca... cat sat down' == ''
+E         
+E         + ���롿the ���롿cat sat the cat sat down
+
+desktop\tests\test_engine.py:181: AssertionError
+=========================== short test summary info ===========================
+FAILED desktop/tests/test_engine.py::test_unconfigured_provider_never_fabricates_a_translation - AssertionError: an unconfigured provider must not produce a translation
+assert '���롿the ���롿ca... cat sat down' == ''
+  
+  + ���롿the ���롿cat sat the cat sat down
+1 failed, 7 deselected in 1.03s

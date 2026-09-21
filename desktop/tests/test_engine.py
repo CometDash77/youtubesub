@@ -157,3 +157,27 @@ def test_engine_translation_persists_in_cache_across_restart():
         time.sleep(0.02)
     assert got, "cache hit should be immediate"
     e2._queue.shutdown()
+
+def test_unconfigured_provider_never_fabricates_a_translation():
+    """Issue #1 (bug): with no base_url / model and Mock mode off, "no translation"
+    must mean an empty translation row - not the original text wearing a fake label.
+    Mock is a verification stand-in (DESIGN.md sec.2), so it stays opt-in: an
+    unconfigured provider must leave the translation row empty rather than echo
+    the original."""
+    from suboverlay.queue_cache import TranslationCache
+    s = default_settings()
+    assert s["provider"]["base_url"] == "" and s["provider"]["model"] == ""
+    assert not s["provider"].get("mock"), "mock must be off unless the user turns it on"
+    e = Engine(s, cache=TranslationCache(os.path.join(tempfile.mkdtemp(), "t.db")), workers=2)
+    e.ingest_json3("s1", {"video_id": "v1", "track_kind": "asr", "tab_title": "T"}, JSON3)
+    e.handle_event({"type": "sync", "source_id": "s1", "video_time_ms": 1500.0,
+                    "playing": True, "playback_rate": 1.0, "timestamp": time.time() * 1000})
+    deadline = time.time() + 0.8
+    d = e.tick()
+    while time.time() < deadline:
+        d = e.tick()
+        time.sleep(0.05)
+    assert d["state"] == "ok"
+    assert d["orig"].startswith("the cat"), "the original must still be shown"
+    assert d["trans"] == "", "an unconfigured provider must not produce a translation"
+    e._queue.shutdown()

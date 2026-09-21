@@ -1,0 +1,16 @@
+$ python -m pytest desktop/tests/test_engine.py -q
+........                                                                 [100%]
+8 passed in 1.58s
+
+$ python -m pytest desktop/tests -q --ignore=desktop/tests/test_browser_e2e.py
+..............................................................           [100%]
+62 passed in 5.52s
+
+$ cd userscript; node --test "tests/*.test.mjs"
+# tests 38
+# pass 38
+# fail 0
+# skipped 0
+# todo 0
+
+(Chrome E2E (desktop/tests/test_browser_e2e.py) intentionally excluded: no Chrome launch authorized this session.)

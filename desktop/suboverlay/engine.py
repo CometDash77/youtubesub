@@ -11,6 +11,19 @@ from . import provider as provider_mod
 SEEK_JUMP_MS = 2500.0
 PREFETCH_GROUPS = 4
 
+
+def _provider_usable(prov):
+    """Can a translation actually be produced?
+
+    Either the user explicitly turned Mock mode on, or there is a base URL *and*
+    a model (the same notion of "configured" as settings.redact). Anything else
+    means there is nothing to translate with - not that the original is a
+    translation."""
+    p = prov or {}
+    if p.get("mock"):
+        return True
+    return bool((p.get("base_url") or "").strip()) and bool((p.get("model") or "").strip())
+
 class _Source:
     def __init__(self, source_id, meta=None):
         self.source_id = source_id
@@ -112,8 +125,11 @@ class Engine:
         if gi in src.group_trans or all(c.trans for c in src.cues[g.start_idx:g.end_idx + 1]):
             return
         prov = dict(self.settings.get("provider", {}))
-        if not prov.get("base_url") or prov.get("mock"):
-            prov["mock"] = True
+        if not _provider_usable(prov):
+            # Issue #1: "not configured" is not mock mode. The mock translator
+            # echoes the original behind a fake translation label, which reads as
+            # a broken translation; showing the original alone is the honest state.
+            return
         instructions = self.settings.get("prompt", {}).get("system") or provider_mod.DEFAULT_SYSTEM_PROMPT
         prev_t = src.groups[gi - 1].text if gi > 0 else ""
         nxt_t = src.groups[gi + 1].text if gi + 1 < len(src.groups) else ""
@@ -133,7 +149,10 @@ class Engine:
 
     def _default_translate(self, job):
         prov = dict(self.settings.get("provider", {}))
-        if prov.get("mock") or not prov.get("base_url"):
+        if not _provider_usable(prov):
+            # Defence in depth for settings edited after jobs were queued.
+            return {"aligned": False, "text": "", "error": "NOT_CONFIGURED"}
+        if prov.get("mock"):
             time.sleep(0.02)  # simulate latency so queue/priority is exercised
             if job.expected > 1:
                 n = job.expected
