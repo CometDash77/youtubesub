@@ -133,10 +133,12 @@ def test_queue_priority_dedup_and_cancel():
     done = []
     gate = {"hold": True}
 
-    def fake_translate(job):
+    def fake_translate(jobs):
+        # spec #24: the seam takes a job LIST; length 1 = pre-batch behaviour.
         while gate["hold"]:
             time.sleep(0.01)
-        return {"aligned": False, "text": "T:" + job.group_text, "error": None}
+        return [{"aligned": False, "text": "T:" + j.group_text, "error": None}
+                for j in jobs]
 
     q = TranslationQueue({}, cache, workers=1, on_done=lambda j, r: done.append((j, r)),
                          translate_fn=fake_translate, max_pending=10)
@@ -163,8 +165,8 @@ def test_queue_sheds_normal_under_backoff():
     db = os.path.join(tempfile.mkdtemp(), "t.db")
     cache = TranslationCache(db)
     done = []
-    def fake_translate(job):
-        return {"aligned": False, "text": "T", "error": None}
+    def fake_translate(jobs):
+        return [{"aligned": False, "text": "T", "error": None} for _ in jobs]
     q = TranslationQueue({}, cache, workers=1, on_done=lambda j, r: done.append(j),
                          translate_fn=fake_translate, max_pending=10)
     q.note_rate_limited(cooldown_s=0.3)
@@ -178,6 +180,159 @@ def test_queue_sheds_normal_under_backoff():
     assert len(done) == 1
 
 
+# ---- spec #24: batch output contract + batch-aware queue take path ----
+
+
+def test_slice_numbered_batch_requires_exact_full_coverage():
+    """Decision 7/8: the batch contract is globally continuous numbering
+    1..T with EXACT full coverage - the same all-or-nothing semantics as the
+    single aligned protocol. Anything else (a dropped line the model
+    re-numbered around, a gap, a duplicate, an empty body, an out-of-range
+    number) voids the whole batch. Never patch the missing lines in."""
+    nl = chr(10)
+    counts = [2, 1, 3]
+    full = nl.join(["1|甲", "2|乙", "3|丙", "4|丁", "5|戊", "6|己"])
+    want = [["甲", "乙"], ["丙"], ["丁", "戊", "己"]]
+    assert P.slice_numbered_batch(full, counts) == want
+    fenced = "```json" + nl + full + nl + "```"
+    assert P.slice_numbered_batch(fenced, counts) == want, \
+        "fence stripping still applies"
+    # dropped line + re-numbered contiguously: text cannot reveal the loss
+    renumbered = nl.join(["1|甲", "2|乙", "3|丙", "4|丁", "5|戊"])
+    assert P.slice_numbered_batch(renumbered, counts) is None
+    # gap in the numbering
+    gapped = nl.join(["1|甲", "2|乙", "3|丙", "4|丁", "6|己"])
+    assert P.slice_numbered_batch(gapped, counts) is None
+    # duplicate number
+    dup = nl.join(["1|甲", "2|乙", "3|丙", "4|丁", "4|戊", "6|己"])
+    assert P.slice_numbered_batch(dup, counts) is None
+    # empty translation body
+    empty = nl.join(["1|甲", "2|乙", "3|丙", "4|", "5|戊", "6|己"])
+    assert P.slice_numbered_batch(empty, counts) is None
+    # one line MORE than T (contiguous, looks perfectly valid)
+    over = nl.join(["1|甲", "2|乙", "3|丙", "4|丁", "5|戊", "6|己"])
+    assert P.slice_numbered_batch(over, [2, 1, 2]) is None  # T=5, got 6 lines
+    # number beyond T
+    extra = nl.join(["1|甲", "2|乙", "3|丙", "4|丁", "5|戊", "7|庚"])
+    assert P.slice_numbered_batch(extra, counts) is None
+    # nonsense counts never validate
+    assert P.slice_numbered_batch(full, []) is None
+    assert P.slice_numbered_batch(full, [0, 3, 3]) is None
+
+
+def _mk_jobs(specs):
+    """specs = [(identity, priority, group_idx, text)] -> TranslationJob list."""
+    return [TranslationJob(ident, pr, "s1", gi, text)
+            for ident, pr, gi, text in specs]
+
+
+def test_queue_batch_take_drops_cached_and_inflight_then_falls_back():
+    """Decision 12: at take time a batch drops members that are already
+    cached or already in flight; what remains runs - >= 2 as ONE call,
+    exactly 1 falling back to the single path. A cached member is never
+    translated again."""
+    import tempfile
+    cache = TranslationCache(os.path.join(tempfile.mkdtemp(), "t.db"))
+    cache.put("idA", {"aligned": False, "text": "CA", "error": None})
+    gate, calls = {"hold": True}, []
+
+    def fake(jobs):
+        calls.append([j.identity for j in jobs])
+        while gate["hold"]:
+            time.sleep(0.01)
+        return [{"aligned": False, "text": "T:" + j.group_text, "error": None}
+                for j in jobs]
+
+    q = TranslationQueue({}, cache, workers=1, translate_fn=fake, max_pending=50)
+    try:
+        q.submit(TranslationJob("idB", URGENT, "s1", 1, "b"))
+        deadline = time.time() + 2.0
+        while time.time() < deadline and q.stats()["inflight"] < 1:
+            time.sleep(0.01)
+        assert q.stats()["inflight"] == 1, "B must be in flight (blocked)"
+        # A is cached, B is in flight: neither may reach the translator
+        accepted = q.submit_batch(_mk_jobs([("idA", NORMAL, 0, "a"),
+                                             ("idB", NORMAL, 1, "b"),
+                                             ("idC", NORMAL, 2, "c")]))
+        assert accepted
+        gate["hold"] = False
+        deadline = time.time() + 2.0
+        while time.time() < deadline and len(calls) < 2:
+            time.sleep(0.01)
+        assert calls == [["idB"], ["idC"]], calls
+        assert "idA" not in calls[0] + calls[1], \
+            "a cached member must be dropped, not re-translated"
+        assert len(calls[1]) == 1, "one surviving member -> single path"
+    finally:
+        q.shutdown()
+
+
+def test_queue_batch_runs_as_one_call_and_dedups_pending_members():
+    """Steady contract: >= 2 surviving members = exactly ONE translate call
+    carrying the whole batch; members already in flight are deduplicated -
+    never translated twice."""
+    import tempfile
+    cache = TranslationCache(os.path.join(tempfile.mkdtemp(), "t.db"))
+    gate, calls = {"hold": True}, []
+
+    def fake(jobs):
+        calls.append([j.identity for j in jobs])
+        while gate["hold"]:
+            time.sleep(0.01)
+        return [{"aligned": False, "text": "T", "error": None} for _ in jobs]
+
+    q = TranslationQueue({}, cache, workers=1, translate_fn=fake, max_pending=50)
+    try:
+        assert q.submit_batch(_mk_jobs([("idX", NORMAL, 0, "x"),
+                                         ("idY", NORMAL, 1, "y")]))
+        deadline = time.time() + 2.0
+        while time.time() < deadline and q.stats()["inflight"] < 2:
+            time.sleep(0.01)
+        assert q.stats()["inflight"] == 2, "the whole batch must go out together"
+        # X and Y are in flight now: resubmitting them must be a no-op.
+        assert not q.submit_batch(_mk_jobs([("idX", NORMAL, 0, "x"),
+                                             ("idY", NORMAL, 1, "y")]))
+        gate["hold"] = False
+        deadline = time.time() + 2.0
+        while time.time() < deadline and len(calls) < 1:
+            time.sleep(0.01)
+        q.shutdown()
+        assert calls == [["idX", "idY"]], \
+            "exactly one call for the whole batch, nothing else"
+    finally:
+        q.shutdown()
+
+
+def test_batches_shed_under_deep_backoff_but_urgent_is_never_shed():
+    """US20 + decision 14: batches are NORMAL priority, so deep backoff
+    (rate limiting) sheds them - while URGENT, the sentence on screen, always
+    goes through. Rate limiting cuts prefetch, never the visible line."""
+    import tempfile
+    cache = TranslationCache(os.path.join(tempfile.mkdtemp(), "t.db"))
+    calls, done = [], []
+
+    def fake(jobs):
+        calls.append([j.identity for j in jobs])
+        return [{"aligned": False, "text": "T", "error": None} for _ in jobs]
+
+    q = TranslationQueue({}, cache, workers=1, on_done=lambda j, r: done.append(j),
+                         translate_fn=fake, max_pending=50)
+    try:
+        q.note_rate_limited(cooldown_s=0.4)
+        assert q.submit_batch(_mk_jobs([("idN1", NORMAL, 1, "n1"),
+                                         ("idN2", NORMAL, 2, "n2")]))
+        q.submit(TranslationJob("idU", URGENT, "s1", 0, "u"))
+        time.sleep(0.2)  # still inside the backoff window
+        assert calls == [["idU"]], \
+            "URGENT must pass through deep backoff; batch must be shed: %r" % (calls,)
+        time.sleep(0.4)  # backoff over - the shed batch never comes back
+        assert calls == [["idU"]], "a shed batch must not resurrect itself"
+        assert [j.identity for j in done] == ["idU"]
+        assert not q.in_backoff()
+    finally:
+        q.shutdown()
+
+
 def _capture_wire(monkeypatch, protocol, cur, prev="", nxt="", system="BASE PROMPT"):
     """Drive translate_group against a stubbed transport (no network) and return
     (system, user) exactly as they would go on the wire for either protocol."""
@@ -185,6 +340,8 @@ def _capture_wire(monkeypatch, protocol, cur, prev="", nxt="", system="BASE PROM
 
     def fake_post(url, headers, payload, timeout_s):
         seen.append(payload)
+
+
         # one body that satisfies both protocols' extractors
         return 200, {}, json.dumps({"choices": [{"message": {"content": "ok"}}],
                                     "output_text": "ok"})
@@ -198,6 +355,48 @@ def _capture_wire(monkeypatch, protocol, cur, prev="", nxt="", system="BASE PROM
     if protocol == "chat-completions":
         return body["messages"][0]["content"], body["messages"][1]["content"]
     return body["instructions"], body["input"][0]["content"][0]["text"]
+
+# ---- seam 3 (#23): the client against REAL bad addresses never raises ----
+# Old bug (decision 14): a refused connection or read timeout escaped the
+# client as a raw URLError and surfaced to the user as an internal WORKER
+# error. Real closed port + real blackhole address, no HTTP patching.
+BAD_REFUSED = "http://127.0.0.1:9/v1"
+BAD_BLACKHOLE = "http://10.255.255.1:9/v1"
+
+
+def _net_cfg(base, timeout=2.0):
+    return {"base_url": base, "api_key": "x", "model": "m", "protocol": "auto",
+            "timeout_s": timeout, "max_retries": 0, "system": "t"}
+
+
+def test_translate_group_refused_port_reports_network_and_never_raises(monkeypatch):
+    monkeypatch.setenv("NO_PROXY", "localhost,127.0.0.1,::1")
+    r = P.translate_group(_net_cfg(BAD_REFUSED, timeout=3.0), "hello")
+    assert r["error"] == "NETWORK", r
+    assert r["attempts"] == 1
+
+
+def test_translate_group_blackhole_reports_timeout(monkeypatch):
+    monkeypatch.setenv("NO_PROXY", "10.255.255.1")
+    r = P.translate_group(_net_cfg(BAD_BLACKHOLE, timeout=2.0), "hello")
+    assert r["error"] == "TIMEOUT", r
+    assert r["attempts"] == 1
+
+
+def test_translate_group_local_static_short_circuits_without_attempts():
+    r = P.translate_group(_net_cfg("ftp://x/v1"), "hello")
+    assert r["error"] == "BAD_CONFIG" and r["attempts"] == 0
+    r = P.translate_group(dict(_net_cfg(BAD_REFUSED), model=""), "hello")
+    assert r["error"] == "NO_MODEL" and r["attempts"] == 0
+
+
+def test_list_models_reports_network_and_timeout_codes(monkeypatch):
+    monkeypatch.setenv("NO_PROXY", "localhost,127.0.0.1,::1")
+    ids, err = P.list_models(_net_cfg(BAD_REFUSED), timeout_s=3.0)
+    assert ids == [] and err == "NETWORK"
+    monkeypatch.setenv("NO_PROXY", "10.255.255.1")
+    ids, err = P.list_models(_net_cfg(BAD_BLACKHOLE), timeout_s=2.0)
+    assert ids == [] and err == "TIMEOUT"
 
 
 def test_wire_context_lines_go_into_system_and_user_stays_pure(monkeypatch):

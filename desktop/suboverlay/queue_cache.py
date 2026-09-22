@@ -143,6 +143,30 @@ class TranslationJob:
 _SEQ = itertools.count()
 
 
+class TranslationBatch:
+    """A window-fill burst submitted as ONE queue entry (spec #24 / ADR-007).
+
+    A batch has no cache identity of its own: members keep the exact identities
+    the single path would compute, so the cache stays per-group. The queue's
+    take path is batch-aware: at pop time it drops members that are cancelled,
+    already in flight, or already cached, then runs the remainder - >= 2 members
+    as one translate call, exactly 1 member falling back to the single path
+    (steady-state behaviour unchanged). seq comes from the same counter as
+    single jobs, so heap ties can never compare heterogeneous objects.
+    """
+
+    __slots__ = ("jobs", "priority", "seq", "source_id")
+
+    def __init__(self, jobs):
+        self.jobs = list(jobs)
+        self.priority = jobs[0].priority
+        self.seq = next(_SEQ)
+        self.source_id = jobs[0].source_id
+
+    def sort_key(self):
+        return (self.priority, self.seq)
+
+
 class TranslationQueue:
     """Bounded worker pool with priority + in-flight dedup + cancel-by-source.
 
@@ -170,16 +194,25 @@ class TranslationQueue:
         for t in self._threads:
             t.start()
 
+    def _pending_ids_locked(self):
+        """Identities queued but not started - singles AND batch members."""
+        ids = set()
+        for _, entry in self._pending:
+            if isinstance(entry, TranslationBatch):
+                ids.update(j.identity for j in entry.jobs if not j.cancelled)
+            elif not entry.cancelled:
+                ids.add(entry.identity)
+        return ids
+
     def submit(self, job):
         with self._lock:
             if job.identity in self._inflight:
                 return False  # dedup concurrent identical work
-            for _, pj in self._pending:
-                if pj.identity == job.identity and not pj.cancelled:
-                    return False
+            if job.identity in self._pending_ids_locked():
+                return False
             if len(self._pending) >= self._max_pending:
                 # shed lowest-priority oldest normal jobs first (prefetch shedding)
-                self._pending = [j for j in self._pending if j.priority == URGENT]
+                self._pending = [e for e in self._pending if e[1].priority == URGENT]
                 if len(self._pending) >= self._max_pending:
                     return False
             import heapq
@@ -187,19 +220,52 @@ class TranslationQueue:
             self._wakeup.notify()
         return True
 
+    def submit_batch(self, jobs):
+        """Submit several jobs as one batch entry (spec #24). Members already
+        inflight or pending are dropped up front; a batch that reduces to one
+        member falls back to the single path - "剩一组就退回单组路径"."""
+        if not jobs:
+            return False
+        with self._lock:
+            pending_ids = self._pending_ids_locked()
+            members = [j for j in jobs
+                       if j.identity not in self._inflight and j.identity not in pending_ids]
+            if not members:
+                return False
+            if len(members) == 1:
+                single = members[0]
+            else:
+                import heapq
+                entry = TranslationBatch(members)
+                heapq.heappush(self._pending, (entry.sort_key(), entry))
+                self._wakeup.notify()
+                return True
+        return self.submit(single)  # lock released: reuse the single path verbatim
+
     def cancel_source(self, source_id):
+        """Drop pending (not-yet-started) work for a source. In-flight requests
+        are never touched: their cache identity is playhead-independent, so the
+        result is still worth keeping (spec #24 decision 4)."""
         n = 0
         with self._lock:
-            for _, job in self._pending:
-                if job.source_id == source_id and not job.cancelled:
-                    job.cancelled = True
-                    n += 1
+            for _, entry in self._pending:
+                jobs = entry.jobs if isinstance(entry, TranslationBatch) else [entry]
+                for job in jobs:
+                    if job.source_id == source_id and not job.cancelled:
+                        job.cancelled = True
+                        n += 1
             self._wakeup.notify_all()
         return n
 
     def note_rate_limited(self, cooldown_s=8.0):
         with self._lock:
             self._backoff_until = time.time() + cooldown_s
+
+    def in_backoff(self):
+        """Is deep backoff active? The engine watches the True -> False edge to
+        refill the window after shed prefetch ("退避后补课", spec #24)."""
+        with self._lock:
+            return time.time() < self._backoff_until
 
     def stats(self):
         with self._lock:
@@ -211,6 +277,14 @@ class TranslationQueue:
             self._wakeup.notify_all()
 
     def _worker(self):
+        """Take path (spec #24, decision 12 - batch-aware):
+
+        pop an entry; a batch first drops cancelled / already-in-flight /
+        already-cached members, then >= 2 members run as ONE translate call and
+        exactly 1 member falls back to the single path. The translate seam is
+        `translate_fn(jobs) -> [result per job]` - a length-1 list is exactly
+        the pre-batch behaviour.
+        """
         import heapq
         while True:
             with self._lock:
@@ -219,35 +293,87 @@ class TranslationQueue:
                 if self._shutdown:
                     return
                 job = None
-                while self._pending:
+                batch = None
+                while self._pending and job is None and batch is None:
                     key, cand = heapq.heappop(self._pending)
-                    if cand.cancelled:
-                        continue
-                    if cand.priority == NORMAL and time.time() < self._backoff_until:
-                        continue  # shed prefetch under deep backoff
-                    job = cand
-                    break
-                if job is None:
+                    if isinstance(cand, TranslationBatch):
+                        members = [j for j in cand.jobs if not j.cancelled]
+                        if not members:
+                            continue
+                        if cand.priority == NORMAL and time.time() < self._backoff_until:
+                            continue  # batches are normal-priority: shed under deep backoff
+                        members = [j for j in members if j.identity not in self._inflight]
+                        members = [j for j in members if self._cache.get(j.identity) is None]
+                        if not members:
+                            continue
+                        if len(members) == 1:
+                            job = members[0]
+                        else:
+                            batch = members
+                    else:
+                        if cand.cancelled:
+                            continue
+                        if cand.priority == NORMAL and time.time() < self._backoff_until:
+                            continue  # shed prefetch under deep backoff
+                        job = cand
+                if job is None and batch is None:
                     continue
-                self._inflight[job.identity] = job
+                running = batch if batch is not None else [job]
+                for j in running:
+                    self._inflight[j.identity] = j
             try:
-                cached = self._cache.get(job.identity)
-                if cached is not None:
-                    result = dict(cached)
-                    result["from_cache"] = True
-                else:
-                    result = self._translate(job)
-                    if not result.get("error"):
-                        self._cache.put(job.identity, result)
-                    if result.get("error") == "RATE_LIMITED":
-                        self.note_rate_limited()
+                results = self._run(running)
             except Exception as e:  # never let a worker die
-                result = {"error": "WORKER", "message": type(e).__name__ + ": " + str(e)}
+                results = [{"error": "WORKER", "message": type(e).__name__ + ": " + str(e)}
+                           for _ in running]
             finally:
                 with self._lock:
-                    self._inflight.pop(job.identity, None)
+                    for j in running:
+                        self._inflight.pop(j.identity, None)
                     self._wakeup.notify()
-            try:
-                self._on_done(job, result)
-            except Exception:
-                pass
+            for j, res in zip(running, results):
+                try:
+                    self._on_done(j, res)
+                except Exception:
+                    pass
+
+    def _run(self, jobs):
+        """Execute one translate call for `jobs` (len 1 = single path) and cache
+        per-group results. Batch failures are ALL-OR-NOTHING: if any member
+        errors, every member is voided with that error - no cache write, no
+        partial landing, no placeholder (spec #24, decision 9)."""
+        if len(jobs) == 1:
+            job = jobs[0]
+            cached = self._cache.get(job.identity)
+            if cached is not None:
+                result = dict(cached)
+                result["from_cache"] = True
+                return [result]
+            results = self._translate([job])
+            results = self._coerce_results(results, jobs)
+            result = results[0]
+            if not result.get("error"):
+                self._cache.put(job.identity, result)
+            if result.get("error") == "RATE_LIMITED":
+                self.note_rate_limited()
+            return [result]
+        # batch path: one translate call, per-group identities written on success
+        results = self._coerce_results(self._translate(jobs), jobs)
+        first_err = next((r for r in results if r.get("error")), None)
+        if first_err is not None:
+            results = [dict(first_err) for _ in jobs]   # whole batch void
+        for job, res in zip(jobs, results):
+            if not res.get("error"):
+                self._cache.put(job.identity, res)
+        if first_err is not None and first_err.get("error") == "RATE_LIMITED":
+            self.note_rate_limited()
+        return results
+
+    @staticmethod
+    def _coerce_results(results, jobs):
+        """The translate seam must answer one dict per job, in order."""
+        if (not isinstance(results, list) or len(results) != len(jobs)
+                or any(not isinstance(r, dict) for r in results)):
+            return [{"error": "WORKER", "message": "translate returned no result for the job"}
+                    for _ in jobs]
+        return results

@@ -216,26 +216,202 @@ def build_instructions(preset_text, context_prev="", context_next="",
     return instructions
 
 
+def _timed_out(e):
+    """True when a socket-level OSError is a timeout (connect or read).
+    socket.timeout IS TimeoutError since 3.10; Windows can also surface the
+    condition by message, so match both (#23 decision 14)."""
+    reason = getattr(e, "reason", e)
+    if isinstance(reason, TimeoutError):
+        return True
+    blob = (str(reason) + " " + str(e)).lower()
+    return "timed out" in blob or "timedout" in blob
+
+
+def _network_message(e, kind, timeout_s):
+    if kind == "TIMEOUT":
+        return "timed out after %gs waiting for the endpoint" % timeout_s
+    detail = str(getattr(e, "reason", "") or e)
+    return "connection failed: " + detail[:300]
+
+
 def translate_group(cfg, group_text, context_prev="", context_next="",
                     expected_lines=0, sleep=time.sleep, now=time.time):
     """Translate one sentence group with retries/backoff.
 
-    Returns dict {aligned: bool, values: [..] or None, text: str or None, cached_hint: str}.
+    Returns dict {aligned, values, text, error, message, attempts} - attempts
+    counts the HTTP tries actually made (0 when nothing was sent), because the
+    connection test's report must show whether retries multiplied usage (#23).
     expected_lines > 0 requests the aligned protocol (N|line) and validates strictly;
     on shape miss the caller may retry in whole-line mode (never split a sentence).
     cfg keys: base_url, api_key, model, protocol, timeout_s, max_retries, system.
-    Never raises for provider failures - returns {error: code}.
+    Never raises for provider failures - connection failures included (#23
+    decision 14: they used to escape as URLError and surface as WORKER).
     """
     model = (cfg.get("model") or "").strip()
     if not model:
-        return {"error": "NO_MODEL"}
+        return {"error": "NO_MODEL", "message": None, "attempts": 0}
     try:
         endpoint, protocol = coerce_endpoint(cfg.get("base_url"), cfg.get("protocol"))
     except ProviderError as e:
-        return {"error": e.code}
+        return {"error": e.code, "message": str(e), "attempts": 0}
     instructions = build_instructions(cfg.get("system"), context_prev,
                                      context_next, expected_lines)
     prompt = group_text
+    body = build_body(protocol, model, instructions, prompt, stream=False)
+    timeout_s = float(cfg.get("timeout_s") or REQUEST_TIMEOUT_S)
+    max_retries = int(cfg.get("max_retries") if cfg.get("max_retries") is not None else MAX_RETRIES)
+    headers = _headers(cfg.get("api_key"))
+
+    last_err = None
+    ra = None
+    attempts = 0
+    status = None
+    rh = None
+    for attempt in range(max_retries + 1):
+        try:
+            status, rh, text = _do_post(endpoint, headers, body, timeout_s)
+        except OSError as e:
+            # #23 decision 14: a timeout is transient (retried like a 5xx);
+            # a refused/reset connection is deterministic and fails fast with
+            # its real cause instead of an internal WORKER error.
+            attempts += 1
+            kind = "TIMEOUT" if _timed_out(e) else "NETWORK"
+            last_err = ProviderError(kind, _network_message(e, kind, timeout_s),
+                                     None, retryable=(kind == "TIMEOUT"))
+            status, rh = None, None
+        else:
+            attempts += 1
+            if status == 200:
+                try:
+                    out = extract_complete_text(protocol, json.loads(text))
+                except (json.JSONDecodeError, ValueError):
+                    last_err = ProviderError("INVALID_MODEL_OUTPUT", "response is not JSON")
+                except ProviderError as e:
+                    last_err = e
+                else:
+                    if expected_lines > 1:
+                        vals = unpack_numbered(out, expected_lines)
+                        if vals is not None:
+                            return {"aligned": True, "values": vals, "error": None,
+                                    "attempts": attempts}
+                        last_err = ProviderError("SHAPE_MISS", "aligned output count mismatch")
+                        break  # shape miss: caller degrades to whole-line, no re-ask
+                    return {"aligned": False, "text": out.strip(), "error": None,
+                            "attempts": attempts}
+            else:
+                last_err = map_status_error(status, text)
+                ra = _retry_after_s(rh)
+        if not getattr(last_err, "retryable", False):
+            break
+        if attempt < max_retries:
+            if status is not None and status in (402, 429):
+                ra = _retry_after_s(rh)
+                delay = ra if ra is not None else BACKOFF_BASE_S * (2 ** attempt)
+            else:
+                delay = BACKOFF_BASE_S * (2 ** attempt)
+            sleep(min(delay, 30.0))
+    code = getattr(last_err, "code", None) or "UNKNOWN"
+    message = str(last_err) if last_err else None
+    if code == "RATE_LIMITED" and ra is not None:
+        # user story 9: the server's own wait time travels with the verdict
+        message = "%s (server asked to retry after %gs)" % (message, ra)
+    return {"error": code, "message": message, "attempts": attempts}
+
+
+def slice_numbered_batch(raw, counts):
+    """Batch output contract (spec #24 / ADR-007): globally continuous numbering.
+
+    counts = per-group line counts (each >= 1); T = sum(counts). The model must
+    return exactly '1|... .. T|...' covering every line - the SAME exact-full-
+    coverage semantics as the single-group aligned protocol, reused unmodified
+    via unpack_numbered. Any deviation (missing / extra / duplicate / empty /
+    out-of-range line) returns None and voids the WHOLE batch: "missing-line
+    patching" is forbidden because a model that drops a line usually
+    re-numbers the rest contiguously, making the misalignment undetectable
+    from the text itself. On success returns the per-group slices.
+    """
+    if not counts or any(int(c) < 1 for c in counts):
+        return None
+    vals = unpack_numbered(raw, sum(int(c) for c in counts))
+    if vals is None:
+        return None
+    out, i = [], 0
+    for c in counts:
+        out.append(vals[i:i + int(c)])
+        i += int(c)
+    return out
+
+
+def _batch_prompt(items):
+    """User message for a batch: only sentence texts, one marked section each.
+
+    Mirrors the single-group composition (user = pure current sentence, no
+    context) - context travels in the instructions instead (see
+    _batch_instructions), so batch and single requests keep the same shape of
+    contract. items = [{text, prev, nxt, expected}].
+    """
+    sections = []
+    for i, it in enumerate(items, 1):
+        sections.append("Sentence " + str(i) + " (" + str(max(1, int(it.get("expected") or 1)))
+                        + " lines):" + chr(10) + (it.get("text") or ""))
+    return chr(10).join(sections)
+
+
+def _batch_instructions(base, items, counts):
+    """System instructions for a batch: base prompt -> per-sentence context
+    label lines (same wording as the single path - each group carries ITS OWN
+    context, ADR-007) -> the batch alignment protocol paragraph.
+    """
+    parts = [base or DEFAULT_SYSTEM_PROMPT]
+    for i, it in enumerate(items, 1):
+        ctx = []
+        if it.get("prev"):
+            ctx.append("Previous line (context only, do not translate): " + it["prev"])
+        if it.get("nxt"):
+            ctx.append("Next line (context only, do not translate): " + it["nxt"])
+        if ctx:
+            parts.append("Context for sentence " + str(i) + ":" + chr(10) + chr(10).join(ctx))
+    total = sum(counts)
+    parts.append(
+        "The input contains " + str(len(items)) + " sentences; sentence i has the number "
+        "of subtitle lines announced above. Translate every sentence. Output exactly "
+        + str(total) + " lines in format 'N|translation' (N=1.." + str(total)
+        + ") covering the subtitle lines of all sentences in order. No other text.")
+    return chr(10).join(parts)
+
+
+def translate_batch(cfg, items, sleep=time.sleep, now=time.time):
+    """Translate several sentence groups in ONE request (spec #24 / ADR-007).
+
+    items = [{text, prev, nxt, expected}] (expected = per-group line count).
+    Returns a list of result dicts aligned with items:
+      success -> {aligned: True, values: [..], error: None} per group (sliced
+                 from the globally numbered output by the known line counts);
+      failure -> every element carries the SAME error: the batch is all-or-
+                 nothing. No retry of a shape miss, no splitting, no fallback
+                 to whole-line mode - the caller drops the whole batch and the
+                 per-group urgent path re-translates at play time.
+    Transport-level retries/backoff (429/5xx, decision #24.14) are shared with
+    translate_group; they are wire errors, not contract failures.
+    Never raises for provider failures.
+    """
+    counts = [max(1, int(it.get("expected") or 1)) for it in items]
+
+    def _failed(code, message=None):
+        return [{"aligned": False, "text": "", "error": code, "message": message}
+                for _ in items]
+
+    if not items:
+        return []
+    model = (cfg.get("model") or "").strip()
+    if not model:
+        return _failed("NO_MODEL")
+    try:
+        endpoint, protocol = coerce_endpoint(cfg.get("base_url"), cfg.get("protocol"))
+    except ProviderError as e:
+        return _failed(e.code, str(e))
+    instructions = _batch_instructions(cfg.get("system") or DEFAULT_SYSTEM_PROMPT, items, counts)
+    prompt = _batch_prompt(items)
     body = build_body(protocol, model, instructions, prompt, stream=False)
     timeout_s = float(cfg.get("timeout_s") or REQUEST_TIMEOUT_S)
     max_retries = int(cfg.get("max_retries") if cfg.get("max_retries") is not None else MAX_RETRIES)
@@ -252,16 +428,13 @@ def translate_group(cfg, group_text, context_prev="", context_next="",
             except ProviderError as e:
                 last_err = e
             else:
-                if expected_lines > 1:
-                    vals = unpack_numbered(out, expected_lines)
-                    if vals is not None:
-                        return {"aligned": True, "values": vals, "error": None}
-                    last_err = ProviderError("SHAPE_MISS", "aligned output count mismatch")
-                    break  # shape miss: caller degrades to whole-line, no re-ask
-                return {"aligned": False, "text": out.strip(), "error": None}
+                sliced = slice_numbered_batch(out, counts)
+                if sliced is None:
+                    # Contract miss: whole batch void, no retry / no split.
+                    return _failed("SHAPE_MISS", "batch output does not exactly cover 1..T")
+                return [{"aligned": True, "values": v, "error": None} for v in sliced]
         else:
             last_err = map_status_error(status, text)
-            ra = _retry_after_s(rh)
         if not getattr(last_err, "retryable", False):
             break
         if attempt < max_retries:
@@ -272,7 +445,7 @@ def translate_group(cfg, group_text, context_prev="", context_next="",
                 delay = BACKOFF_BASE_S * (2 ** attempt)
             sleep(min(delay, 30.0))
     code = getattr(last_err, "code", None) or "UNKNOWN"
-    return {"error": code, "message": str(last_err) if last_err else None}
+    return _failed(code, str(last_err) if last_err else None)
 
 
 def list_models(cfg, timeout_s=MODELS_TIMEOUT_S):
@@ -288,7 +461,13 @@ def list_models(cfg, timeout_s=MODELS_TIMEOUT_S):
             body = json.loads(resp.read().decode("utf-8", "replace"))
     except urllib.error.HTTPError as e:
         return [], "HTTP_" + str(e.code)
-    except (urllib.error.URLError, json.JSONDecodeError, OSError, ValueError):
+    except json.JSONDecodeError:
+        # answered (2xx) but not a model list: reachable, nothing to check
+        # membership against - the step-1 "list unavailable" observation (#23)
+        return [], "INVALID_MODEL_OUTPUT"
+    except OSError as e:
+        return [], "TIMEOUT" if _timed_out(e) else "NETWORK"
+    except ValueError:
         return [], "NETWORK"
     items = body.get("data") if isinstance(body, dict) else None
     if not isinstance(items, list):

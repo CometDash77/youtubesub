@@ -32,6 +32,12 @@
 - LiveSubs: WPF 浮窗 PORT PLAN (12 条, Qt 版). 注意: 透明度双重相乘 bug 不要学; click-through 要补解锁路径.
 - local-screen-translator: DOM 回显是错误架构, 仅复用 LRU/dpi/overlay flag 思路; localhost sink 教训: JSON + Origin 检查.
 
+## 双模型维护环境 (DeepSeek-V4.1-Flash 与 MiMo-V2.6)
+
+- 本项目由两家 agent 共同维护; 模型 id: DeepSeek 侧 `deepseek-flash`, MiMo 侧 `mimo-v2.6-flash`。
+- 指令层双模型约定入口: [AGENTS.md](AGENTS.md) 的「双模型维护环境」章; 任何指令层改动须逐条过 [docs/agents/dual-model-checklist.md](docs/agents/dual-model-checklist.md) (纯静态核对)。
+- `harness/` 是 DeepSeek Harness 运行时专属, 不在双模型维护范围内。
+
 ## 状态 (详见 PROGRESS.md 与 `.scratch/handoff/` 下最新交接文档, 随做随更)
 - 桌面端全部实现完毕; **pytest 88 passed** (~20s)。含真实 WS 集成、引擎全管线(mock)、浮窗 resize 回归、
   /health 与 /status 路由、无 provider 不泄露、provider 抛错不 500、跨语言解析夹具 11 例、
@@ -58,6 +64,7 @@
 - ✅ (2026-09-21) **断句判据已定**: 对齐 kiss-translator 的规则分支 (ADR-006 取代 ADR-004 的判据部分; 翻译单位不变), 规格 = issue「字幕断句判据对齐 kiss-translator（规格）」#22。**代码尚未改动**。
 - ✅ (2026-09-21) **提前批翻译已定**: 预取改用**时间量纲** (默认 90 秒 + 组数硬上限 20), 触发保持事件原生增量 + seek 去抖 (不照搬它的 30s 扫描节流), **新增批请求** (只在填充爆发点同步切块, 全局连续编号 + 精确全覆盖, 失败整批作废交紧急补翻, 批内保留每组上下文以维持 cache identity 不变式), 在途请求一律不中断 (ADR-007)。规格 = issue「提前批翻译：预取窗口与批请求契约（规格）」#24。**代码尚未改动**。
 
+- ✅ (2026-09-22) **提前批翻译已实现** (#24 落地): 预取窗口改按**时间量纲** (90 秒 + 组数硬上限 20, seek 去抖 400ms), 窗口填充按 ≤8 组/≤8000 字符**切批**、队列**批感知**取活 (剔已缓存/在途, 剩一退单), 批失败**整批作废**交紧急补翻, 预取与上下文开关解耦, `provider.max_concurrent` 接到 worker 池; 契约见 [ADR-007](docs/adr/ADR-007-batch-request-contract.md)。上一条「代码尚未改动」与「下一步 6」至此过期。
 - ✅ (2026-09-21) **#31 已修**: Mock 回显与真实译文不再共用缓存身份 (mock 进 identity, 身份方案版本 1 -> 2, 见 ADR-008); 队列任务改为携带提交时的 provider 快照与命名空间, 命名空间变动时内存里的旧译文作废并重取, 晚到的旧命名空间结果被丢弃。升级后本地缓存全量失效一次 (旧库里两类行同 key, 无法只作废被污染的那类)。**待人工验收** (L4: 勾 Mock 跑一句 -> 取消勾选 -> 同一句必须真实请求)。
 
 ## 下一步 (断点, 完整清单见 `.scratch/handoff/` 下最新交接文档 §5)

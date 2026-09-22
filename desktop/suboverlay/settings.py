@@ -50,6 +50,16 @@ def default_settings():
         # array only (built-ins never appear here); legacy prompt.system is
         # migrated one-way in load() and never returns.
         "prompt": {"active": "default", "presets": [], "context_groups": 1},
+        # Prefetch / batch parameters (spec #24, ADR-007). Read-only defaults:
+        # they exist as config values but are deliberately NOT exposed in the
+        # settings UI (UI exposure belongs to the "config-trusted UX" work item).
+        # Values need real-Key calibration (milestone M) - do not treat them as
+        # final.
+        "prefetch": {"lead_s": 90.0,       # lead window measured in SECONDS (decoupled from subtitle density)
+                     "max_groups": 20,      # hard group cap bounding the window (first of the two to hit wins)
+                     "seek_debounce_ms": 400},  # quiet time before a window refill after a timeline jump
+        "batch": {"max_groups": 8,         # max sentence groups per batched request
+                   "max_chars": 8000},      # max chars (text + its own context) per batched request,
         "display": {"mode": "bilingual", "order": "trans_first", "history_lines": 2,
                     "font_size": 10, "font_bold": "none", "stroke": 1.5,
                     "bg_color": [0, 0, 0], "bg_opacity": 150},
