@@ -48,6 +48,10 @@ class SettingsDialog(QtWidgets.QDialog):
         if self._find_custom(self._active) is None and not any(
                 b["id"] == self._active for b in S.BUILTIN_PROMPTS):
             self._active = "default"
+        # The active choice as it was persisted when the dialog opened. Deleting
+        # a non-active preset must fall back here, not to default - only
+        # deleting THE active custom falls back to default (#39 D5).
+        self._persisted_active = self._active
         form = QtWidgets.QFormLayout(self)
         self.base_url = QtWidgets.QLineEdit(prov.get("base_url", ""))
         self.api_key = QtWidgets.QLineEdit(prov.get("api_key", ""))
@@ -235,8 +239,18 @@ class SettingsDialog(QtWidgets.QDialog):
             return
         pid = self._current_id()
         self._presets = [p for p in self._presets if p.get("id") != pid]
-        if self._active == pid:
-            # Deleting the active custom falls back to the default built-in -
+
+        def _known(x):
+            return any(b["id"] == x for b in S.BUILTIN_PROMPTS) or \
+                self._find_custom(x) is not None
+
+        if pid != self._persisted_active and _known(self._persisted_active):
+            # Deleted a non-active preset: selection returns to the active
+            # choice the dialog opened with - deleting junk must not silently
+            # change which preset is active.
+            self._active = self._persisted_active
+        else:
+            # Deleting THE active custom falls back to the default built-in -
             # the user never lands in a "no prompt" empty state (#39 D5).
             self._active = "default"
         self._rebuild_preset_combo()

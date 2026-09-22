@@ -101,6 +101,15 @@ def test_copy_rename_delete_chain_persists_the_right_shape(monkeypatch):
     assert s["prompt"]["presets"] == []
     assert not saved, "no write before accept()"
 
+    # delete the OTHER copy (not the persisted active) - chain step
+    other_id = next(p["id"] for p in d._presets if p["id"] != new_id)
+    d.preset.setCurrentIndex(d.preset.findData(other_id))
+    assert d.delete_btn.isEnabled()
+    d.delete_btn.click()
+    assert [p["id"] for p in d._presets] == [new_id]
+    assert d.preset.currentData() == "default", \
+        "deleting a non-active preset returns to the active choice the dialog opened with"
+
     # OK -> persisted shape
     d.preset.setCurrentIndex(d.preset.findData(new_id))
     d.accept()
@@ -108,8 +117,8 @@ def test_copy_rename_delete_chain_persists_the_right_shape(monkeypatch):
     pr = saved["cfg"]["prompt"]
     assert "system" not in pr, "legacy key must never come back"
     assert pr["active"] == new_id
-    assert len(pr["presets"]) == 2
-    mine = next(p for p in pr["presets"] if p["id"] == new_id)
+    assert len(pr["presets"]) == 1, "the deleted copy must not be persisted"
+    mine = pr["presets"][0]
     assert mine == {"id": new_id, "name": "我的提示", "text": "Edited custom text."}
 
 
