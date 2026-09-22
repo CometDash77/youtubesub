@@ -104,7 +104,7 @@ python desktop/tests/browser_e2e.py --live "https://www.youtube.com/watch?v=<带
 | 输出字段 | 含义 |
 |---|---|
 | `timedtextSeenByTracer` | 站点自己确实请求了字幕轨（与我们的代码无关的独立观测） |
-| `script` / `hookError` | userscript 是否注入成功、页面钩子是否装上（空 = 装上） |
+| `script` / `hookError` | userscript 是否注入成功、页面钩子是否装上（空 = 已由页面回执自证装上；非空会点名失败级别 `gm` / `script-element` / `direct-eval` / `sandboxed`） |
 | `capture_error`（`/status`） | 钩子看到了请求、但响应没有可用正文时的原因（空 = 正常）；非空即"站点/环境拒绝给正文" |
 | `bridgeTrackKey` / `bridgeCueCount` | **我们的钩子**是否真的抓到并解析出 cue |
 | `app orig/trans` | 桌面端是否真的收到并显示（`CAPTURED` 行 = 全链通） |
@@ -121,7 +121,8 @@ python desktop/tests/browser_e2e.py --live "https://www.youtube.com/watch?v=<带
 ## L3 · 真 Tampermonkey 全场景（需要你装扩展）
 
 **目的**：唯一能证明"生产路径"的层。L1/L2 都是拿测试特权顶替扩展能力的。
-**状态**：**从未执行**（本机 Chrome 没装 Tampermonkey；推测 `GM_addElement` 能绕开 CSP/Trusted Types，但没有证据）。
+**状态**：**从未执行**（本机 Chrome 没装 Tampermonkey）。issue #41 起注入层自证：只有收到页面世界回执（`youtubesub-hook-ready`）的注入级别才算装上，
+失败级别与原因经页面面板和 `/status` 的 `hook_error` 上浮，因此无论成败本层都给出可判读的结论（不再出现"显示已连接却毫无线索"）。
 
 前置：
 
@@ -139,8 +140,8 @@ python desktop/tests/browser_e2e.py --live "https://www.youtube.com/watch?v=<带
 - [ ] SPA 切视频（页面内点进另一条视频）：出现新 source、旧 cue 不残留
 - [ ] 断线重连（把 app 关掉再开）：不跳回旧时间、不重复推送
 - [ ] 拖动 / resize / 置顶 / click-through 后 **Ctrl+Alt+U** 解锁
-- [ ] 页面左下状态面板：显示 `connected`；若注入失败应显示 `[NO PAGE HOOK]`
-- [ ] 钩子失败时浮窗状态行应说 page hook NOT installed…，而不是 waiting for subtitles
+- [ ] 页面左下状态面板：钩子自证通过时显示 `connected`；未装上时显示 `youtubesub: NO PAGE HOOK - <级别: 原因>`（不再显示 connected），鼠标悬停可见完整原因
+- [ ] 钩子失败时浮窗状态行应说 page hook NOT installed…，而不是 waiting for subtitles；同时 `/status` 的 `hook_error` 非空且点名失败级别
 
 **失败时记什么**：DevTools Console 全文（`[youtubesub]` 行、`TrustedScript` / CSP 报错）、页面面板文字、
 `/status` 的 `hook_error`，以及 Chrome 版本与影片 URL。

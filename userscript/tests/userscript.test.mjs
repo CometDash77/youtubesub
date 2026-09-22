@@ -71,11 +71,32 @@ function makeSandbox(opts = {}) {
     return el;
   }
 
+  // Executing injected code in this very context models the main-world injection
+  // (what desktop/tests/browser_e2e.py does over CDP). A real userscript sandbox is a
+  // different realm; that is what the receipt deadline plus `sandboxed` model.
+  function runPageCode(code) {
+    if (typeof sandbox.__runPageCode !== 'function') return;
+    try { sandbox.__runPageCode(code); }
+    catch (e) { /* a page-world throw is silent to the injector, and that is the point */ }
+  }
+
   const doc = {
-    readyState: 'complete',
+    readyState: opts.readyState || 'complete',
     title: 'Test Video - YouTube',
     body: { appendChild(el) { bodyChildren.push(el); el.parent = 'body'; } },
-    head: { appendChild(el) { headChildren.push(el); el.parent = 'head'; } },
+    head: {
+      appendChild(el) {
+        headChildren.push(el);
+        el.parent = 'head';
+        // A real inline <script> runs on insertion. `scriptExecutes: false` models a
+        // script element the page inserted but never ran (blocked / wrong realm).
+        if (el.tag === 'script' && opts.scriptExecutes !== false) {
+          const code = typeof el.textContent === 'string'
+            ? el.textContent : (el.textContent && el.textContent.text);
+          if (typeof code === 'string') runPageCode(code);
+        }
+      }
+    },
     documentElement: { appendChild() {} },
     createElement: (tag) => makeEl(tag),
     querySelector(sel) { return sel === 'video' ? box.video : null; },
@@ -98,7 +119,16 @@ function makeSandbox(opts = {}) {
   if (opts.noGM !== true) {
     sandbox.GM_xmlhttpRequest = (o) => { sandbox.__lastXhr = o; };
     if (opts.noAddElement !== true) {
-      sandbox.GM_addElement = (tag, attrs) => { headChildren.push({ tag, ...attrs, viaGM: true }); };
+      sandbox.GM_addElement = (tag, attrs) => {
+        if (opts.gmThrows) throw new Error('GM_addElement refused (simulated)');
+        headChildren.push({ tag, ...attrs, viaGM: true });
+        // GM_addElement returning only proves the injector ACCEPTED the job: the
+        // injected code may still never run (issue #41). `gmExecutes: false` models
+        // exactly that.
+        if (opts.gmExecutes === false) return;
+        const code = attrs && attrs.textContent;
+        if (typeof code === 'string') runPageCode(code);
+      };
     }
   }
   if (opts.trustedTypes) {
@@ -109,7 +139,9 @@ function makeSandbox(opts = {}) {
       }
     };
   }
-  if (opts.pageGlobals) {
+  // Every real page has fetch and XMLHttpRequest to wrap; the page hook cannot do
+  // its job without them, so the default sandbox has them too.
+  if (opts.noPageGlobals !== true) {
     sandbox.fetch = function () {
       return Promise.resolve({ clone() { return this; }, json() { return Promise.resolve({ events: [] }); } });
     };
@@ -148,6 +180,9 @@ function makeSandbox(opts = {}) {
 
 function load(opts) {
   const sandbox = makeSandbox(opts);
+  // The "page realm" is this same vm context: injected code runs here, and the
+  // receipt it emits must travel back through the window event channel.
+  sandbox.__runPageCode = (code) => vm.runInContext(code, sandbox, { filename: 'page-hook.js' });
   vm.createContext(sandbox);
   vm.runInContext(src, sandbox, { filename: 'youtubesub.user.js' });
   return sandbox;
@@ -212,6 +247,18 @@ function assertWireFrame(f) {
   }
 }
 
+// A fresh load() creates no non-interval timer other than the page-hook receipt
+// waits (the reconnect timer only exists after a /health callback). Firing them in
+// order walks the installation through one level at a time, deterministically.
+function fireHookWaits(sb, max = 8) {
+  for (let i = 0; i < max; i++) {
+    const t = sb.__timers.find((x) => !x.interval && !x.fired);
+    if (!t) break;
+    t.fired = true;
+    t.fn();
+  }
+}
+
 // ------------------------------------------------------------------ loading ---
 
 test('harness: userscript evaluates in the sandbox and exposes the test surface', () => {
@@ -267,10 +314,16 @@ test('boot: falls back to direct evaluation when the element is blocked', () => 
 
 test('boot: an uninstallable page hook is reported, not hidden', () => {
   const sb = load({ noAddElement: true, trustedTypes: true, ttPolicyFails: true,
-                    trustedTypesBlock: true });
+                    trustedTypesBlock: true, sandboxed: true });
   assert.match(bridge(sb).hookError, /textContent|TrustedScript|XMLHttpRequest/);
-  assert.match(sb.__bodyChildren[0].textContent, /NO PAGE HOOK/);
+  assert.match(bridge(sb).hookError, /script-element:/, 'the failing level must be named');
+  assert.match(bridge(sb).hookError, /\[Trusted Types policy rejected/,
+    'the policy verdict travels with the level that hit it');
+  const panel = sb.__bodyChildren[0];
+  assert.match(panel.textContent, /NO PAGE HOOK/);
   goLive(sb);
+  assert.ok(!/connected/.test(panel.textContent),
+    'a missing page hook must not read as a working connection');
   const reg = sb.__sent.filter((f) => f.type === 'register').pop();
   assert.ok(reg, 'the bridge must still register');
   assert.ok(reg.hook_error && reg.hook_error.length > 0,
@@ -282,6 +335,99 @@ test('boot: a successful injection reports no hook error', () => {
   assert.equal(bridge(sb).hookError, '');
   const reg = goLive(sb).sentFrames.filter((f) => f.type === 'register').pop();
   assert.equal(reg.hook_error, '');
+});
+
+// -------------------------------- injection receipt (issue #41) ---------------
+// "The injector call did not throw" used to mean "the hook is installed": a script
+// blocked by CSP or executed in the wrong realm looked exactly like a working hook
+// (panel on "connected", hook_error empty, overlay waiting forever). A level now
+// counts only once the injected code answers from the page world.
+
+test('page hook: the injected code reports the entry points it really hooked', () => {
+  const sb = load();
+  const ctx = makePageContext();
+  vm.createContext(ctx);
+  vm.runInContext(api(sb).buildPageHookCode('script-element'), ctx, { filename: 'page-hook.js' });
+  assert.equal(ctx.__ready.length, 1, 'exactly one receipt per injection');
+  assert.equal(ctx.__ready[0].type, 'youtubesub-hook-ready');
+  assert.equal(ctx.__ready[0].detail.level, 'script-element', 'the receipt names the level');
+  assert.deepEqual([...ctx.__ready[0].detail.entries].sort(), ['fetch', 'xhr']);
+});
+
+test('boot: the hook installs at document-start, only DOM work waits for DOMContentLoaded', () => {
+  const sb = load({ readyState: 'loading' });
+  assert.notEqual(sb.fetch, sb.__origFetch,
+    'the page hook ran while the document was still loading');
+  assert.equal(bridge(sb).hookError, '', 'the receipt confirmed the install');
+  assert.equal(sb.__bodyChildren.length, 0, 'no panel before the DOM exists');
+  assert.equal(sb.__lastXhr, undefined, 'no /health probe before the DOM is ready');
+  assert.equal(sb.__listeners['DOMContentLoaded'].length, 1);
+  sb.__listeners['DOMContentLoaded'].forEach((f) => f());
+  assert.equal(sb.__bodyChildren.length, 1, 'the panel mounts at DOMContentLoaded');
+  assert.equal(sb.__lastXhr.url, 'http://127.0.0.1:9877/health');
+});
+
+test('boot: a GM injection that never runs is judged failed and the next level takes over', () => {
+  const sb = load({ gmExecutes: false });
+  assert.equal(bridge(sb).hookError, '', 'nothing is claimed before the deadline');
+  fireHookWaits(sb);
+  assert.equal(bridge(sb).hookError, '', 'the script-element level must confirm instead');
+  assert.notEqual(sb.fetch, sb.__origFetch, 'the fallback really hooked the page');
+});
+
+test('boot: every failed level is named and none is counted as a success', () => {
+  const sb = load({ gmExecutes: false, scriptExecutes: false, sandboxed: true });
+  fireHookWaits(sb);
+  const err = bridge(sb).hookError;
+  assert.match(err, /gm: no hook receipt within 500ms \(injected code never ran in the page world\)/);
+  assert.match(err, /script-element: no hook receipt within 500ms/);
+  assert.match(err, /sandboxed: no page-context injection path left/);
+  const panel = sb.__bodyChildren[0];
+  assert.match(panel.textContent, /NO PAGE HOOK/);
+  goLive(sb);
+  assert.ok(!/connected/.test(panel.textContent),
+    'a missing page hook must not read as a working connection');
+  assert.ok(lastFrame(sb, 'register').hook_error,
+    'register must carry hook_error so the desktop can show it');
+});
+
+test('boot: an injector that throws is named as such', () => {
+  const sb = load({ gmThrows: true, scriptExecutes: false, sandboxed: true });
+  fireHookWaits(sb);
+  assert.match(bridge(sb).hookError, /gm: Error: GM_addElement refused/);
+});
+
+test('boot: a Trusted Types note is charged only to the level that hit it', () => {
+  const sb = load({ gmExecutes: false, trustedTypes: true, ttPolicyFails: true,
+                    trustedTypesBlock: true, sandboxed: true });
+  fireHookWaits(sb);
+  const parts = bridge(sb).hookError.split(' | ');
+  assert.match(parts[0], /^gm: no hook receipt within 500ms/);
+  assert.ok(!/Trusted Types/.test(parts[0]),
+    'the GM timeout must not inherit the script-element Trusted Types verdict');
+  assert.match(bridge(sb).hookError, /script-element: .*\[Trusted Types policy rejected/,
+    'the verdict belongs to the level that actually hit it');
+});
+
+test('boot: a receipt that hooked no entry point is not an installation', () => {
+  const sb = load({ gmExecutes: false, scriptExecutes: false, sandboxed: true });
+  sb.dispatchEvent(new sb.CustomEvent('youtubesub-hook-ready',
+    { detail: { level: 'gm', entries: [] } }));
+  fireHookWaits(sb);
+  assert.match(bridge(sb).hookError, /hooked neither fetch nor XMLHttpRequest/);
+});
+
+test('boot: a receipt that arrives after the deadline repairs the reported error', () => {
+  const sb = load({ gmExecutes: false, scriptExecutes: false, sandboxed: true });
+  fireHookWaits(sb);
+  assert.ok(bridge(sb).hookError, 'every level failed first');
+  goLive(sb);
+  assert.ok(lastFrame(sb, 'register').hook_error, 'the desktop was told the hook is absent');
+  // The delayed page code finally runs and reports in: the hook is present after all.
+  sb.__runPageCode(api(sb).buildPageHookCode('gm'));
+  assert.equal(bridge(sb).hookError, '');
+  assert.equal(lastFrame(sb, 'register').hook_error, '');
+  assert.ok(!/NO PAGE HOOK/.test(sb.__bodyChildren[0].textContent));
 });
 
 // ------------------------------------------------------------ parse parity ----
@@ -376,6 +522,7 @@ test('cuesSignature: distinct for same-count-different-content tracks', () => {
 
 function makePageContext() {
   const events = [];
+  const ready = [];
   const payloads = [];
   const bodies = [];
   class FakeXHR {
@@ -388,8 +535,15 @@ function makePageContext() {
     console: { warn() {}, log() {} },
     CustomEvent: class { constructor(type, o) { this.type = type; this.detail = o && o.detail; } },
     XMLHttpRequest: FakeXHR,
-    dispatchEvent(ev) { events.push(ev); return true; },
+    // The installation receipt travels on its own event type; caption events stay in
+    // __events so the counting assertions below keep meaning what they say.
+    dispatchEvent(ev) {
+      if (ev.type === 'youtubesub-hook-ready') ready.push(ev);
+      else events.push(ev);
+      return true;
+    },
     __events: events,
+    __ready: ready,
     __payloads: payloads,
     __bodies: bodies,
     __video: null

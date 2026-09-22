@@ -25,7 +25,10 @@
     port: 9877,
     reconnectBaseMs: 3000,
     reconnectMaxMs: 30000,
-    videoPollMs: 1500
+    videoPollMs: 1500,
+    // How long one injection level gets to report back from the page world before
+    // it is judged failed and the next level is tried (issue #41).
+    hookReceiptMs: 500
   };
 
   var CFG = Object.assign({}, DEFAULTS);
@@ -107,13 +110,18 @@
             cues[0].text, cues[n - 1].text].join(':');
   }
 
-  function buildPageHookCode() {
+  function buildPageHookCode(level) {
     // Page context is required: the player's timedtext request carries a pot token we
     // cannot mint; reusing that exact request is the only reliable way (yt-dual-subs).
+    // The generated code signs off with a receipt (issue #41): "the injector call did
+    // not throw" is not evidence that the hook exists, but a message from this realm is.
     var testSrc = isTimedtextUrl.toString();
+    var levelSrc = JSON.stringify(String(level || ''));
     var code = [
       '(function () {',
       '  var test = ' + testSrc + ';',
+      '  var LEVEL = ' + levelSrc + ';',
+      '  var entries = [];',
       '  function emit(url, data) {',
       "    window.dispatchEvent(new CustomEvent('youtubesub-timedtext', { detail: { url: url, data: data, error: '' } }));",
       '  }',
@@ -144,20 +152,29 @@
       '      }',
       '      return p;',
       '    };',
+      "    entries.push('fetch');",
       '  }',
-      '  var oo = XMLHttpRequest.prototype.open;',
-      '  var os = XMLHttpRequest.prototype.send;',
-      '  XMLHttpRequest.prototype.open = function (m, u) { this.__ytusUrl = u; return oo.apply(this, arguments); };',
-      '  XMLHttpRequest.prototype.send = function () {',
-      '    var xhr = this;',
-      '    if (test(xhr.__ytusUrl)) {',
-      "      xhr.addEventListener('load', function () {",
-      '        try { deliver(xhr.__ytusUrl, xhr.responseText, xhr.status); }',
-      '        catch (e) { emitFailure(xhr.__ytusUrl, "caption response could not be read: " + e); }',
-      '      });',
-      '    }',
-      '    return os.apply(this, arguments);',
-      '  };',
+      '  if (typeof XMLHttpRequest !== "undefined" && XMLHttpRequest.prototype) {',
+      '    var oo = XMLHttpRequest.prototype.open;',
+      '    var os = XMLHttpRequest.prototype.send;',
+      '    XMLHttpRequest.prototype.open = function (m, u) { this.__ytusUrl = u; return oo.apply(this, arguments); };',
+      '    XMLHttpRequest.prototype.send = function () {',
+      '      var xhr = this;',
+      '      if (test(xhr.__ytusUrl)) {',
+      "        xhr.addEventListener('load', function () {",
+      '          try { deliver(xhr.__ytusUrl, xhr.responseText, xhr.status); }',
+      '          catch (e) { emitFailure(xhr.__ytusUrl, "caption response could not be read: " + e); }',
+      '        });',
+      '      }',
+      '      return os.apply(this, arguments);',
+      '    };',
+      "    entries.push('xhr');",
+      '  }',
+      '  // The receipt: it names the injection level and which entry points were really',
+      '  // wrapped in THIS realm. Only a receipt with at least one entry counts outside.',
+      '  if (window.dispatchEvent) {',
+      "    window.dispatchEvent(new CustomEvent('youtubesub-hook-ready', { detail: { level: LEVEL, entries: entries } }));",
+      '  }',
       '})();'
     ].join('\n');
     return code;
@@ -165,6 +182,7 @@
 
   var _ttPolicy = null;
   var _ttPolicyFailed = false;
+  var _ttNotice = '';
 
   function trustedScript(code) {
     // A page with require-trusted-types-for 'script' refuses a plain string
@@ -174,43 +192,79 @@
     if (_ttPolicyFailed) return null;
     try {
       var tt = window.trustedTypes;
-      if (!tt || typeof tt.createPolicy !== 'function') { _ttPolicyFailed = true; return null; }
+      if (!tt || typeof tt.createPolicy !== 'function') {
+        _ttPolicyFailed = true;
+        _ttNotice = 'Trusted Types unavailable';
+        return null;
+      }
       if (!_ttPolicy) {
         _ttPolicy = tt.createPolicy('youtubesub', { createScript: function (s) { return s; } });
       }
       return _ttPolicy.createScript(code);
     } catch (e) {
       _ttPolicyFailed = true;
+      _ttNotice = 'Trusted Types policy rejected: ' + e;
       return null;
     }
   }
 
-  function injectPageHooks() {
-    // Returns an error string when the page hook could NOT be installed, so the
-    // bridge can report it instead of showing "connected" with nothing to show.
-    var code = buildPageHookCode();
-    var errors = [];
+  // ---- injection receipt (issue #41) ----------------------------------------
+  // Before this, injecting "successfully" only meant that the injector call had not
+  // thrown. A script blocked by CSP, or evaluated in the wrong realm, looked exactly
+  // like a working hook: the bridge said "connected", hook_error stayed empty, and
+  // the overlay waited forever. Now a level only counts once the injected code has
+  // reported back FROM THE PAGE WORLD, which is a fact the injector cannot fake.
+  var _hookReceipt = {
+    onConfirmed: null,      // resolves the level being awaited with '' when it answers
+    onLateConfirmed: null,  // resolves a receipt that arrives after every level timed out
+    timer: null,
+    emptyLevels: []         // levels that ran somewhere but hooked no entry point
+  };
+
+  function onHookReadyEvent(ev) {
+    var d = (ev && ev.detail) || {};
+    var entries = Array.isArray(d.entries) ? d.entries : [];
+    var level = String(d.level || '?');
+    if (!entries.length) {
+      // The code ran, but wrapped neither fetch nor XMLHttpRequest: that is not an
+      // installation, even though it executed.
+      if (_hookReceipt.emptyLevels.indexOf(level) < 0) _hookReceipt.emptyLevels.push(level);
+      return;
+    }
+    var confirmed = _hookReceipt.onConfirmed;
+    _hookReceipt.onConfirmed = null;
+    if (confirmed) { confirmed(''); return; }
+    if (_hookReceipt.onLateConfirmed) {
+      // Every level already timed out and the failure was reported: the page code
+      // was merely slow. Repair the state instead of keeping a lie on screen.
+      var late = _hookReceipt.onLateConfirmed;
+      _hookReceipt.onLateConfirmed = null;
+      late('');
+    }
+  }
+
+  function injectPageHooks(onDone) {
+    // onDone(errorString): '' only when some level was CONFIRMED by a page receipt.
+    // Each level is tried in turn and gets hookReceiptMs to answer; a level that
+    // cannot answer is judged failed and the reason names it, so a failed install
+    // says WHICH level failed instead of only "it did not work".
+    var ways = [];
     // 1) Tampermonkey's GM_addElement injects from the extension context, so it
     //    bypasses page CSP and Trusted Types. This is the production path.
-    if (typeof GM_addElement === 'function') {
-      try {
-        GM_addElement('script', { textContent: code });
-        return '';
-      } catch (e) {
-        errors.push('GM_addElement: ' + e);
-      }
-    }
+    ways.push({ id: 'gm', run: function (code) {
+      if (typeof GM_addElement !== 'function') return 'gm: GM_addElement not granted';
+      GM_addElement('script', { textContent: code });
+      return '';
+    } });
     // 2) Page-context injection through a script element, Trusted Types aware.
-    try {
+    ways.push({ id: 'script-element', run: function (code) {
       var el = document.createElement('script');
       var trusted = trustedScript(code);
       el.textContent = trusted || code;
       (document.head || document.documentElement).appendChild(el);
       el.remove();
       return '';
-    } catch (e) {
-      errors.push('script element: ' + e);
-    }
+    } });
     // 3) Direct evaluation: immune to Trusted Types and correct whenever this
     //    script already runs in the page's main world (document-start injection by
     //    a harness, or @sandbox none). Inside a userscript sandbox it would install
@@ -218,16 +272,66 @@
     //    skipped there.
     var sandboxed = (typeof unsafeWindow !== 'undefined' && unsafeWindow !== window);
     if (sandboxed) {
-      errors.push('sandboxed: no page-context injection path left');
+      ways.push({ id: 'sandboxed', run: function () {
+        return 'sandboxed: no page-context injection path left';
+      } });
     } else {
-      try {
+      ways.push({ id: 'direct-eval', run: function (code) {
         (new Function(code))();
         return '';
-      } catch (e) {
-        errors.push('direct eval: ' + e);
-      }
+      } });
     }
-    return errors.join(' | ');
+
+    var reasons = [];
+    var settled = false;
+    var next = 0;
+
+    function finish(err) {
+      if (settled) return;
+      settled = true;
+      _hookReceipt.onConfirmed = null;
+      if (_hookReceipt.timer !== null) { clearTimeout(_hookReceipt.timer); _hookReceipt.timer = null; }
+      onDone(err);
+    }
+
+    function step() {
+      if (settled) return;
+      if (next >= ways.length) {
+        finish(reasons.join(' | ') || 'no page-context injection path available');
+        return;
+      }
+      var way = ways[next++];
+      var why = '';
+      // Trusted Types is a per-level verdict: reset it so only the level that really
+      // hit it carries the note (a direct-eval timeout must not inherit it).
+      _ttNotice = '';
+      _hookReceipt.onConfirmed = function () { finish(''); };
+      try {
+        why = way.run(buildPageHookCode(way.id)) || '';
+      } catch (e) {
+        why = way.id + ': ' + e;
+      }
+      if (settled) return;                 // the receipt arrived synchronously
+      if (why) {                           // the injector itself refused to inject
+        _hookReceipt.onConfirmed = null;
+        reasons.push(why + (_ttNotice ? ' [' + _ttNotice + ']' : ''));
+        step();
+        return;
+      }
+      _hookReceipt.timer = setTimeout(function () {
+        if (settled) return;
+        _hookReceipt.onConfirmed = null;
+        var empty = _hookReceipt.emptyLevels.indexOf(way.id) >= 0;
+        reasons.push(way.id + ': ' + (empty
+          ? 'injected code ran but hooked neither fetch nor XMLHttpRequest'
+          : 'no hook receipt within ' + CFG.hookReceiptMs + 'ms'
+            + ' (injected code never ran in the page world)')
+          + (_ttNotice ? ' [' + _ttNotice + ']' : ''));
+        step();
+      }, CFG.hookReceiptMs);
+    }
+
+    step();
   }
 
   function uuid() {
@@ -278,6 +382,22 @@
   Bridge.prototype.cacheAndSend = function (slot, obj) {
     this.cache[slot] = obj;
     return this.send(obj);
+  };
+
+  Bridge.prototype.republishRegister = function () {
+    // hook_error and capture_error only travel inside the register frame (register is
+    // idempotent: meta + active_source). A verdict that changes after the socket is
+    // already open must therefore re-send it, or the desktop keeps the stale fact.
+    this.send(this.buildRegister());
+    this.setState(this.state);   // repaint the panel marker
+  };
+
+  Bridge.prototype.setHookError = function (msg) {
+    msg = msg || '';
+    if (msg === this.hookError) return;
+    this.hookError = msg;
+    if (msg) console.warn('[youtubesub] page hook not installed:', msg);
+    this.republishRegister();
   };
 
   Bridge.prototype.connect = function () {
@@ -369,8 +489,7 @@
     if (msg === this.captureError) return;   // one report per distinct reason
     this.captureError = msg;
     console.warn('[youtubesub] caption capture failed:', msg);
-    this.send(this.buildRegister());
-    this.setState(this.state);               // repaint the panel marker
+    this.republishRegister();
   };
 
   Bridge.prototype.onTimedtext = function (url, data) {
@@ -438,16 +557,28 @@
 
   // ---- status panel (minimal, mirrors dkitle's user-facing retry/stop) ----
   Bridge.prototype.panelText = function (s) {
+    // A missing page hook outranks the connection state on purpose: "connected" is
+    // true but useless, and the old marker ('connected [NO PAGE HOOK]') still read as
+    // a working install. The failing level travels in the reason itself.
+    if (this.hookError) {
+      var max = 90;   // the panel is a one-line strip; the full reason stays in title
+      var why = this.hookError.length > max
+        ? this.hookError.slice(0, max - 3) + '...' : this.hookError;
+      return 'youtubesub: NO PAGE HOOK - ' + why
+        + (s && s !== 'connected' ? ' (' + s + ')' : '');
+    }
     return 'youtubesub: ' + s
-      + (this.hookError ? ' [NO PAGE HOOK]'
-        : (this.captureError ? ' [NO CAPTION BODY]' : ''));
+      + (this.captureError ? ' [NO CAPTION BODY]' : '');
   };
 
   Bridge.prototype.setState = function (s) {
     this.state = s;
     if (!this.statusEl) return;
     this.statusEl.textContent = this.panelText(s);
-    this.statusEl.style.color = s === 'connected' ? '#8f8' : (s === 'stopped' ? '#f88' : '#fd8');
+    this.statusEl.title = (this.hookError ? this.hookError + '\n' : '')
+      + 'Click: retry now. Double-click: stop.';
+    this.statusEl.style.color = this.hookError ? '#f88'
+      : (s === 'connected' ? '#8f8' : (s === 'stopped' ? '#f88' : '#fd8'));
   };
 
   Bridge.prototype.mountPanel = function () {
@@ -466,21 +597,17 @@
 
   var bridge = new Bridge();
 
-  function boot() {
-    // A hook that cannot install means the script will never see a single cue;
-    // recording why is the difference between a diagnosable run and a mystery.
-    var hookError = injectPageHooks();
-    bridge.hookError = hookError || '';
-    if (hookError) console.warn('[youtubesub] page hook injection failed:', hookError);
-    window.addEventListener('youtubesub-timedtext', function (ev) {
-      try {
-        var d = ev.detail || {};
-        if (d.error) bridge.onTimedtextFailure(d.url, d.error);
-        else bridge.onTimedtext(d.url, d.data);
-      } catch (e) {
-        console.warn('[youtubesub] cue handling failed', e);
-      }
-    });
+  function onTimedtextEvent(ev) {
+    try {
+      var d = ev.detail || {};
+      if (d.error) bridge.onTimedtextFailure(d.url, d.error);
+      else bridge.onTimedtext(d.url, d.data);
+    } catch (e) {
+      console.warn('[youtubesub] cue handling failed', e);
+    }
+  }
+
+  function afterDomReady() {
     bridge.videoId = videoIdFromLocation();
     bridge.mountPanel();
     bridge.connect();
@@ -488,11 +615,32 @@
     bridge.poll();
   }
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', boot);
-  } else {
-    boot();
+  function boot() {
+    // @run-at document-start is a promise the old code broke: it waited for
+    // DOMContentLoaded, so a caption request emitted before that was invisible to the
+    // hook. The event channel and the hook itself are DOM-independent and go in
+    // first; only the panel, the player binding and the connection wait for the DOM.
+    window.addEventListener('youtubesub-timedtext', onTimedtextEvent);
+    window.addEventListener('youtubesub-hook-ready', onHookReadyEvent);
+    injectPageHooks(function (err) {
+      // A hook that cannot install means the script will never see a single cue;
+      // recording why (and which level failed) is the difference between a
+      // diagnosable run and a mystery.
+      bridge.setHookError(err || '');
+      if (err) {
+        // A receipt may still arrive after the deadline: then the injection was slow,
+        // not missing, and the panel must stop claiming the hook is absent.
+        _hookReceipt.onLateConfirmed = function () { bridge.setHookError(''); };
+      }
+    });
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', afterDomReady);
+    } else {
+      afterDomReady();
+    }
   }
+
+  boot();
 
   window.addEventListener('beforeunload', function () {
     // unreliable by nature; the desktop side also re-activates a source when cues arrive

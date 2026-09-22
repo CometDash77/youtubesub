@@ -69,6 +69,11 @@ def test_real_userscript_connects_and_registers_a_source(h):
                       and int(s.get("stats", {}).get("frames") or 0) >= 2,
                       what="one registered source and >=2 real WS frames")
     assert st["stats"]["bad_frames"] == 0, st["stats"]
+    # Issue #41: installing the hook is now confirmed by a receipt from the page
+    # world, so an empty hook_error is a POSITIVE fact ("the injected code answered")
+    # rather than the old absence of evidence. A regression here would surface as a
+    # non-empty hook_error while the fixture's own captions still flow.
+    assert not st.get("hook_error"), st.get("hook_error")
 
 
 def test_real_timedtext_becomes_the_exact_subtitle(h):

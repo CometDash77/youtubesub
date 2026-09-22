@@ -21,6 +21,15 @@
 `hook_error` (v1 可选, 后加): 页面钩子 (注入主世界的 fetch/XHR 包装) 安装失败时的人类可读原因; 成功时为空串, 也可以省略。
 桌面端把它并入该 source 的 meta, 经 `GET /status` 的 `hook_error` 暴露, 并在浮窗状态行显示 "page hook NOT installed ..."
 (否则"连接正常但抓不到字幕"只会显示 "waiting for subtitles", 用户无从判断)。
+自 issue #41 起, "装上"改为**注入自证**: 注入到主世界的代码在真正挂好 fetch/XHR 包装后, 从页面世界回一个就绪回执
+(`youtubesub-hook-ready`, 与 timedtext 复用同一个页面自定义事件通道)。回执带 `level` (哪一级生效) 与 `entries` (这一轮真的挂上了哪些入口; 空回执不算装上)。
+外部每注入一级就等一个 500ms 窗口: 窗口内收到回执即认定装上并停止后续级别; 窗口内没有回执则判该级失败、继续下一级; 全部超时后迟到的回执也按已装上修正。
+注入调用不抛异常**不再**等于成功 —— 这正是"面板 connected、钩子其实不存在、hook_error 却为空"的成因。
+失败时该字段点名注入级别与原因 (级别名: `gm` / `script-element` / `direct-eval` / `sandboxed`), 例如
+`gm: no hook receipt within 500ms (injected code never ran in the page world)`、
+`script-element: TypeError: ... [Trusted Types policy rejected: ...]`、`sandboxed: no page-context injection path left`;
+多个级别都失败时用 ` | ` 拼接。安装时机与脚本声明的 `@run-at document-start` 一致 (视频绑定与连接流程的时机不变)。
+页面左下状态面板同口径: 钩子未装上时显示 `youtubesub: NO PAGE HOOK - <级别: 原因>`, 不再显示成 `connected`。
 向后兼容: `sanitize_event` 不校验额外键、未知 type 忽略计数, 旧客户端不发该字段时桌面端按空串处理; 新增可选键不改变既有帧语义。
 `capture_error` (v1 可选, 后加): 钩子成功装上、也拦到了 timedtext 请求, 但响应不可用 (空正文 / 非 JSON) 时的原因,
 例如 `"caption response was empty (status 200)"`。2026-09-21 实测: youtube.com 对 **headless Chrome** 就返回 `200 + text/html + 0 字节`
