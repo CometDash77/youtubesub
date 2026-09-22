@@ -10,7 +10,53 @@ from .queue_cache import (TranslationCache, TranslationJob, TranslationQueue,
 from . import provider as provider_mod
 
 SEEK_JUMP_MS = 2500.0
-PREFETCH_GROUPS = 4
+
+# Fallbacks for the read-only config defaults (spec #24 decision 15: values live
+# in settings but are deliberately not exposed in the UI - see
+# settings.default_settings). Calibration against a real Key is milestone M.
+DEFAULT_PREFETCH = {"lead_s": 90.0, "max_groups": 20, "seek_debounce_ms": 400}
+DEFAULT_BATCH = {"max_groups": 8, "max_chars": 8000}
+
+
+def _as_float(v, default):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_int(v, default):
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return default
+
+
+def resolve_workers(settings):
+    """provider.max_concurrent -> worker pool size (spec #24 decision 13, #21):
+    clamped to [1, 16], default 5, read once when the Engine is constructed -
+    restart-effective, no hot-reload (that question is #21's)."""
+    raw = (settings.get("provider") or {}).get("max_concurrent")
+    n = 5 if raw is None or raw == "" else _as_int(raw, 5)
+    return max(1, min(16, n))
+
+
+def chunk_fill_items(items, max_groups, max_chars):
+    """Fill-time chunking (spec #24 decision 5): greedy sequential split of
+    (key, chars) items into chunks of <= max_groups keys and <= max_chars total.
+    A single item over the char cap forms its own chunk - a group is never
+    split. No timers and no async collector: batches exist only where this runs
+    (window-fill bursts), so steady state never sees one."""
+    chunks, cur, cur_chars = [], [], 0
+    for key, chars in items:
+        if cur and (len(cur) >= max_groups or cur_chars + chars > max_chars):
+            chunks.append(cur)
+            cur, cur_chars = [], 0
+        cur.append(key)
+        cur_chars += chars
+    if cur:
+        chunks.append(cur)
+    return chunks
 
 
 def _provider_usable(prov):
@@ -35,6 +81,8 @@ class _Source:
         self.group_trans = {}   # group_idx -> whole-line translation
         self.sync = SyncState()
         self.last_group_idx = None
+        self.window_anchor = None        # group idx the prefetch window was last filled from
+        self.prefetch_quiet_until = 0.0  # seek debounce: no window refill before this wall time
 
     def reset_translations(self):
         """Drop everything a provider produced; keep the cues and the live clock."""
@@ -42,18 +90,26 @@ class _Source:
         for c in self.cues:
             c.trans = ""
         self.last_group_idx = None
+        # Everything provider-derived is gone, so the window must refill from
+        # scratch on the next tick - but a refresh is not a seek drag, so no
+        # debounce is owed (spec #24).
+        self.window_anchor = None
+        self.prefetch_quiet_until = 0.0
 
 
 class Engine:
-    def __init__(self, settings, cache=None, workers=5, translate_fn=None):
+    def __init__(self, settings, cache=None, workers=None, translate_fn=None):
         self.settings = settings
         self.sources = {}
         self.active_source = None
         self._lock = threading.RLock()
         self._cache = cache or TranslationCache()
+        # workers=None -> provider.max_concurrent (clamped), restart-effective.
+        self._workers = resolve_workers(settings) if workers is None else workers
+        self._backoff_seen = False   # True->False edge triggers a window refill
         self._translate_fn = translate_fn or self._default_translate
         self._queue = TranslationQueue(settings.get("provider", {}), self._cache,
-                                       workers=workers, on_done=self._on_done,
+                                       workers=self._workers, on_done=self._on_done,
                                        translate_fn=self._translate_fn)
         self.display_cb = None   # called on translation arrivals (UI refresh)
         self.last_display = None  # latest tick() result, for /status diagnostics
@@ -80,7 +136,7 @@ class Engine:
         with self._lock:
             if t == "register":
                 self._stamp_meta(self.sources.setdefault(sid, _Source(sid, ev)), ev)
-                self.active_source = sid
+                self._switch_active(sid)
             elif t == "cues":
                 src = self.sources.setdefault(sid, _Source(sid, ev))
                 self._stamp_meta(src, ev)
@@ -93,7 +149,7 @@ class Engine:
                 # the live clock. Resetting it blanked the overlay until the next
                 # player event, which never arrives while the video is paused.
                 # A brand new source still gets a fresh clock in _Source.__init__.
-                self.active_source = sid
+                self._switch_active(sid)
             elif t == "sync":
                 src = self.sources.get(sid)
                 if src is None:
@@ -106,14 +162,39 @@ class Engine:
                            ts, now_ms)
                 new_est = estimate_ms(src.sync)
                 if abs(new_est - prev_est) > SEEK_JUMP_MS:
+                    # Pending prefetch is dropped and the window refill waits out
+                    # the debounce, so dragging the seek bar cannot repeatedly
+                    # re-fire the whole window (spec #24 decision 3). In-flight
+                    # requests are never touched (decision 4): their cache
+                    # identity is playhead-independent, so the result is still
+                    # worth keeping when the playhead comes back.
                     self._queue.cancel_source(sid)
                     src.last_group_idx = None  # force urgent resubmit at new spot
+                    src.window_anchor = None
+                    src.prefetch_quiet_until = time.time() + self._seek_debounce_s()
             elif t == "deactivate":
                 src = self.sources.get(sid)
                 if src:
                     src.sync.playing = False
 
+    def _switch_active(self, sid):
+        """Make sid the watched source (spec #24 US9): every OTHER source's
+        PENDING work is dropped - we are no longer paying for subtitles nobody
+        is watching. In-flight requests are never touched: their cache
+        identity is playhead-independent, so the result is still worth
+        keeping (decision 4)."""
+        if self.active_source != sid:
+            for other in self.sources:
+                if other != sid:
+                    self._queue.cancel_source(other)
+        self.active_source = sid
+
     def _set_cues(self, src, cues):
+        # A cues refresh is a track switch or a reload (spec #24 US9): queued
+        # work was built from the OLD grouping, so drop it - only pending jobs,
+        # never in-flight ones (decision 4). The window refills from the next
+        # tick (reset_translations clears the anchor below).
+        self._queue.cancel_source(src.source_id)
         cues = repair_cue_ends(cues)
         src.cues = cues
         # The segmentation branch is keyed on the stored track language (#25);
@@ -135,29 +216,114 @@ class Engine:
         return "|".join([str(src.meta.get("video_id") or ""), str(src.meta.get("track_kind") or ""),
                          str(g.start_ms), str(g.end_ms), g.text[:400]])
 
-    def _submit_group(self, src, gi, priority):
-        if gi < 0 or gi >= len(src.groups):
-            return
+    # ---- prefetch / batch parameters (read-only config, spec #24 decision 15) ----
+    def _window_lead_ms(self):
+        p = self.settings.get("prefetch") or {}
+        return max(0.0, _as_float(p.get("lead_s", DEFAULT_PREFETCH["lead_s"]),
+                                  DEFAULT_PREFETCH["lead_s"])) * 1000.0
+
+    def _window_max_groups(self):
+        p = self.settings.get("prefetch") or {}
+        return max(1, _as_int(p.get("max_groups", DEFAULT_PREFETCH["max_groups"]),
+                              DEFAULT_PREFETCH["max_groups"]))
+
+    def _seek_debounce_s(self):
+        p = self.settings.get("prefetch") or {}
+        return max(0, _as_int(p.get("seek_debounce_ms", DEFAULT_PREFETCH["seek_debounce_ms"]),
+                              DEFAULT_PREFETCH["seek_debounce_ms"])) / 1000.0
+
+    def _batch_limits(self):
+        b = self.settings.get("batch") or {}
+        return (max(1, _as_int(b.get("max_groups", DEFAULT_BATCH["max_groups"]),
+                               DEFAULT_BATCH["max_groups"])),
+                max(1, _as_int(b.get("max_chars", DEFAULT_BATCH["max_chars"]),
+                               DEFAULT_BATCH["max_chars"])))
+
+    def _neighbours(self, src, gi):
+        """(prev, next) context texts, honouring prompt.context_groups - which
+        shapes the PROMPT only; it never gates scheduling (spec #24 decision 16)."""
+        if not self.settings.get("prompt", {}).get("context_groups", 1):
+            return "", ""
+        prev_t = src.groups[gi - 1].text if gi > 0 else ""
+        nxt_t = src.groups[gi + 1].text if gi + 1 < len(src.groups) else ""
+        return prev_t, nxt_t
+
+    def _translated(self, src, gi):
         g = src.groups[gi]
-        if gi in src.group_trans or all(c.trans for c in src.cues[g.start_idx:g.end_idx + 1]):
-            return
+        return (gi in src.group_trans
+                or all(c.trans for c in src.cues[g.start_idx:g.end_idx + 1]))
+
+    def _build_job(self, src, gi, priority):
+        """The single translation job for one group, or None if it needs no
+        request. Both the urgent path and the batch fill build jobs here, so a
+        group's cache identity is byte-identical whichever path sends it
+        (spec #24 decision 11 - the identity invariant)."""
+        if gi < 0 or gi >= len(src.groups):
+            return None
+        g = src.groups[gi]
+        if self._translated(src, gi):
+            return None
         prov, instructions = self._provider_snapshot()
         if not _provider_usable(prov):
             # Issue #1: "not configured" is not mock mode. The mock translator
             # echoes the original behind a fake translation label, which reads as
             # a broken translation; showing the original alone is the honest state.
-            return
-        prev_t = src.groups[gi - 1].text if gi > 0 else ""
-        nxt_t = src.groups[gi + 1].text if gi + 1 < len(src.groups) else ""
-        prompt_ctx = (prev_t, nxt_t) if self.settings.get("prompt", {}).get("context_groups", 1) else ("", "")
+            return None
+        prompt_ctx = self._neighbours(src, gi)
         ident = self._identity(prov, instructions, self._client_key(src, g), g, prompt_ctx)
         # Identity and namespace come from the one snapshot above, so a job can
         # never describe one provider in its identity and another in its context.
-        job = TranslationJob(ident, priority, src.source_id, gi, g.text,
-                             prev=prompt_ctx[0], nxt=prompt_ctx[1],
-                             expected=(g.end_idx - g.start_idx + 1),
-                             context=ProviderContext(prov, self._namespace_of(prov, instructions)))
-        self._queue.submit(job)
+        return TranslationJob(ident, priority, src.source_id, gi, g.text,
+                              prev=prompt_ctx[0], nxt=prompt_ctx[1],
+                              expected=(g.end_idx - g.start_idx + 1),
+                              context=ProviderContext(prov, self._namespace_of(prov, instructions)))
+
+    def _submit_group(self, src, gi, priority):
+        job = self._build_job(src, gi, priority)
+        if job is not None:
+            self._queue.submit(job)
+
+    def _fill_window(self, src, gi, t_ms):
+        """Window fill (spec #24 / ADR-007): prefetch every group from the
+        playhead within the lead window, measured in SECONDS (decoupled from
+        subtitle density) and bounded by the group hard cap - first of the two
+        to hit wins. The fill is the burst point: its pending groups are
+        chunked into batches (<= batch.max_groups / <= batch.max_chars) and
+        sent as batches; a lone pending group stays a single request. Steady
+        state crosses one group at a time, so this submits exactly one group -
+        one-request-per-group behaviour is unchanged there."""
+        lead_ms = self._window_lead_ms()
+        horizon = t_ms + lead_ms
+        window = []
+        for idx in range(gi, min(len(src.groups), gi + self._window_max_groups())):
+            if idx > gi and src.groups[idx].start_ms > horizon:
+                break
+            window.append(idx)
+        todo = [idx for idx in window
+                if idx != gi and not self._translated(src, idx)]
+        if not todo:
+            return
+        if len(todo) == 1:
+            self._submit_group(src, todo[0], NORMAL)
+            return
+        max_g, max_c = self._batch_limits()
+        items = []
+        for idx in todo:
+            prev_t, nxt_t = self._neighbours(src, idx)
+            # The char budget counts the group text plus the context it drags
+            # along: keeping per-group context inflates the request (~3x, see
+            # ADR-007), so the cap must measure what actually gets sent.
+            items.append((idx, len(src.groups[idx].text) + len(prev_t) + len(nxt_t)))
+        for chunk in chunk_fill_items(items, max_g, max_c):
+            if len(chunk) == 1:
+                self._submit_group(src, chunk[0], NORMAL)
+                continue
+            jobs = [j for j in (self._build_job(src, idx, NORMAL) for idx in chunk)
+                    if j is not None]
+            if len(jobs) == 1:
+                self._queue.submit(jobs[0])
+            elif jobs:
+                self._queue.submit_batch(jobs)
 
     def _identity(self, prov, instructions, client_key, g, prompt_ctx):
         prompt = g.text
@@ -172,6 +338,13 @@ class Engine:
         prov = dict(self.settings.get("provider", {}))
         instructions = (self.settings.get("prompt", {}).get("system")
                         or provider_mod.DEFAULT_SYSTEM_PROMPT)
+        # #23 / ADR-005 same-cfg invariant: the system prompt is part of what
+        # the wire sees. It used to enter only the cache identity, so the
+        # dialog's prompt never reached the provider - and the connection test
+        # (which does send it) would have tested something production did not
+        # use. cache_identity reads a fixed key subset, so identity and
+        # namespace are unchanged by this key.
+        prov["system"] = instructions
         return prov, instructions
 
     def _namespace_of(self, prov, instructions):
@@ -202,12 +375,41 @@ class Engine:
         for src in self.sources.values():
             src.reset_translations()
 
-    def _default_translate(self, job):
+    def _default_translate(self, jobs):
+        """The queue's translate seam, widened to a JOB LIST (spec #24): a
+        length-1 list is exactly the previous single behaviour; a longer list is
+        ONE batched request covering every job (burst-point fills only). Returns
+        one result per job, in order.
+        """
+        if not jobs:
+            return []
+        if len(jobs) == 1:
+            return [self._translate_single(jobs[0])]
+        # Issue #31: results are written under identities computed from this
+        # snapshot, so the batch translates with the provider those identities
+        # describe - the snapshot travels with the first job (all members are
+        # built from one snapshot per fill).
+        first = jobs[0]
+        prov = (dict(first.context.provider) if first.context is not None
+                else self._provider_snapshot()[0])
+        if not _provider_usable(prov):
+            return [{"aligned": False, "text": "", "error": "NOT_CONFIGURED"}
+                    for _ in jobs]
+        if prov.get("mock"):
+            # Mock never hits the wire; each group gets the same product the
+            # single path would produce, so batch results stay interchangeable.
+            time.sleep(0.02)
+            return [self._translate_single(j) for j in jobs]
+        items = [{"text": j.group_text, "prev": j.prev, "nxt": j.nxt,
+                  "expected": j.expected} for j in jobs]
+        return provider_mod.translate_batch(prov, items)
+
+    def _translate_single(self, job):
         # Issue #31: the job carries the provider its identity was computed from,
         # so the result written under that identity always came from that
         # provider - even if Settings changed while the job sat in the queue.
         prov = (dict(job.context.provider) if job.context is not None
-                else dict(self.settings.get("provider", {})))
+                else self._provider_snapshot()[0])
         if not _provider_usable(prov):
             # Defence in depth for a job queued without a provider snapshot.
             return {"aligned": False, "text": "", "error": "NOT_CONFIGURED"}
@@ -297,19 +499,33 @@ class Engine:
                         "trans_available": _provider_usable(self.settings.get("provider", {}))}
             t = estimate_ms(src.sync)
             cue = find_cue_at(src.cues, t)
+            gi = None
             if cue is not None:
-                ci = src.cues.index(cue)
-                gi = src.cue_to_group.get(ci)
-                if gi is not None and gi != src.last_group_idx:
-                    src.last_group_idx = gi
-                    self._submit_group(src, gi, URGENT)
-                    # Prefetch is scheduling, not prompting (#38 / ADR-009): the
-                    # lookahead runs unconditionally. prompt.context_groups only
-                    # decides whether the prompt carries neighbour context - never
-                    # whether we look ahead (that gate was semantic crosstalk with
-                    # the prefetch domain of #9 / #24).
-                    for off in range(1, PREFETCH_GROUPS + 1):
-                        self._submit_group(src, gi + off, NORMAL)
+                gi = src.cue_to_group.get(src.cues.index(cue))
+            if gi is not None and gi != src.last_group_idx:
+                src.last_group_idx = gi
+                # The sentence on screen (URGENT): never debounced, never throttled
+                # (spec #24 decision 2).
+                self._submit_group(src, gi, URGENT)
+            # Prefetch is scheduling, not prompting (#38 / ADR-009): the window
+            # fills unconditionally - prompt.context_groups only shapes the
+            # prompt, never the lookahead (that gate was semantic crosstalk with
+            # the prefetch domain of #9 / #24, spec #24 decision 16).
+            if self._queue.in_backoff():
+                self._backoff_seen = True
+            elif self._backoff_seen:
+                self._backoff_seen = False
+                src.window_anchor = None  # deep backoff ended: refill what it shed
+            # Window refill gates: playing (a paused viewer earns no prefetch),
+            # the seek-debounce quiet time, and a changed anchor - the window is
+            # recomputed when playback crosses into a new group (event-native
+            # incremental advance), after a seek, and after backoff - not on a
+            # coarse timer (spec #24 decision 2 / 3).
+            if (gi is not None and src.sync.playing
+                    and time.time() >= src.prefetch_quiet_until
+                    and src.window_anchor != gi):
+                src.window_anchor = gi
+                self._fill_window(src, gi, t)
             trans = ""
             if cue is not None:
                 ci = src.cues.index(cue)
