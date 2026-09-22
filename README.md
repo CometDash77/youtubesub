@@ -33,8 +33,8 @@
 逐项手测清单见 `docs/MANUAL-ACCEPTANCE.md`.
 
 ## 测试
-- `python -m pytest desktop/tests -q` — 全绿 (当前 88 passed; 含 7 条真浏览器 E2E, 无 Chrome 会 skip, 不算通过).
-- `cd userscript; node --test "tests/*.test.mjs"` — 33 pass (必须用 glob 形式; 传目录会 MODULE_NOT_FOUND).
+- `python -m pytest desktop/tests -q` — 全绿 (当前 **215 passed / 0 failed / 0 skipped**; 含 7 条真浏览器 E2E, 无 Chrome 会 skip, 不算通过).
+- `cd userscript; node --test "tests/*.test.mjs"` — **46 pass / 0 fail** (必须用 glob 形式; 传目录会 MODULE_NOT_FOUND).
 
 ## 硬约束 (不做)
 - 不做屏幕 OCR; 不做 Whisper ASR fallback; 不一条 cue 一个请求.

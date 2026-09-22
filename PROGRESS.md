@@ -1,14 +1,25 @@
 # PROGRESS — youtubesub 进度与交接记录
 
-最后更新: 2026-09-21 (**真浏览器 E2E 会话之后**; 用户已喊"告一段落, 暂停推进")。
-状态一句话: 桌面端与浏览器侧**都已在真实浏览器里跑过** —— pytest **65 passed** (~16s)、node **33 passed**,
-真 Chrome E2E 7 条全绿 (夹具页 + 真 userscript + 真 app.py, 只经 `/status` 黑盒观察), 并据此抓出修掉 **4 个真 bug**。
-仍未验证的三件: **真 Tampermonkey 全场景**、**真实 AI Key 翻译链路**、**真实 youtube.com 抓不到 cue 的根因** (用户已归入手动验收)。
+最后更新: 2026-09-22 (**#41 注入自证 + 文档刷新之后**)。
+状态一句话: 桌面端与浏览器侧**都已在真实浏览器里跑过** —— pytest **215 passed / 0 failed / 0 skipped** (~35s)、node **46 pass / 0 fail**,
+真 Chrome E2E 7 条全绿 (夹具页 + 真 userscript + 真 app.py, 只经 `/status` 黑盒观察)。
+仍未验证的两件: **真 Tampermonkey 全场景** (L3; #41 之后无论成败都给可判读结论) 与 **真实 AI Key 翻译链路** (L4, 等 Key);
+真实 youtube.com「抓不到 cue」**已定论为 headless 指纹**, 不再是未定论项。
 
 > 恢复入口: 先读交接文档 [.scratch/handoff/20260921-111208-E2E与手测入口.md](.scratch/handoff/20260921-111208-E2E与手测入口.md)
 > (本轮全部改动 / 4 个 bug / 未验证项 / 坑都在里面, 并**取代**本文件旧有的"浏览器侧结论仍不可信"结论),
 > 再读 [docs/MANUAL-ACCEPTANCE.md](docs/MANUAL-ACCEPTANCE.md)、第 5 节 (命令) 与第 7 节 (断点顺序)。
 > 本文件第 0.1 节及以下保留为历史记录。
+
+---
+
+## 0.000 本次会话的增量 (2026-09-22: #41 注入自证 + 文档刷新)
+
+| # | 做了什么 | 证据 |
+|---|---|---|
+| 1 | **#41 注入自证**: 生成的主世界代码挂好 fetch/XHR 后回发 `youtubesub-hook-ready` (带 `level`/`entries`); 每级等 500ms 回执, 无回执判该级失败并试下一级; 注入调用不抛异常**不再**等于装上; 安装时机对齐 `@run-at document-start`; 面板改 `NO PAGE HOOK - <级别: 原因>` (不再显示 connected), 失败级别经 `register.hook_error` → `/status` 上浮 | 提交 `81cf035`; node 38 → **46** (新增 8 条); `test_browser_e2e.py` 新增「自证通过时 `/status.hook_error` 为空」断言 |
+| 2 | **文档刷新** (#43): `CONTEXT.md` / `PROGRESS.md` / `README.md` / `docs/MANUAL-ACCEPTANCE.md` 的状态事实对齐 HEAD; 并把 #23 遗留未提交的文档改动 (`PROTOCOL.md` 的 `connection_test` 段、`MANUAL-ACCEPTANCE.md` 的 L4b 段) 一并入库 | `pytest 215 passed`; `node 46 pass`; issue #43 |
+| 3 | 数字基线: pytest 68 → **215**、node 37 → **46** | `python -m pytest desktop/tests -q`; `node --test "tests/*.test.mjs"` |
 
 ---
 
@@ -115,6 +126,7 @@ YouTube 页面 (Tampermonkey 脚本)
   poll 绑定后出现的 video / **无 GM_xmlhttpRequest 也能连** / 全会话帧逐条通过协议契约校验 / 真实 cue 满足桌面端 coercer。
 - 测试台文件: `desktop/tests/fake_browser.py` (假浏览器, 经真实 WS 推流), `userscript/tests/fixtures/parse_cases.json` (共享夹具)。
 - **更新 (E2E 会话)**: pytest **65 passed** (~16s) / node **33 pass**; 新增真浏览器 E2E 7 条 (`test_browser_e2e.py`), 以及热键 4 条、浮窗状态 2 条、引擎 2 条。
+- **更新 (2026-09-22)**: pytest **215 passed / 0 failed / 0 skipped** (~35s) / node **46 pass**; 新增断句判据、预取批请求、测试连接三值、提示词预设、注入自证等批次; E2E 仍 7 条。
 
 ### 2.4 真实运行验证 (上一 session, 仍有效)
 - 桌面 App 多次真实启动常驻, 假浏览器驱动推送 14s 播放 + 4s 暂停, 驱动进程 exit 0。
@@ -126,7 +138,7 @@ YouTube 页面 (Tampermonkey 脚本)
 - 字号下限 8->6, 默认 15->10, 描边 2.0->1.5, 设置对话框新增字号输入框。
 - 修掉 resize 严重 bug: 放大后往内拖无法缩小 (根因: 边缘判定每帧重检)。修法: 按下时锁定边缘 `_resize_edge`。已加回归测试。
 
-### 2.6 浏览器用户脚本 (userscript/youtubesub.user.js, **471 行**; 注入方式见 ADR-002 的三级回退) — 当时改动 3 处
+### 2.6 浏览器用户脚本 (userscript/youtubesub.user.js, **665 行**; 注入方式见 ADR-002 的三级回退, **#41 起为注入自证**) — 当时改动 3 处
 已写完的内容: Tampermonkey 头 (@match youtube / @grant GM_xmlhttpRequest,GM_addElement / @connect 127.0.0.1 / document-start / MIT);
 纯函数 (normKey / trackKindFromUrl / trackLangFromUrl / isTimedtextUrl / videoIdFromLocation / parseJson3 / cuesSignature);
 buildPageHookCode() 生成页面上下文注入代码 (GM_addElement script, 拦截 fetch + XHR, CustomEvent 回传, 注明 dkitle MIT 出处);
@@ -145,7 +157,7 @@ Bridge: /health 探测 -> WS -> 指数退避重连 (3s..30s) -> 缓存回放 (�
 E2E 7 条全绿, 并因此修掉 Trusted Types 静默失败等 4 个 bug (见交接文档 §2)。真 Tampermonkey 全场景仍未验证。
 
 ### 2.7 Node 测试台 (本轮从脚手架补成真测试)
-`userscript/tests/userscript.test.mjs` (698 行)。沙箱提供 window/document/location/crypto/URL/CustomEvent/WebSocket/定时器,
+`userscript/tests/userscript.test.mjs` (**1025 行**)。沙箱提供 window/document/location/crypto/URL/CustomEvent/WebSocket/定时器,
 可控时钟 (`__clock`), GM_* 桩, 可控 video 元素与 `querySelector('video')`, 记录所有发出的帧 (`__sent`)。
 页面注入代码不是只做字符串断言, 而是在独立的 vm 上下文里**真实执行**并验证 fetch/XHR 两条拦截路径。
 
@@ -214,7 +226,7 @@ E2E 7 条全绿, 并因此修掉 Trusted Types 静默失败等 4 个 bug (见交
 ### 3.1 P0 — 其余
 - (已完成, 保留记录) Node 测试台补完 —— 见 2.7。
 - (已完成) 真实 Chrome 全场景: 夹具 E2E 7 条 + `--demo`/`--live` 人工入口 —— 见 3.0。
-- ⚠ **真 Tampermonkey 全场景仍未做** (本机 Chrome 没装该扩展, 需用户手动装): 推测 `GM_addElement` 能绕开 CSP/Trusted Types, 但**没有证据**。
+- ⚠ **真 Tampermonkey 全场景仍未做** (本机 Chrome 没装该扩展, 需用户手动装) —— **#41 起不再是"没有证据"**: 注入自证后无论成败都给可判读结论 (抓到字幕, 或面板与 `/status` 点名失败级别 `gm`/`script-element`/`direct-eval`/`sandboxed`); 仍需维护者手跑 L3。
 
 ### 3.2 P1 — 核心目标相关
 - **真实 AI 翻译链路未验证**: 等用户提供 **Base URL + API Key + Model**。拿到后要验证: 成功显示译文 / 超时或异常时不破坏原字幕 /
@@ -243,18 +255,18 @@ E2E 7 条全绿, 并因此修掉 Trusted Types 静默失败等 4 个 bug (见交
 - PowerShell 执行策略会拦住 `.ps1` (截图脚本等), 需 `-ExecutionPolicy Bypass`; `npm.ps1` 同样受限, 用 `npm.cmd` 或 node 直接调。
 - 浮窗渲染字号与描边都走 `QPainterPath` 描边+填充; 窗口很小时按行裁剪, 属预期。
 - 本机浏览器是用户自己在用的 (有若干 `chrome.exe` 常驻), **不要 kill 它们**; E2E 必须用独立 `--user-data-dir` + 独立调试端口。
-- `__pycache__` 与 `data/translations.db` 是运行产物; 项目**不是 git 仓库** (无 .git), 所以没有版本控制兜底 —— 改动要谨慎。
+- `__pycache__` 与 `data/translations.db` 是运行产物 (**已被 git 跟踪**, 跑测试会改动它, 提交前留意); 项目**已是 git 仓库** (origin = github.com/CometDash77/youtubesub, 分支 master), 改动走提交与评审。
 
 ---
 
 ## 5. 如何运行 (恢复开发用, 均可直接复制)
 
-跑 Python 测试 (65 passed, ~16s; 含 7 条真浏览器 E2E, 无 Chrome 则 skip):
+跑 Python 测试 (215 passed / 0 failed / 0 skipped, ~35s; 含 7 条真浏览器 E2E, 无 Chrome 则 skip):
 ```
 python -m pytest D:\Documents\vibe\youtubesub\desktop\tests -q
 ```
 
-跑 Node 测试 (33 passed, ~0.25s) —— 注意用 glob 形式:
+跑 Node 测试 (46 pass / 0 fail, ~0.3s) —— 注意用 glob 形式:
 ```
 cd D:\Documents\vibe\youtubesub\userscript
 node --test "tests/*.test.mjs"
@@ -308,7 +320,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File D:\vibe-research\shot.ps1 -o
 ## 7. 断点与下一步顺序 (下个 session 从这里开始)
 
 当前状态: App **未运行** (端口 9877 已释放); 没有遗留的 Chrome/CDP 进程 (用户自己的 chrome.exe 不要动)。
-最新断点文档: `.scratch/handoff/20260921-114657-O3定论与失败可见化.md` (与本文件冲突时以它为准; 旧的 114710 已改为指向它的占位)。
+最新交接文档: `.scratch/handoff/` 目录按时间倒序取 (当前最新为 `20260922-issue23-测试连接实施完成.md`); 与本文件冲突时以该目录最新文档为准, 本文件顶部 §0.000 是本轮快照。
 
 0. **P0 思维对齐已落盘** (2026-09-21): 五类清单 (D1-D5 / K1-K9 / C1-C12 / O1-O9 / F1-F6 + 可疑遗漏 A1-A4、B1-B9) 原样写入
    `.scratch/alignment/20260921-112756-E2E与手测入口.md` (含文件头与人称读法)。**O 类待决项与 A/B 类的"请裁决"项尚未裁决**,
@@ -319,3 +331,4 @@ powershell -NoProfile -ExecutionPolicy Bypass -File D:\vibe-research\shot.ps1 -o
 4. (已定论 2026-09-21) "真实 YouTube 抓不到 cue" = **headless 指纹**, 不是产品缺陷: headless 下站点给 `200 + text/html + 0 字节`, headed 下给 `200 + application/json + 8079 字节`、桥接 61 条 cue、浮窗显示真实歌词。`--live` **不要加 `--headless`**; 失败原因现以 `capture_error` 上浮。
 5. 剩余 P2 打磨: 历史字幕行渲染、打包分发、多标签 source UI。
 6. (已完成) 双轴评审已按替代 fixed point (交接文档 §1 的 11 文件清单) 跑过: 0 硬违规 + 9 条判定 smell; Spec 9 条, 其中两条红线 (`test_hotkey` 读真实设置、TT 回退从未在真 TT 下触发) 已修其一。详见新断点文档 §2.2。
+7. (2026-09-22) **#41 已实施, 待 L3**: 代码 + 自动化全绿 (提交 `81cf035`), issue #41 停在 95%; 维护者按 `docs/MANUAL-ACCEPTANCE.md` 的 L3 手跑真 Tampermonkey —— 浮窗显示字幕 → 100% + close; 仍失败 → 面板与 `/status` 已点名失败级别, 据此分流。文档刷新见 #43。

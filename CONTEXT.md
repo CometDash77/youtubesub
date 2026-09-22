@@ -39,6 +39,24 @@
 - `harness/` 是 DeepSeek Harness 运行时专属, 不在双模型维护范围内。
 
 ## 状态 (详见 PROGRESS.md 与 `.scratch/handoff/` 下最新交接文档, 随做随更)
+
+**⚠ 2026-09-22 刷新快照 (对应代码提交 81cf035)** —— 与下方旧条目冲突时以本块为准; 旧条目按"增量并列"保留不改写。
+
+- pytest **215 passed / 0 failed / 0 skipped** (~35s); node **46 pass / 0 fail**; `userscript/youtubesub.user.js` **665 行**,
+  测试台 `userscript/tests/userscript.test.mjs` 1025 行。下方「pytest 88 passed」「Node 测试台: 38 passed」「userscript 现在 471 行」
+  「#22 代码尚未改动」「#24 代码尚未改动」等条目**已过期**。
+- **注入自证 (issue #41, 2026-09-22)**: 三级回退之上, 注入到主世界的代码在挂好 fetch/XHR 后回发 `youtubesub-hook-ready` (带 `level` / `entries`),
+  每一级等 500ms 回执, 无回执即判该级失败并试下一级; 注入调用不抛异常**不再**等于装上; 安装时机对齐 `@run-at document-start`。
+  面板标记由 `[NO PAGE HOOK]` 改为 `youtubesub: NO PAGE HOOK - <级别: 原因>` (**不再显示成 connected**); 失败级别
+  (`gm` / `script-element` / `direct-eval` / `sandboxed`) 同时经 `register.hook_error` → `/status` 上浮。协议口径见 [docs/PROTOCOL.md](docs/PROTOCOL.md)。
+- **`/status` 多一个可选键 `connection_test`** (issue #23): 最近一次「测试连接」报告的完整 JSON; 不落盘, 重启消失。
+- **2026-09-21~22 已落地并入库**: #22 断句判据 ([ADR-006](docs/adr/ADR-006-segmentation-aligned-with-kiss.md)) / #24 预取窗口+批请求 ([ADR-007](docs/adr/ADR-007-batch-request-contract.md)) /
+  #38 预取与上下文解耦 ([ADR-009](docs/adr/ADR-009-context-window-and-cache-identity.md)) / #39 提示词预设 ([ADR-010](docs/adr/ADR-010-prompt-presets-and-composition.md)) /
+  #23 测试连接两步契约 ([ADR-005](docs/adr/ADR-005-connection-test-same-path.md)) / #31 mock 身份维度 ([ADR-008](docs/adr/ADR-008-mock-is-a-cache-identity-dimension.md)) /
+  #40 Key 明文存盘并明示 ([ADR-011](docs/adr/ADR-011-api-key-plaintext-storage.md)) / #41 注入自证。
+- **仍未验证**: 真 Tampermonkey (L3; #41 之后无论成败都给可判读结论 —— 要么抓到字幕, 要么面板与 `/status` 点名失败级别) 与
+  真实 AI Key 翻译链路 (L4, 等 Base URL+Key+Model)。真实 youtube.com「抓不到 cue」**已定论为 headless 指纹** (见下方下一步第 2 条), 不再是未定论项。
+
 - 桌面端全部实现完毕; **pytest 88 passed** (~20s)。含真实 WS 集成、引擎全管线(mock)、浮窗 resize 回归、
   /health 与 /status 路由、无 provider 不泄露、provider 抛错不 500、跨语言解析夹具 11 例、
   **真浏览器 E2E 7 条 (夹具页 + 真 userscript + 真 app.py, 只经 /status 黑盒观察; 无 Chrome 则 skip)**、热键 4 条、浮窗状态 2 条。
@@ -68,6 +86,8 @@
 - ✅ (2026-09-21) **#31 已修**: Mock 回显与真实译文不再共用缓存身份 (mock 进 identity, 身份方案版本 1 -> 2, 见 ADR-008); 队列任务改为携带提交时的 provider 快照与命名空间, 命名空间变动时内存里的旧译文作废并重取, 晚到的旧命名空间结果被丢弃。升级后本地缓存全量失效一次 (旧库里两类行同 key, 无法只作废被污染的那类)。**待人工验收** (L4: 勾 Mock 跑一句 -> 取消勾选 -> 同一句必须真实请求)。
 
 ## 下一步 (断点, 完整清单见 `.scratch/handoff/` 下最新交接文档 §5)
+
+- (2026-09-22 刷新) 旧第 5 条 (#22 断句实现) 与第 6 条 (#24 实现) **均已完成** (67f00c8 / 3aa1e95); 当前唯一待确认项是 **#41 的 L3 真 Tampermonkey** (维护者手跑, agent 不装扩展、不代跑)。
 0. **(已落盘, 待裁决)** P0 思维对齐: `.scratch/alignment/20260921-112756-E2E与手测入口.md` (D/K/C/O/F + 可疑遗漏 A/B);
    O 类与 A/B 类的"请裁决"项仍待用户回答。**不要重做对齐**。
 1. 用户按 `docs/MANUAL-ACCEPTANCE.md` 手动验收 (L1 夹具演示 / L2 真实站点诊断 / L3 真 Tampermonkey / L4 真实 Key)。
