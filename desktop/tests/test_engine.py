@@ -43,6 +43,36 @@ JSON3 = {"events": [
     {"tStartMs": 5000, "dDurationMs": 2000, "segs": [{"utf8": "next thought", "tOffsetMs": 5100}]},
 ]}
 
+# A single cue and nothing after it: with prefetch decoupled (#38) an exact
+# translate-call count can only come from having no lookahead groups to submit.
+ONE_GROUP = {"events": [
+    {"tStartMs": 1000, "dDurationMs": 3000, "segs": [{"utf8": "hello there friend"}]},
+]}
+
+
+def zh_cues(lines):
+    """One cue per line, every line >5 chars: the zh quality gate keeps each
+    line its own group, so neighbour positions are deterministic (#38 fixtures)."""
+    return [{"start_ms": i * 1100.0, "end_ms": i * 1100.0 + 1000.0, "text": t}
+            for i, t in enumerate(lines)]
+
+
+ZH3 = ["这是一行比较长的字幕", "另一行同样很长的字", "第三行也相当的长啊"]
+ZH5 = ZH3 + ["第四行继续写长一点呢", "第五行还是那么长啊嘿"]
+
+
+class RecordingQueue:
+    """Stand-in for TranslationQueue that records every submitted job and runs
+    nothing - so a scheduling test can assert the exact submitted set without
+    workers racing results back in (#38)."""
+
+    def __init__(self):
+        self.jobs = []
+
+    def submit(self, job):
+        self.jobs.append(job)
+        return True
+
 
 def test_engine_full_pipeline_with_mock_translation():
     e = mk_engine(tempfile.mkdtemp())
@@ -240,7 +270,12 @@ def test_pure_mock_translation_is_still_cached(tmp_path):
     """Issue #31 acceptance: pure Mock (no base_url / model) keeps its old cache
     behaviour - a second engine replaying the same sentence reuses the cached
     echo. Counted at the translator: the Mock translator is fast, so only the
-    call count can tell a cache hit from a fresh translation."""
+    call count can tell a cache hit from a fresh translation.
+
+    The fixture is one cue with nothing after it. Prefetch is unconditional
+    since #38 (decoupled from context_groups), so an exact count must come from
+    having no lookahead groups to submit - NOT from flipping the prompt switch,
+    which the old version of this test leaned on (the coupling #38 removed)."""
     db = os.path.join(str(tmp_path), "t.db")
     calls, holder = [], {}
 
@@ -249,12 +284,11 @@ def test_pure_mock_translation_is_still_cached(tmp_path):
         return holder["default"](job)      # the real Mock translator
 
     def run():
-        # no base_url, no model: pure Mock. context_groups=0 keeps it one job per
-        # run, so the call count is exact.
+        # no base_url, no model: pure Mock. One group and no following group, so
+        # the unconditional prefetch has nothing ahead to submit -> one job.
         e = mk_engine(tmp_path, mock=True, db=db, translate_fn=counting)
-        e.settings["prompt"]["context_groups"] = 0
         holder["default"] = e._default_translate
-        e.ingest_json3("s1", {"video_id": "v1", "track_kind": "asr"}, JSON3)
+        e.ingest_json3("s1", {"video_id": "v1", "track_kind": "asr"}, ONE_GROUP)
         e.handle_event({"type": "sync", "source_id": "s1", "video_time_ms": 1500.0,
                         "playing": True, "playback_rate": 1.0,
                         "timestamp": time.time() * 1000})
@@ -527,3 +561,88 @@ def test_track_kind_does_not_change_the_criteria():
     assert groups_by_kind["manual"] == groups_by_kind["asr"]
     assert groups_by_kind["manual"], "the shared criteria still group something"
     e._queue.shutdown()
+
+
+def test_identity_forks_on_context_and_is_byte_identical_when_unchanged(tmp_path):
+    """#38 / ADR-009 contract - identity contains the neighbour context:
+    - context_groups on vs off (same group, same config) -> different identity;
+    - a neighbour's original text changed (everything else same) -> different
+      identity, on both sides of the window;
+    - the same group submitted twice with client_key and neighbours unchanged
+      -> byte-identical identity. That last one is the regression net against
+      "kiss does it out of the cache key": copying that would make every row
+      above silently share cache entries (issue #31's twin)."""
+    from suboverlay.queue_cache import URGENT
+    e = mk_engine(tmp_path)
+    e.handle_event({"type": "cues", "source_id": "s1", "video_id": "v1",
+                    "track_kind": "manual", "track_lang": "zh", "cues": zh_cues(ZH3)})
+    src = e.sources["s1"]
+    assert [(g.start_idx, g.end_idx) for g in src.groups] == [(0, 0), (1, 1), (2, 2)]
+    real_q = e._queue
+    rec = e._queue = RecordingQueue()
+    try:
+        # (1) the prompt switch alone forks the identity
+        e.settings["prompt"]["context_groups"] = 1
+        e._submit_group(src, 1, URGENT)
+        id_on = rec.jobs[-1].identity
+        e.settings["prompt"]["context_groups"] = 0
+        e._submit_group(src, 1, URGENT)
+        id_off = rec.jobs[-1].identity
+        assert id_on != id_off, "context on vs off must produce different identities"
+
+        # (2) neighbour original text changed (rest identical) -> identity forks
+        e.settings["prompt"]["context_groups"] = 1
+        src.groups[0].text += "改"          # prev neighbour
+        e._submit_group(src, 1, URGENT)
+        id_prev = rec.jobs[-1].identity
+        assert id_prev != id_on, "prev neighbour text must fork the identity"
+        src.groups[2].text += "改"          # next neighbour
+        e._submit_group(src, 1, URGENT)
+        id_next = rec.jobs[-1].identity
+        assert id_next != id_prev, "next neighbour text must fork the identity"
+
+        # (3) unchanged inputs -> byte-identical identity across submissions
+        e._submit_group(src, 1, URGENT)
+        again = rec.jobs[-1].identity
+        assert again.encode("utf-8") == id_next.encode("utf-8"), \
+            "same group, same neighbours: identity must be byte-identical"
+    finally:
+        e._queue = real_q
+        real_q.shutdown()
+
+
+def test_prefetch_submission_set_does_not_follow_the_context_switch(tmp_path):
+    """#38 / ADR-009 - prefetch is scheduling, not prompting. After the play
+    advance event, BOTH settings submit the current group URGENT plus the
+    PREFETCH_GROUPS lookahead NORMAL; the submitted set never varies with the
+    prompt switch - only the identities (which carry context) may differ."""
+    from suboverlay.queue_cache import URGENT, NORMAL
+
+    def submitted(context_groups):
+        e = mk_engine(tmp_path, db=os.path.join(str(tmp_path),
+                                                "pf%d.db" % context_groups))
+        e.settings["prompt"]["context_groups"] = context_groups
+        e.handle_event({"type": "cues", "source_id": "s1", "video_id": "v1",
+                        "track_kind": "manual", "track_lang": "zh",
+                        "cues": zh_cues(ZH5)})
+        assert len(e.sources["s1"].groups) == 5, "one group per zh line"
+        real_q = e._queue
+        rec = e._queue = RecordingQueue()
+        try:
+            e.handle_event({"type": "sync", "source_id": "s1",
+                            "video_time_ms": 100.0, "playing": True,
+                            "playback_rate": 1.0, "timestamp": time.time() * 1000})
+            d = e.tick()
+            assert d["state"] == "ok" and d["orig"] == ZH5[0]
+        finally:
+            e._queue = real_q
+            real_q.shutdown()
+        return ([(j.group_idx, j.priority) for j in rec.jobs],
+                [j.identity for j in rec.jobs])
+
+    on, ids_on = submitted(1)
+    off, ids_off = submitted(0)
+    want = [(0, URGENT)] + [(i, NORMAL) for i in range(1, 5)]
+    assert on == want, "context on: current URGENT + 4 lookahead NORMAL"
+    assert off == want, "context off must not gate the prefetch"
+    assert ids_on != ids_off, "identities still differ - the switch only shapes the prompt"

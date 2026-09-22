@@ -303,9 +303,13 @@ class Engine:
                 if gi is not None and gi != src.last_group_idx:
                     src.last_group_idx = gi
                     self._submit_group(src, gi, URGENT)
-                    if self.settings.get("prompt", {}).get("context_groups", 1):
-                        for off in range(1, PREFETCH_GROUPS + 1):
-                            self._submit_group(src, gi + off, NORMAL)
+                    # Prefetch is scheduling, not prompting (#38 / ADR-009): the
+                    # lookahead runs unconditionally. prompt.context_groups only
+                    # decides whether the prompt carries neighbour context - never
+                    # whether we look ahead (that gate was semantic crosstalk with
+                    # the prefetch domain of #9 / #24).
+                    for off in range(1, PREFETCH_GROUPS + 1):
+                        self._submit_group(src, gi + off, NORMAL)
             trans = ""
             if cue is not None:
                 ci = src.cues.index(cue)

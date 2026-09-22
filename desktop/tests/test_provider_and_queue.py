@@ -1,5 +1,5 @@
 """Tests: provider validation, cache identity, settings redaction, queue."""
-import sys, os, time
+import json, sys, os, time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from suboverlay import provider as P
 from suboverlay.queue_cache import cache_identity, TranslationCache, TranslationJob, TranslationQueue, URGENT, NORMAL
@@ -176,3 +176,55 @@ def test_queue_sheds_normal_under_backoff():
     time.sleep(0.2)
     q.shutdown()
     assert len(done) == 1
+
+
+def _capture_wire(monkeypatch, protocol, cur, prev="", nxt="", system="BASE PROMPT"):
+    """Drive translate_group against a stubbed transport (no network) and return
+    (system, user) exactly as they would go on the wire for either protocol."""
+    seen = []
+
+    def fake_post(url, headers, payload, timeout_s):
+        seen.append(payload)
+        # one body that satisfies both protocols' extractors
+        return 200, {}, json.dumps({"choices": [{"message": {"content": "ok"}}],
+                                    "output_text": "ok"})
+
+    monkeypatch.setattr(P, "_do_post", fake_post)
+    cfg = {"base_url": "https://api.example.test/v1", "api_key": "k", "model": "m",
+           "protocol": protocol, "system": system}
+    r = P.translate_group(cfg, cur, prev, nxt, expected_lines=0)
+    assert r.get("error") is None and seen, "the stubbed transport must be hit"
+    body = seen[-1]
+    if protocol == "chat-completions":
+        return body["messages"][0]["content"], body["messages"][1]["content"]
+    return body["instructions"], body["input"][0]["content"][0]["text"]
+
+
+def test_wire_context_lines_go_into_system_and_user_stays_pure(monkeypatch):
+    """#38 / ADR-009 wire contract: neighbour context rides as two verbatim
+    label lines appended to the system prompt; the user message is the pure
+    current sentence - for both protocols. Wording and order are pinned on
+    purpose: they feed the identity scheme, so changing them would fork every
+    cache row for zero user benefit. Empty context appends nothing, and a
+    missing neighbour (first/last group) omits exactly its own line."""
+    cur, prev, nxt = "current sentence here", "previous neighbour line", "next neighbour line"
+    want_sys = ("BASE PROMPT" + chr(10) +
+                "Previous line (context only, do not translate): " + prev + chr(10) +
+                "Next line (context only, do not translate): " + nxt)
+    for protocol in ("chat-completions", "responses"):
+        system, user = _capture_wire(monkeypatch, protocol, cur, prev, nxt)
+        assert user == cur, protocol + ": user message must be the pure current sentence"
+        assert system == want_sys, protocol + ": exactly two verbatim label lines in system"
+
+    # empty context (both neighbours absent): nothing is appended
+    for protocol in ("chat-completions", "responses"):
+        system, user = _capture_wire(monkeypatch, protocol, cur)
+        assert system == "BASE PROMPT" and user == cur, protocol + ": no lines when no context"
+
+    # positional defaults: a missing neighbour omits exactly its own line
+    system, _ = _capture_wire(monkeypatch, "chat-completions", cur, "", nxt)
+    assert system == ("BASE PROMPT" + chr(10) +
+                      "Next line (context only, do not translate): " + nxt)
+    system, _ = _capture_wire(monkeypatch, "chat-completions", cur, prev, "")
+    assert system == ("BASE PROMPT" + chr(10) +
+                      "Previous line (context only, do not translate): " + prev)
