@@ -13,12 +13,12 @@
 ## L0 · 自动基线（不需要人，先跑这个）
 
 ```
-python -m pytest desktop/tests -q                       # 期望全绿：当前 88 passed（含 7 条真浏览器 E2E；无 Chrome 会 skip，不算通过）
-cd userscript; node --test "tests/*.test.mjs"           # 期望全绿：当前 38 pass / 0 fail（必须用 glob 形式）
+python -m pytest desktop/tests -q                       # 期望全绿：当前 215 passed（含 7 条真浏览器 E2E；无 Chrome 会 skip，不算通过）
+cd userscript; node --test "tests/*.test.mjs"           # 期望全绿：当前 46 pass / 0 fail（必须用 glob 形式）
 node --check userscript/youtubesub.user.js              # 语法检查
 ```
 
-通过标准：pytest **0 failed / 0 skipped**（当前 88 passed，数字随提交增长）；node 38 pass 0 fail；7 条 E2E 没有被 skip
+通过标准：pytest **0 failed / 0 skipped**（当前 215 passed，数字随提交增长）；node 46 pass 0 fail；7 条 E2E 没有被 skip
 （skip 说明 harness 没找到 Chrome，这时浏览器侧**等于没验**，要记下来）。
 
 E2E 用的测试特权（`--disable-web-security`、CDP `Page.setBypassCSP`）**只存在于测试 harness**，
@@ -166,6 +166,26 @@ Protocol 先留 `auto`，**取消勾选** "Mock mode (no real API)" → OK（写
 - [ ] 长视频连续播放：队列不堆积（翻译滞后可接受，但不逐 cue 打请求）
 
 **失败时记什么**：Settings 里的 Base URL 与 Model 名（**Key 不要贴**）、HTTP 状态码、`/status` 的 `trans`。
+
+---
+
+### L4b · 测试连接三值（issue #23）
+
+**目的**：点「测试连接」拿到可信结论——pass / fail / mock 三值各自的表现与边界。
+**状态**：自动化已覆盖（缝 1 运行器 28 条 + 缝 3 真实坏地址 4 条 + engine 同路径 1 条，全绿）；**待你本人眼看一次**（真实 PASS 需要 L4 的 Key）。
+
+- [ ] Mock 勾选 + 点测试 → 结论 **MOCK**（永不显示为通过）、零网络请求、第 1 步标跳过
+- [ ] Mock 且已填地址与模型 → 报告带 `MOCK_MASKS_REAL_CONFIG` 警告
+- [ ] 真实配置（L4 的 Key）→ **PASS**，报告含原句与真实译文、Attempts 为实际尝试次数
+- [ ] Base URL 填坏地址 → 快速 **FAIL**，L1 显示 `NETWORK`（连不上）而非内部错误；黑洞/太慢显示 `TIMEOUT`
+- [ ] 地址或模型留空 → **立即 FAIL**（不等超时），本地静态原因直接可见
+- [ ] 运行中「Test connection」禁用（单飞）、可 Cancel（明示额度不退）；进度显示 step 1/2 · 秒数
+- [ ] 关窗 / 取消后迟到的结果不回写报告、不回写表单
+- [ ] 报告、`/status` 的 `connection_test`、进度与任何输出里**搜不到 API Key**
+- [ ] 跑过一次后 `/status` 出现 `connection_test`；重启应用后该键消失（不落盘）
+- [ ] 报告显示 "Based on the inputs as of the click" 与「未验证对齐协议」两句边界说明
+
+**失败时记什么**：报告全文（不含 Key）、`/status` 的 `connection_test` 原文、点按钮到出结果的耗时。
 
 ---
 

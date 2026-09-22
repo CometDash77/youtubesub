@@ -11,6 +11,11 @@
 `hook_error` 非空 = 脚本连上了、但页面钩子没装成功; `capture_error` 非空 = 钩子装上了、也看到了字幕请求, 但响应没有可用正文 (都见 register); 两者都空 = 正常。
 — 用于人工/自动化确认"脚本连上了吗、浮窗现在显示什么", 免截图. 会回显字幕文本, 因此**仅 loopback 可用**;
 未注入 status provider 的实例只回 `ok/version/stats`; provider 抛错时记 `status_error` 且仍返回 200 (诊断路由永不 500).
+`connection_test` 是**可选键** (issue #23): 本次运行至少完成过一次「测试连接」后才出现 (之前整个键不出现, 避免空报告被误读成"没配置"), 值为最近一次报告的完整 JSON:
+`verdict`(pass|fail|mock) / `layers`(四层 L1-L4, 每层 `passed` true|false|null + `code` + `message` + `elapsed_ms`) / `attempts`(第 2 步实际 HTTP 次数) /
+`sample`(常量原句与真实译文) / `model_list` / `warnings`(如 MOCK_MASKS_REAL_CONFIG) / `skipped` / `quota_notice` / `notes`(未验证对齐协议) /
+`snapshot`(点击那一刻的输入, **永不含 api_key**, 只记 api_key_set 布尔) / `duration_ms`。
+被取消/过期的运行不写该键; 不落盘、不建日志子系统; 与 /status 同为仅回环。
 只绑定 loopback; 鉴权见 ADR-003 (v1 先做 Origin 检查 + 可选 token, 见下).
 
 ## browser -> desktop
