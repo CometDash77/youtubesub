@@ -56,7 +56,10 @@ VIDEO_A = "aaaaaaaaaaa"
 VIDEO_B = "bbbbbbbbbbb"
 TRACK_PREFIX = {VIDEO_A: "FIXTURE ALPHA", VIDEO_B: "FIXTURE BETA"}
 CUE_STARTS_MS = (800, 3000, 6000)
-CUE_WORDS = ("one", "two", "three")
+# Sentence-final periods: the segmentation criteria (#22/ADR-006) cut groups at
+# punctuation, so each fixture line stays its own group and the mock translation
+# of the first cue is exactly that cue's text.
+CUE_WORDS = ("one.", "two.", "three.")
 
 
 def cue_text(video_id, index):

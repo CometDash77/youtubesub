@@ -242,7 +242,7 @@
       {
         "start_ms": 1500.5,
         "end_ms": 2700.75,
-        "text": "你好世界",
+        "text": "你好 世界",
         "last_off_ms": 2400.75
       }
     ]
@@ -285,6 +285,35 @@
         "end_ms": 3500,
         "text": "short overlap",
         "last_off_ms": 3400
+      }
+    ]
+  },
+  {
+    "name": "adjacent segs without trailing space are joined with a space",
+    "json3": {
+      "events": [
+        {
+          "tStartMs": 100,
+          "dDurationMs": 900,
+          "segs": [
+            {
+              "utf8": "foo",
+              "tOffsetMs": 100
+            },
+            {
+              "utf8": "bar",
+              "tOffsetMs": 500
+            }
+          ]
+        }
+      ]
+    },
+    "expected": [
+      {
+        "start_ms": 100,
+        "end_ms": 1000,
+        "text": "foo bar",
+        "last_off_ms": 600
       }
     ]
   }

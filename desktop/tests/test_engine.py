@@ -418,3 +418,112 @@ def test_status_always_carries_a_translation_authority():
     assert d["state"] == "no_cues"
     assert d["trans_available"] is True and e.status()["display"]["trans_available"] is True
     e._queue.shutdown()
+
+
+def test_track_language_from_register_frame_reaches_segmentation():
+    """#25: segmentation reads the STORED track language. The register frame
+    carries zh; the cues frame omits the key entirely - the quality gate must
+    still fire (one cue per group), proving the register path is covered and
+    the stored value survives a frame without the field."""
+    e = mk_engine(tempfile.mkdtemp())
+    e.handle_event({"type": "register", "source_id": "s1", "video_id": "v1",
+                    "track_kind": "manual", "track_lang": "zh"})
+    long_lines = ["这是一行比较长的字幕", "另一行同样很长的字", "第三行也相当的长啊"]
+    e.handle_event({"type": "cues", "source_id": "s1", "video_id": "v1",
+                    "cues": [{"start_ms": i * 1100.0, "end_ms": i * 1100.0 + 1000.0,
+                              "text": t} for i, t in enumerate(long_lines)]})
+    src = e.sources["s1"]
+    assert [(g.start_idx, g.end_idx) for g in src.groups] == [(0, 0), (1, 1), (2, 2)]
+    e._queue.shutdown()
+
+
+def test_track_language_from_the_cues_frame_selects_the_branch():
+    """#25: the cues frame alone can carry the language (no register first)."""
+    e = mk_engine(tempfile.mkdtemp())
+    long_lines = ["这是一行比较长的字幕", "另一行同样很长的字", "第三行也相当的长啊"]
+    e.handle_event({"type": "cues", "source_id": "s1", "video_id": "v1",
+                    "track_kind": "manual", "track_lang": "zh",
+                    "cues": [{"start_ms": i * 1100.0, "end_ms": i * 1100.0 + 1000.0,
+                              "text": t} for i, t in enumerate(long_lines)]})
+    src = e.sources["s1"]
+    assert [(g.start_idx, g.end_idx) for g in src.groups] == [(0, 0), (1, 1), (2, 2)]
+    e._queue.shutdown()
+
+
+def test_missing_track_language_defaults_to_space_criteria():
+    """#25: no language anywhere never crashes and selects the space-language
+    branch - the same long zh lines merge instead of hitting the gate."""
+    e = mk_engine(tempfile.mkdtemp())
+    long_lines = ["这是一行比较长的字幕", "另一行同样很长的字", "第三行也相当的长啊"]
+    e.handle_event({"type": "cues", "source_id": "s1", "video_id": "v1",
+                    "cues": [{"start_ms": i * 1100.0, "end_ms": i * 1100.0 + 1000.0,
+                              "text": t} for i, t in enumerate(long_lines)]})
+    src = e.sources["s1"]
+    assert [(g.start_idx, g.end_idx) for g in src.groups] == [(0, 2)]
+    e._queue.shutdown()
+
+
+def test_non_speech_cue_gets_no_translation_and_group_ranges_stay_contiguous():
+    """#28: [Music] joins no group - forced breaks around it, a gap in the
+    cue-to-group map, and the row-count invariant (returned lines == cues in
+    the group) holds across that gap. The overlay shows the music's original
+    text with no translation."""
+    e = mk_engine(tempfile.mkdtemp())
+    e.ingest_json3("s1", {"video_id": "v1", "track_kind": "manual",
+                          "track_lang": "en"},
+                   {"events": [
+                       {"tStartMs": 0, "dDurationMs": 1000,
+                        "segs": [{"utf8": "spoken one line"}]},
+                       {"tStartMs": 1100, "dDurationMs": 1000,
+                        "segs": [{"utf8": "spoken two line"}]},
+                       {"tStartMs": 2200, "dDurationMs": 800,
+                        "segs": [{"utf8": "[Music]"}]},
+                       {"tStartMs": 3300, "dDurationMs": 1000,
+                        "segs": [{"utf8": "spoken three line"}]}]})
+    src = e.sources["s1"]
+    assert len(src.cues) == 4
+    assert [(g.start_idx, g.end_idx) for g in src.groups] == [(0, 1), (3, 3)]
+    assert src.cue_to_group == {0: 0, 1: 0, 3: 1}
+    # group0 goes out with expected lines == cues in the group; both speech
+    # rows land, the music row never gets one
+    e.handle_event({"type": "sync", "source_id": "s1", "video_time_ms": 500.0,
+                    "playing": True, "playback_rate": 1.0,
+                    "timestamp": time.time() * 1000})
+    d = wait_trans(e)
+    assert d["trans"], "the speech group must still be translated"
+    assert src.cues[0].trans and src.cues[1].trans, "row count == group cues"
+    assert src.cues[2].trans == "", "the non-speech cue must get no translation"
+    # at the music's own time: original text, no translation, no group submitted
+    e.handle_event({"type": "sync", "source_id": "s1", "video_time_ms": 2500.0,
+                    "playing": True, "playback_rate": 1.0,
+                    "timestamp": time.time() * 1000})
+    d = e.tick()
+    assert d["state"] == "ok"
+    assert d["orig"] == "[Music]"
+    assert d["trans"] == ""
+    # prefetch walks the dense group list across the gap: the group after the
+    # music is requested too (gi + off never lands on the missing cue index)
+    deadline = time.time() + 5
+    while time.time() < deadline and 1 not in src.group_trans:
+        e.tick()
+        time.sleep(0.02)
+    assert 1 in src.group_trans, "prefetch must cross the non-speech gap"
+    e._queue.shutdown()
+
+
+def test_track_kind_does_not_change_the_criteria():
+    """US13/US14: manual and ASR tracks share one set of criteria - track kind
+    never reaches the segmentation code path, so identical cues group
+    identically whatever the kind says. (What differs is only the promise:
+    boundary parity with the reference is committed for manual tracks, not
+    for ASR - a documentation-level distinction, per ADR-006.)"""
+    e = mk_engine(tempfile.mkdtemp())
+    groups_by_kind = {}
+    for kind in ("manual", "asr"):
+        e.ingest_json3("k-" + kind, {"video_id": "v1", "track_kind": kind,
+                                     "track_lang": "en"}, JSON3)
+        groups_by_kind[kind] = [(g.start_idx, g.end_idx, g.text)
+                                for g in e.sources["k-" + kind].groups]
+    assert groups_by_kind["manual"] == groups_by_kind["asr"]
+    assert groups_by_kind["manual"], "the shared criteria still group something"
+    e._queue.shutdown()

@@ -60,6 +60,18 @@ class Engine:
         self._provider_ns = None  # provider namespace the in-memory translations belong to
 
     # ---- event ingestion (called from WS thread via queue) ----
+    def _stamp_meta(self, src, ev):
+        src.meta.update({k: ev.get(k) for k in
+            ("provider", "video_id", "tab_title", "track_kind",
+             "hook_error", "capture_error")})
+        # track_lang (#25): segmentation reads the STORED track language, so a
+        # frame that omits the key must not erase what an earlier register or
+        # cues frame already carried. Absent everywhere => "" => the
+        # space-language branch. Track kind deliberately stops here: it changes
+        # no segmentation branch, only what we promise about boundary parity.
+        if "track_lang" in ev:
+            src.meta["track_lang"] = ev["track_lang"]
+
     def handle_event(self, ev):
         t = ev.get("type")
         sid = ev.get("source_id")
@@ -67,16 +79,11 @@ class Engine:
             return
         with self._lock:
             if t == "register":
-                self.sources.setdefault(sid, _Source(sid, ev))
-                self.sources[sid].meta.update({k: ev.get(k) for k in
-                    ("provider", "video_id", "tab_title", "track_kind", "track_lang",
-                     "hook_error", "capture_error")})
+                self._stamp_meta(self.sources.setdefault(sid, _Source(sid, ev)), ev)
                 self.active_source = sid
             elif t == "cues":
                 src = self.sources.setdefault(sid, _Source(sid, ev))
-                src.meta.update({k: ev.get(k) for k in
-                    ("provider", "video_id", "tab_title", "track_kind", "track_lang",
-                     "hook_error", "capture_error")})
+                self._stamp_meta(src, ev)
                 raw = ev.get("cues")
                 cues = raw if (raw and isinstance(raw[0], object)
                                and hasattr(raw[0], "start_ms")) else coerce_cues(raw)
@@ -109,7 +116,9 @@ class Engine:
     def _set_cues(self, src, cues):
         cues = repair_cue_ends(cues)
         src.cues = cues
-        src.groups = compute_sentence_groups(cues)
+        # The segmentation branch is keyed on the stored track language (#25);
+        # missing language => "" => space-language criteria.
+        src.groups = compute_sentence_groups(cues, src.meta.get("track_lang") or "")
         src.cue_to_group = {}
         for gi, g in enumerate(src.groups):
             for ci in range(g.start_idx, g.end_idx + 1):

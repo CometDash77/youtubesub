@@ -70,14 +70,17 @@
     for (var i = 0; i < json.events.length; i++) {
       var ev = json.events[i];
       if (!ev || !Array.isArray(ev.segs)) continue;
-      var text = '', off = 0, hasOff = false;
+      var parts = [], off = 0, hasOff = false;
       for (var s = 0; s < ev.segs.length; s++) {
         var seg = ev.segs[s];
         if (!seg || typeof seg.utf8 !== 'string') continue;
-        text += seg.utf8;
+        // Seg separator aligned with the desktop parser (#26): space-join, then
+        // collapse - a seg without a trailing space must not glue the next word
+        // onto it (word/char counts feed the segmentation criteria).
+        parts.push(seg.utf8);
         if (seg.utf8.trim() && typeof seg.tOffsetMs === 'number') { off = seg.tOffsetMs; hasOff = true; }
       }
-      text = text.replace(/\s+/g, ' ').trim().replace(/(^|\s)>{2,}\s*/g, '$1').trim();
+      var text = parts.join(' ').replace(/\s+/g, ' ').trim().replace(/(^|\s)>{2,}\s*/g, '$1').trim();
       if (!text) continue;
       var start = typeof ev.tStartMs === 'number' ? ev.tStartMs : 0;
       var dur = typeof ev.dDurationMs === 'number' ? ev.dDurationMs : 0;

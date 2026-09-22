@@ -29,7 +29,7 @@
 
 ### cues (全量推送, 每次拦截到新轨即发全量)
 `{"type":"cues","provider":"youtube","source_id":"<uuid>","video_id":"...","track_kind":"...","track_lang":"...","cues":[{"start_ms":1234,"end_ms":4234,"text":"hi","last_off_ms":2000}]}`
-字段说明: 时间毫秒浮点; `last_off_ms` 为最后一个非空 seg 的词级偏移 (无则等于 start, 沿用 yt-dual-subs `lastOff`). **该字段仍随协议下发, 但已不参与断句** (判据见 ADR-006): 分句不再以它为锚点, 手工轨也不再退化为单 cue 成组.
+字段说明: 时间毫秒浮点; `last_off_ms` 为最后一个非空 seg 的词级偏移 (无则等于 start, 沿用 yt-dual-subs `lastOff`). **该字段仍随协议下发, 但已不参与断句** (判据见 ADR-006): 分句不再以它为锚点. 空格语系手动轨不再因缺失真实词偏移而退化为单 cue 成组; 中文等无空格语系手动轨触发质量闸门时的「一行一组」是新判据本身的行为, 与该字段无关.
 桌面端收到后整体替换该 source 的 cue 表 (排序后存, trans 随 cue, 见 DESIGN.md).
 
 ### sync (播放状态)

@@ -839,7 +839,8 @@ test('bridge: cue frames from the real userscript satisfy the desktop coercer', 
     assert.ok(c.end_ms > c.start_ms);
     assert.ok(c.last_off_ms >= c.start_ms);
   }
-  assert.equal(frame.cues[0].text, '你好世界');
+  // space-joined segs (#26): '你好' + '世界' must not glue into one token
+  assert.equal(frame.cues[0].text, '你好 世界');
 });
 
 // ------------------------------------------------------------ installability ----

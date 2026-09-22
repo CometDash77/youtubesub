@@ -21,6 +21,8 @@ class Cue:
     start_ms: float
     end_ms: float
     text: str
+    # Wire-only since ADR-006: kept for protocol compatibility (userscript,
+    # fixtures and docs all still carry it), never used for segmentation.
     last_off_ms: float = 0.0
     trans: str = ""
 
@@ -106,7 +108,11 @@ def parse_json3(data):
             if u.strip() and isinstance(s.get("tOffsetMs"), (int, float)):
                 off = float(s["tOffsetMs"])
                 has_off = True
-        text = re.sub(r"\s+", " ", "".join(parts)).strip()
+        # Seg separator aligned to the reference (#26): join with a space so a
+        # seg without a trailing space cannot glue the next word onto it (word
+        # and char counts would drift). The whitespace collapse below folds the
+        # doubled spaces that a trailing space plus separator produces.
+        text = re.sub(r"\s+", " ", " ".join(parts)).strip()
         text = re.sub(r"(^|\s)>{2,}\s*", r"\1", text).strip()
         if not text:
             continue
