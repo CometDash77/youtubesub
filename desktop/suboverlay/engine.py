@@ -7,6 +7,7 @@ from .protocol import coerce_cues, parse_json3, repair_cue_ends
 from .sentences import compute_sentence_groups
 from .queue_cache import (TranslationCache, TranslationJob, TranslationQueue,
                           ProviderContext, cache_identity, URGENT, NORMAL)
+from .settings import active_prompt_text
 from . import provider as provider_mod
 
 SEEK_JUMP_MS = 2500.0
@@ -168,10 +169,18 @@ class Engine:
     def _provider_snapshot(self):
         """(provider copy, instructions) - the inputs both the cache identity and
         the translation namespace are computed from. Taken in one place, so a job
-        cannot describe one provider in its identity and another in its context."""
+        cannot describe one provider in its identity and another in its context.
+
+        instructions = the ACTIVE PRESET text (#39 / ADR-010), resolved by the
+        one shared resolver. It is also copied into prov["system"], which is the
+        cfg key translate_group reads - so the text that shaped the identity is
+        byte-identical to the text that goes on the wire (was: identity used
+        prompt.system but the wire silently fell back to DEFAULT_SYSTEM_PROMPT).
+        cache_identity picks explicit provider fields only, so the extra key
+        never enters the identity on its own."""
         prov = dict(self.settings.get("provider", {}))
-        instructions = (self.settings.get("prompt", {}).get("system")
-                        or provider_mod.DEFAULT_SYSTEM_PROMPT)
+        instructions = active_prompt_text(self.settings) or provider_mod.DEFAULT_SYSTEM_PROMPT
+        prov["system"] = instructions
         return prov, instructions
 
     def _namespace_of(self, prov, instructions):
@@ -206,8 +215,14 @@ class Engine:
         # Issue #31: the job carries the provider its identity was computed from,
         # so the result written under that identity always came from that
         # provider - even if Settings changed while the job sat in the queue.
-        prov = (dict(job.context.provider) if job.context is not None
-                else dict(self.settings.get("provider", {})))
+        if job.context is not None:
+            prov = dict(job.context.provider)
+        else:
+            # Bare job (no snapshot): fall back to live settings, but still
+            # carry the active preset so the wire shape matches the preview
+            # and the identity (#39 D5) instead of DEFAULT_SYSTEM_PROMPT.
+            prov = dict(self.settings.get("provider", {}))
+            prov["system"] = active_prompt_text(self.settings) or provider_mod.DEFAULT_SYSTEM_PROMPT
         if not _provider_usable(prov):
             # Defence in depth for a job queued without a provider snapshot.
             return {"aligned": False, "text": "", "error": "NOT_CONFIGURED"}

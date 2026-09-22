@@ -184,6 +184,38 @@ def _retry_after_s(headers):
         return None
 
 
+def build_instructions(preset_text, context_prev="", context_next="",
+                      expected_lines=0):
+    """THE single system-prompt assembly function (ADR-010 / issue #39).
+
+    Three segments, fixed order, none overriding another:
+      1. preset text - the task-definition segment, the only user-editable one;
+      2. neighbour context label lines - protocol segment, appended only when
+         context is non-empty (the caller gates on prompt.context_groups);
+      3. the N|line alignment instruction - protocol segment, appended only
+         when expected_lines > 1.
+    The user message is always the pure current sentence and is NOT built
+    here. Production (translate_group), the panel read-only preview and the
+    connection test all call this function - never a copy of it. The wording
+    is byte-pinned: it feeds the cache identity, so changing it would fork
+    every cache row for zero user benefit (#39 Testing Decision 2)."""
+    instructions = preset_text or DEFAULT_SYSTEM_PROMPT
+    if context_prev or context_next:
+        ctx = []
+        if context_prev:
+            ctx.append("Previous line (context only, do not translate): " + context_prev)
+        if context_next:
+            ctx.append("Next line (context only, do not translate): " + context_next)
+        instructions = instructions + chr(10) + chr(10).join(ctx)
+    if expected_lines > 1:
+        instructions = instructions + chr(10) + (
+            "The input is one sentence split into " + str(expected_lines) +
+            " subtitle lines. Translate the whole sentence, then output exactly " +
+            str(expected_lines) + " lines in format 'N|translation' (N=1.." +
+            str(expected_lines) + ") matching the original line breaks. No other text.")
+    return instructions
+
+
 def translate_group(cfg, group_text, context_prev="", context_next="",
                     expected_lines=0, sleep=time.sleep, now=time.time):
     """Translate one sentence group with retries/backoff.
@@ -201,21 +233,9 @@ def translate_group(cfg, group_text, context_prev="", context_next="",
         endpoint, protocol = coerce_endpoint(cfg.get("base_url"), cfg.get("protocol"))
     except ProviderError as e:
         return {"error": e.code}
-    instructions = cfg.get("system") or DEFAULT_SYSTEM_PROMPT
+    instructions = build_instructions(cfg.get("system"), context_prev,
+                                     context_next, expected_lines)
     prompt = group_text
-    if context_prev or context_next:
-        ctx = []
-        if context_prev:
-            ctx.append("Previous line (context only, do not translate): " + context_prev)
-        if context_next:
-            ctx.append("Next line (context only, do not translate): " + context_next)
-        instructions = instructions + chr(10) + chr(10).join(ctx)
-    if expected_lines > 1:
-        instructions = instructions + chr(10) + (
-            "The input is one sentence split into " + str(expected_lines) +
-            " subtitle lines. Translate the whole sentence, then output exactly " +
-            str(expected_lines) + " lines in format 'N|translation' (N=1.." +
-            str(expected_lines) + ") matching the original line breaks. No other text.")
     body = build_body(protocol, model, instructions, prompt, stream=False)
     timeout_s = float(cfg.get("timeout_s") or REQUEST_TIMEOUT_S)
     max_retries = int(cfg.get("max_retries") if cfg.get("max_retries") is not None else MAX_RETRIES)

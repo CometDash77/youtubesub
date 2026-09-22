@@ -1,6 +1,6 @@
 """youtubesub desktop app entry point.
 Wires: WSServer -> Engine -> OverlayWindow (Qt timer pump)."""
-import queue, sys, os, time
+import queue, sys, os, time, uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -11,15 +11,43 @@ from suboverlay.hotkey import ComboWatcher
 from suboverlay.overlay import OverlayWindow
 from suboverlay.server import WSServer
 from suboverlay import settings as S
+from suboverlay import provider as P
 from suboverlay.protocol import DEFAULT_PORT
+
+# The dialog has no live neighbours, so the effective preview demonstrates the
+# context label lines with these example texts when (and only when) the
+# context_groups switch is on - the switch state must be visible in the
+# preview (#39 Implementation Decision 5).
+PREVIEW_PREV_EXAMPLE = "(previous group)"
+PREVIEW_NEXT_EXAMPLE = "(next group)"
+
+
+def _ask_new_name(parent, initial):
+    """Rename prompt. Module-level seam so offscreen tests can stub the
+    modal input dialog instead of blocking on it."""
+    name, ok = QtWidgets.QInputDialog.getText(
+        parent, "Rename preset", "Name:", text=initial)
+    return (name or "").strip() if ok else ""
 
 
 class SettingsDialog(QtWidgets.QDialog):
+    """Settings panel. The prompt section implements #39 / ADR-010: a preset
+    dropdown (built-in / custom groups), copy-as-custom, rename/delete (both
+    disabled on built-ins), a multiline editor (read-only on built-ins), a
+    read-only effective preview built by the ONE assembly function, and the
+    prompt.context_groups checkbox. Edits only persist on OK (#4 semantics)."""
+
     def __init__(self, settings, parent=None):
         super().__init__(parent)
         self.settings = settings
         self.setWindowTitle("AI Translation Settings")
         prov = settings["provider"]
+        prompt = settings["prompt"]
+        self._presets = [dict(p) for p in prompt.get("presets", [])]  # working copy
+        self._active = prompt.get("active") or "default"
+        if self._find_custom(self._active) is None and not any(
+                b["id"] == self._active for b in S.BUILTIN_PROMPTS):
+            self._active = "default"
         form = QtWidgets.QFormLayout(self)
         self.base_url = QtWidgets.QLineEdit(prov.get("base_url", ""))
         self.api_key = QtWidgets.QLineEdit(prov.get("api_key", ""))
@@ -28,8 +56,29 @@ class SettingsDialog(QtWidgets.QDialog):
         self.protocol = QtWidgets.QComboBox()
         self.protocol.addItems(["auto", "responses", "chat-completions"])
         self.protocol.setCurrentText(prov.get("protocol", "auto"))
-        self.system = QtWidgets.QPlainTextEdit(settings["prompt"].get("system", ""))
+        self.preset = QtWidgets.QComboBox()
+        self.preset.currentIndexChanged.connect(self._on_preset_changed)
+        btn_row = QtWidgets.QHBoxLayout()
+        self.copy_btn = QtWidgets.QPushButton("Copy as custom")
+        self.rename_btn = QtWidgets.QPushButton("Rename")
+        self.delete_btn = QtWidgets.QPushButton("Delete")
+        self.copy_btn.clicked.connect(self._copy_preset)
+        self.rename_btn.clicked.connect(self._rename_preset)
+        self.delete_btn.clicked.connect(self._delete_preset)
+        btn_row.addWidget(self.copy_btn)
+        btn_row.addWidget(self.rename_btn)
+        btn_row.addWidget(self.delete_btn)
+        btn_row.addStretch(1)
+        self.system = QtWidgets.QPlainTextEdit()
         self.system.setFixedHeight(80)
+        self.system.textChanged.connect(self._on_text_edited)
+        self.preview = QtWidgets.QPlainTextEdit()
+        self.preview.setFixedHeight(80)
+        self.preview.setReadOnly(True)
+        self.context_groups = QtWidgets.QCheckBox(
+            "Carry context (prev/next group)")
+        self.context_groups.setChecked(bool(prompt.get("context_groups", 1)))
+        self.context_groups.toggled.connect(self._refresh_preview)
         self.mock = QtWidgets.QCheckBox("Mock mode (no real API)")
         self.mock.setChecked(bool(prov.get("mock")))
         self.font_size = QtWidgets.QSpinBox()
@@ -39,13 +88,173 @@ class SettingsDialog(QtWidgets.QDialog):
         form.addRow("API Key", self.api_key)
         form.addRow("Model", self.model)
         form.addRow("Protocol", self.protocol)
-        form.addRow("System Prompt", self.system)
+        form.addRow("Prompt preset", self.preset)
+        form.addRow("", self._wrap(btn_row))
+        form.addRow("Prompt text", self.system)
+        form.addRow("Effective preview", self.preview)
+        form.addRow("", self.context_groups)
         form.addRow("", self.mock)
         form.addRow("Font size", self.font_size)
         buttons = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         form.addRow(buttons)
+        # Populate last: _rebuild_preset_combo -> _sync_buttons needs the
+        # buttons and the editor to exist already.
+        self._rebuild_preset_combo()
+        self._load_active_into_editor()
+        self._refresh_preview()
+
+    @staticmethod
+    def _wrap(layout):
+        w = QtWidgets.QWidget()
+        w.setLayout(layout)
+        return w
+
+    # ---- preset working set (#39 / ADR-010) ----
+    def _find_custom(self, pid):
+        for p in self._presets:
+            if p.get("id") == pid:
+                return p
+        return None
+
+    def _rebuild_preset_combo(self):
+        """Two groups: built-ins first (locked), then custom. Selection is
+        restored to the current active id."""
+        keep = self._active
+        self.preset.blockSignals(True)
+        self.preset.clear()
+        self.preset.addItem("--- Built-in ---", None)
+        for b in S.BUILTIN_PROMPTS:
+            self.preset.addItem(b["name"], b["id"])
+        self.preset.insertSeparator(self.preset.count())
+        self.preset.addItem("--- My presets ---", None)
+        for p in self._presets:
+            self.preset.addItem(p.get("name") or p["id"], p["id"])
+        idx = self.preset.findData(keep)
+        self.preset.setCurrentIndex(idx if idx >= 0 else self.preset.findData("default"))
+        self.preset.blockSignals(False)
+        self._sync_buttons()
+
+    def _current_id(self):
+        return self.preset.currentData()
+
+    def _is_builtin(self, pid=None):
+        pid = self._current_id() if pid is None else pid
+        return any(b["id"] == pid for b in S.BUILTIN_PROMPTS)
+
+    def _sync_buttons(self):
+        builtin = self._is_builtin()
+        self.rename_btn.setEnabled(not builtin)
+        self.delete_btn.setEnabled(not builtin)
+        self.system.setReadOnly(builtin)
+
+    def _active_text(self):
+        pid = self._current_id()
+        if self._is_builtin(pid):
+            for b in S.BUILTIN_PROMPTS:
+                if b["id"] == pid:
+                    return b["text"]
+        custom = self._find_custom(pid)
+        return custom["text"] if custom else S.DEFAULT_PROMPT_TEXT
+
+    def _load_active_into_editor(self):
+        self.system.blockSignals(True)
+        self.system.setPlainText(self._active_text())
+        self.system.blockSignals(False)
+        self._sync_buttons()
+
+    def _on_preset_changed(self, *_):
+        pid = self._current_id()
+        if pid is None:
+            # Group header or separator clicked - snap back to the real
+            # selection; headers carry no preset id.
+            idx = self.preset.findData(self._active)
+            if idx >= 0:
+                self.preset.blockSignals(True)
+                self.preset.setCurrentIndex(idx)
+                self.preset.blockSignals(False)
+            return
+        self._active = pid
+        self._load_active_into_editor()
+        self._refresh_preview()
+
+    def _on_text_edited(self, *_):
+        # Editing applies only to custom presets; built-ins are read-only.
+        if not self._is_builtin():
+            custom = self._find_custom(self._current_id())
+            if custom is not None:
+                custom["text"] = self.system.toPlainText()
+        self._refresh_preview()
+
+    def _unique_copy_name(self, base):
+        name = base + " \u526f\u672c"   # 副本 - naming fixed by #39
+        n = 2
+        existing = {p.get("name") for p in self._presets}
+        while name in existing:
+            name = "%s \u526f\u672c %d" % (base, n)
+            n += 1
+        return name
+
+    def _copy_preset(self):
+        """Copy the selected preset (built-in or custom) into a new custom one
+        and select it - the only way to edit a built-in (#39 / ADR-010)."""
+        pid = self._current_id()
+        text = self.system.toPlainText()  # unsaved edits included
+        base = pid
+        for b in S.BUILTIN_PROMPTS:
+            if b["id"] == pid:
+                base = b["name"]
+                break
+        else:
+            custom = self._find_custom(pid)
+            base = (custom.get("name") if custom else pid) or pid
+        new_id = "prompt_" + uuid.uuid4().hex[:8]
+        self._presets.append({"id": new_id,
+                              "name": self._unique_copy_name(base),
+                              "text": text})
+        self._active = new_id
+        self._rebuild_preset_combo()
+        self._load_active_into_editor()
+        self._refresh_preview()
+
+    def _rename_preset(self):
+        if self._is_builtin():
+            return
+        custom = self._find_custom(self._current_id())
+        if custom is None:
+            return
+        name = _ask_new_name(self, custom.get("name", ""))
+        if name:
+            custom["name"] = name
+            self._rebuild_preset_combo()
+            self._refresh_preview()
+
+    def _delete_preset(self):
+        if self._is_builtin():
+            return
+        pid = self._current_id()
+        self._presets = [p for p in self._presets if p.get("id") != pid]
+        if self._active == pid:
+            # Deleting the active custom falls back to the default built-in -
+            # the user never lands in a "no prompt" empty state (#39 D5).
+            self._active = "default"
+        self._rebuild_preset_combo()
+        self._load_active_into_editor()
+        self._refresh_preview()
+
+    def _refresh_preview(self, *_):
+        """Read-only effective preview: built by the SAME assembly function
+        production uses (#39 Testing Decision 5 - preview == production, one
+        function, not two constants). The dialog has no live neighbours, so
+        the context label lines are demonstrated with example texts when the
+        switch is on - that is how the switch state stays visible here."""
+        on = self.context_groups.isChecked()
+        self.preview.setPlainText(
+            P.build_instructions(self._active_text(),
+                                 PREVIEW_PREV_EXAMPLE if on else "",
+                                 PREVIEW_NEXT_EXAMPLE if on else "",
+                                 0))
 
     def accept(self):
         prov = self.settings["provider"]
@@ -55,7 +264,15 @@ class SettingsDialog(QtWidgets.QDialog):
         prov["protocol"] = self.protocol.currentText()
         prov["mock"] = self.mock.isChecked()
         self.settings["display"]["font_size"] = self.font_size.value()
-        self.settings["prompt"]["system"] = self.system.toPlainText()
+        active = self._current_id() or "default"
+        if not self._is_builtin(active) and self._find_custom(active) is None:
+            active = "default"
+        # One-way schema (#39): the legacy "system" key is never written back.
+        self.settings["prompt"] = {
+            "active": active,
+            "presets": [dict(p) for p in self._presets],
+            "context_groups": 1 if self.context_groups.isChecked() else 0,
+        }
         S.save(self.settings)
         super().accept()
 
