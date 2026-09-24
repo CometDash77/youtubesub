@@ -14,7 +14,7 @@ import sys
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from PySide6 import QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 
 from suboverlay.overlay import OverlayWindow
 from suboverlay.settings import default_settings
@@ -145,3 +145,84 @@ def test_a_text_that_already_carries_its_label_is_not_labelled_twice():
     depend on that; the row label must not double up on it."""
     log = paint("trans", "\u539f\u6587", TRANS_LABEL + "\u539f\u6587", trans_available=True)
     assert log.texts == [TRANS_LABEL + "\u539f\u6587"]
+
+
+def test_long_unspaced_translation_wraps_within_the_available_width():
+    w = OverlayWindow(default_settings())
+    area = QtCore.QRect(10, 10, 72, 100)
+    font = QtGui.QFont("Microsoft YaHei UI", 18)
+    image = QtGui.QImage(140, 130, QtGui.QImage.Format_ARGB32_Premultiplied)
+    image.fill(QtCore.Qt.transparent)
+    painter = QtGui.QPainter(image)
+
+    end_y = w._draw_wrapped(
+        painter, font, "\u591a\u5e74\u6765\u8d5b\u8f66\u8fd0\u52a8\u4e2d\u4f7f\u7528\u7684\u53d1\u8f66\u683c\u52a8\u753b\u786e\u5b9e\u81ea\u6210\u4e00\u4f53",
+        area, area.top(), QtGui.QColor(255, 224, 130), 2.0)
+    painter.end()
+
+    line_height = QtGui.QFontMetrics(font).height() + 3
+    assert end_y >= area.top() + 3 * line_height
+    assert all(image.pixelColor(x, y).alpha() == 0
+               for x in range(area.right() + 1, image.width())
+               for y in range(image.height()))
+
+
+def test_long_single_word_wraps_at_large_font_and_narrow_width():
+    w = OverlayWindow(default_settings())
+    area = QtCore.QRect(10, 10, 48, 500)
+    font = QtGui.QFont("Microsoft YaHei UI", 30)
+    image = QtGui.QImage(100, 530, QtGui.QImage.Format_ARGB32_Premultiplied)
+    image.fill(QtCore.Qt.transparent)
+    painter = QtGui.QPainter(image)
+
+    end_y = w._draw_wrapped(
+        painter, font, "InternationalChampionshipFinals",
+        area, area.top(), QtGui.QColor(255, 224, 130), 2.0)
+    painter.end()
+
+    line_height = QtGui.QFontMetrics(font).height() + 3
+    assert end_y >= area.top() + 3 * line_height
+    assert all(image.pixelColor(x, y).alpha() == 0
+               for x in range(area.right() + 1, image.width())
+               for y in range(image.height()))
+
+
+def test_long_translation_renders_inside_bounds_in_trans_and_bilingual_modes():
+    translation = ("\u591a\u5e74\u6765\u8d5b\u8f66\u8fd0\u52a8\u4e2d"
+                   "\u4f7f\u7528\u7684\u53d1\u8f66\u683c\u52a8\u753b"
+                   "\u786e\u5b9e\u81ea\u6210\u4e00\u4f53\u5e76\u4e14"
+                   "\u6bcf\u4e2a\u7ec6\u8282\u90fd\u80fd\u8bf4\u660e"
+                   "\u8fd9\u9879\u8fd0\u52a8\u7684\u590d\u6742\u5386\u53f2")
+    for mode in ("trans", "bilingual"):
+        w = OverlayWindow(default_settings())
+        w.resize(220, 260)
+        w.mode = mode
+        w.order = "trans_first"
+        w.trans_text = translation
+        w.orig_text = "Original row" if mode == "bilingual" else ""
+        w.trans_available = True
+        image = QtGui.QImage(w.size(), QtGui.QImage.Format_ARGB32_Premultiplied)
+        image.fill(QtCore.Qt.transparent)
+        painter = QtGui.QPainter(image)
+        w.render(painter, QtCore.QPoint())
+        painter.end()
+
+        area = w.rect().adjusted(14, 14, -14, -14)
+        yellow_points = []
+        white_points = []
+        for y in range(image.height()):
+            for x in range(image.width()):
+                pixel = image.pixelColor(x, y)
+                if pixel.red() > 220 and pixel.green() > 180 and pixel.blue() < 180:
+                    yellow_points.append((x, y))
+                if pixel.red() > 240 and pixel.green() > 240 and pixel.blue() > 240:
+                    white_points.append((x, y))
+
+        assert len({y for _, y in yellow_points}) > 3
+        assert all(area.left() <= x <= area.right() and
+                   area.top() <= y <= area.bottom()
+                   for x, y in yellow_points)
+        if mode == "bilingual":
+            assert white_points
+            assert len({y for _, y in white_points}) > 3
+            assert min(y for _, y in white_points) > max(y for _, y in yellow_points)
