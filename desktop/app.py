@@ -522,6 +522,7 @@ class App:
         d = s.get("display") or {}
         payload = {"state": d.get("state", ""), "orig": d.get("orig", ""),
                    "trans": d.get("trans", ""),
+                   "trans_state": d.get("trans_state") or "idle",
                    "trans_available": bool(d.get("trans_available", False)),
                    "playing": d.get("playing"),
                    "rate": d.get("rate"), "title": d.get("title", ""),

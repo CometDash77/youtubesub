@@ -95,6 +95,44 @@ def test_health_and_status_routes():
         srv.stop()
 
 
+def test_status_projects_current_translation_state_to_the_top_level():
+    from types import SimpleNamespace
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+    from app import App
+
+    current = {"value": "waiting"}
+
+    class EngineStub:
+        def status(self):
+            return {"sources": 1, "active_source": "s1",
+                    "display": {"state": "ok", "orig": "hello", "trans": "",
+                                "trans_available": True,
+                                "trans_state": current["value"]}}
+
+    app = App.__new__(App)
+    app.engine = EngineStub()
+    app.overlay = SimpleNamespace(mode="bilingual", order="trans_first",
+                                  history=[], _click_through=False)
+    app.tester = SimpleNamespace(status_payload=lambda: {})
+    srv = WSServer(port=PORT + 5, event_queue=queue.Queue(maxsize=10),
+                   status_provider=app._status)
+    srv.start()
+    time.sleep(0.4)
+    try:
+        states = ["idle", "waiting", "translating", "unconfigured", "ready",
+                  "failed:额度不足"]
+        for state in states:
+            current["value"] = state
+            code, body = _http_get(PORT + 5, "/status")
+            data = json.loads(body)
+            assert code == 200 and data["version"] == 1
+            assert data["trans_state"] == state
+            assert data["state"] == "ok" and data["orig"] == "hello"
+            assert "display" not in data, "trans_state belongs at the API top level"
+    finally:
+        srv.stop()
+
+
 def test_status_without_provider_leaks_nothing_and_survives_provider_failure():
     evq = queue.Queue(maxsize=100)
     plain = WSServer(port=PORT + 2, event_queue=evq)
@@ -104,7 +142,8 @@ def test_status_without_provider_leaks_nothing_and_survives_provider_failure():
         code, body = _http_get(PORT + 2, "/status")
         data = json.loads(body)
         assert code == 200 and data["ok"] is True
-        assert "orig" not in data and "trans" not in data, "no UI data without a provider"
+        assert not {"orig", "trans", "trans_state"} & data.keys(), \
+            "no UI data without a provider"
     finally:
         plain.stop()
 

@@ -54,7 +54,12 @@ def status_until(h, pred, timeout=20.0, what="condition"):
             return {"status": h.status(), "page_error": repr(e)}
     E2E.wait_for(lambda: pred(h.status()) or None, timeout=timeout,
                  what=what, detail=detail)
-    return h.status()
+    status = h.status()
+    state = status.get("trans_state")
+    assert state in {"idle", "waiting", "translating", "unconfigured", "ready"} \
+        or (isinstance(state, str) and state.startswith("failed:")
+            and 0 < len(state[len("failed:"):]) <= 16), status
+    return status
 
 
 def test_real_userscript_connects_and_registers_a_source(h):
@@ -81,6 +86,7 @@ def test_real_timedtext_becomes_the_exact_subtitle(h):
     st = status_until(h, lambda s: MOCK_MARK in (s.get("trans") or ""),
                       what="a translated line for the first cue")
     assert st["trans"].startswith(MOCK_MARK)
+    assert st["trans_state"] == "ready", st
     assert E2E.cue_text(E2E.VIDEO_A, 0) in st["trans"], st["trans"]
 
 
