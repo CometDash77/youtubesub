@@ -118,6 +118,7 @@ class Engine:
         self._queue = TranslationQueue(settings.get("provider", {}), self._cache,
                                        workers=self._workers, on_done=self._on_done,
                                        translate_fn=self._translate_fn)
+        self._translation_enabled = self._translation_mode_enabled()
         self.display_cb = None   # called on translation arrivals (UI refresh)
         self.last_display = None  # latest tick() result, for /status diagnostics
         self._provider_ns = None  # provider namespace the in-memory translations belong to
@@ -219,6 +220,34 @@ class Engine:
         self.handle_event({"type": "cues", "source_id": source_id, **meta, "cues": cues})
 
     # ---- translation scheduling ----
+    def _translation_mode_enabled(self):
+        """Translation modes are bilingual and translation-only; original-only
+        deliberately leaves the provider pipeline dormant (#61)."""
+        return (self.settings.get("display", {}).get("mode") or "bilingual") != "orig"
+
+    def _sync_translation_mode(self):
+        """Apply a display-mode edge at the scheduling boundary.
+
+        Pending work is no longer useful when the user chooses original-only;
+        TranslationQueue.cancel_source drops pending jobs but preserves any HTTP
+        request already in flight. Re-enabling begins from the live playhead.
+        """
+        enabled = self._translation_mode_enabled()
+        if enabled == self._translation_enabled:
+            return enabled
+        sid = self.active_source
+        if not enabled and sid is not None:
+            self._queue.cancel_source(sid)
+        src = self.sources.get(sid) if sid is not None else None
+        if src is not None:
+            src.last_group_idx = None
+            src.window_anchor = None
+            # A mode switch starts its own current-window fill immediately; it
+            # must not inherit a seek debounce from an earlier mode.
+            src.prefetch_quiet_until = 0.0
+        self._translation_enabled = enabled
+        return enabled
+
     def _client_key(self, src, g):
         return "|".join([str(src.meta.get("video_id") or ""), str(src.meta.get("track_kind") or ""),
                          str(g.start_ms), str(g.end_ms), g.text[:400]])
@@ -286,6 +315,8 @@ class Engine:
                               context=ProviderContext(prov, self._namespace_of(prov, instructions)))
 
     def _submit_group(self, src, gi, priority):
+        if not self._translation_mode_enabled():
+            return
         job = self._build_job(src, gi, priority)
         if job is not None:
             accepted = self._queue.submit(job)
@@ -306,7 +337,7 @@ class Engine:
 
     def _submit_prefetch_groups(self, src, todo):
         """Submit a fill burst in contract-sized chunks, preserving group order."""
-        if not todo:
+        if not todo or not self._translation_mode_enabled():
             return
         if len(todo) == 1:
             self._submit_group(src, todo[0], NORMAL)
@@ -575,6 +606,7 @@ class Engine:
     def _tick_locked(self):
         with self._lock:
             self._sync_namespace()
+            translation_enabled = self._sync_translation_mode()
             sid = self.active_source
             if sid is None:
                 return None
@@ -587,7 +619,8 @@ class Engine:
                 usable = _provider_usable(self.settings.get("provider", {}))
                 hook_error = (src.meta.get("hook_error") or "") if src else ""
                 capture_error = (src.meta.get("capture_error") or "") if src else ""
-                trans_state = ("unconfigured" if not usable else
+                trans_state = ("idle" if not translation_enabled else
+                               "unconfigured" if not usable else
                                "waiting" if not hook_error and not capture_error else "idle")
                 return {"state": "no_cues", "trans_state": trans_state,
                         "title": src.meta.get("tab_title") if src else "",
@@ -595,7 +628,7 @@ class Engine:
                         "trans_available": usable}
             t = estimate_ms(src.sync)
             cue, gi, trans = self._timeline_display(src, t)
-            if gi is not None and gi != src.last_group_idx:
+            if translation_enabled and gi is not None and gi != src.last_group_idx:
                 src.last_group_idx = gi
                 # The sentence on screen (URGENT): never debounced, never throttled
                 # (spec #24 decision 2).
@@ -614,14 +647,14 @@ class Engine:
             # recomputed when playback crosses into a new group (event-native
             # incremental advance), after a seek, and after backoff - not on a
             # coarse timer (spec #24 decision 2 / 3).
-            if (gi is not None and src.sync.playing
+            if (translation_enabled and gi is not None and src.sync.playing
                     and time.time() >= src.prefetch_quiet_until
                     and src.window_anchor != gi):
                 src.window_anchor = gi
                 self._fill_window(src, gi, t)
             title = src.meta.get("tab_title") or ""
             usable = _provider_usable(self.settings.get("provider", {}))
-            trans_state = ("idle" if gi is None else
+            trans_state = ("idle" if not translation_enabled or gi is None else
                            "unconfigured" if not usable else
                            "ready" if trans else
                            src.group_failures.get(gi, src.group_states.get(gi, "translating")))

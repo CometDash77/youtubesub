@@ -70,6 +70,7 @@ class RecordingQueue:
     def __init__(self):
         self.jobs = []     # every job, in submission order
         self.batches = []  # one list per submit_batch call - the chunk boundaries
+        self.cancelled_sources = []
 
     def submit(self, job):
         self.jobs.append(job)
@@ -84,6 +85,7 @@ class RecordingQueue:
         return False  # never in backoff: a refill must never be deferred here
 
     def cancel_source(self, source_id):
+        self.cancelled_sources.append(source_id)
         return 0  # nothing runs here, so nothing is pending to cancel
 
 
@@ -1127,3 +1129,108 @@ def test_switching_away_drops_the_old_sources_pending_prefetch(tmp_path):
         "the old source's pending window fill must never be paid for: %r" % (
             [[j.group_idx for j in c] for c in calls],)
     e._queue.shutdown()
+
+
+def test_original_only_blocks_all_scheduling_and_translation_mode_starts_at_playhead(tmp_path):
+    from suboverlay.queue_cache import NORMAL, URGENT
+
+    e = mk_engine(tmp_path)
+    real_q = e._queue
+    rec = e._queue = RecordingQueue()
+    real_q.shutdown()
+    try:
+        e.settings["display"]["mode"] = "orig"
+        e.handle_event({"type": "cues", "source_id": "s1", "video_id": "v1",
+                        "track_kind": "manual", "track_lang": "en",
+                        "cues": sentence_cues(8, 2000)})
+        sync_at(e, "s1", 5000, playing=True)  # current sentence is group 2
+
+        display = e.tick()
+        assert display["trans_state"] == "idle"
+        assert rec.jobs == [] and rec.batches == [], \
+            "original-only must not submit urgent, prefetch, or batch work"
+
+        # Enabling translation starts at the live playhead; earlier groups stay untouched.
+        e.settings["display"]["mode"] = "bilingual"
+        display = e.tick()
+        assert display["trans_state"] == "translating"
+        assert [(j.group_idx, j.priority) for j in rec.jobs] == [
+            (2, URGENT), (3, NORMAL), (4, NORMAL), (5, NORMAL),
+            (6, NORMAL), (7, NORMAL)]
+        assert all(j.group_idx >= 2 for j in rec.jobs), \
+            "switching modes must not backfill already-played groups"
+
+        submitted = len(rec.jobs)
+        e.settings["display"]["mode"] = "orig"
+        display = e.tick()
+        assert display["trans_state"] == "idle"
+        assert len(rec.jobs) == submitted
+        assert rec.cancelled_sources[-1] == "s1"
+    finally:
+        e._queue = real_q
+        real_q.shutdown()
+
+
+def test_original_only_transition_preserves_inflight_and_cancels_pending(tmp_path):
+    gate = {"hold": True}
+    calls, holder = [], {}
+
+    def rec(jobs):
+        calls.append(list(jobs))
+        while gate["hold"]:
+            time.sleep(0.01)
+        return holder["default"](jobs)
+
+    e = mk_engine(tmp_path, workers=1, translate_fn=rec)
+    holder["default"] = e._default_translate
+    e.handle_event({"type": "cues", "source_id": "s1", "video_id": "v1",
+                    "track_kind": "manual", "track_lang": "en",
+                    "cues": sentence_cues(8, 2000)})
+    sync_at(e, "s1", 5000, playing=True)
+    e.tick()
+    assert wait_for(lambda: len(calls) == 1), "current urgent request must be in flight"
+    assert e._queue.stats()["pending"] > 0, "the lookahead must be pending behind urgent"
+
+    e.settings["display"]["mode"] = "orig"
+    display = e.tick()
+    assert display["trans_state"] == "idle"
+    assert e._queue.stats()["inflight"] == 1, \
+        "mode switch must never interrupt the in-flight request"
+    gate["hold"] = False
+    assert wait_for(lambda: e._queue.stats() == {"pending": 0, "inflight": 0}), \
+        "the in-flight translation must be allowed to finish"
+    assert e.sources["s1"].group_trans.get(2), \
+        "an in-flight result remains useful and may populate the translation model"
+    assert len(calls) == 1, "no queued prefetch batch may start after the mode switch"
+    e._queue.shutdown()
+
+
+def test_prefetch_failure_callback_cannot_resubmit_after_original_only_switch(tmp_path):
+    from suboverlay.queue_cache import NORMAL
+
+    e = mk_engine(tmp_path)
+    real_q = e._queue
+    rec = e._queue = RecordingQueue()
+    real_q.shutdown()
+    try:
+        e.handle_event({"type": "cues", "source_id": "s1", "video_id": "v1",
+                        "track_kind": "manual", "track_lang": "en",
+                        "cues": sentence_cues(5, 2000)})
+        sync_at(e, "s1", 500, playing=True)
+        e.tick()  # group 1 is submitted as NORMAL while group 0 is current
+        prefetched = next(j for j in rec.jobs
+                          if j.group_idx == 1 and j.priority == NORMAL)
+
+        sync_at(e, "s1", 2500, playing=True)
+        e.tick()  # group 1 becomes current while its prefetch is conceptually in flight
+        assert e.sources["s1"].last_group_idx == 1
+        submitted = len(rec.jobs)
+
+        # This is the race window: mode changes before the next tick sees the edge.
+        e.settings["display"]["mode"] = "orig"
+        e._on_done(prefetched, {"error": "NETWORK"})
+        assert len(rec.jobs) == submitted, \
+            "a prefetch failure callback must not start an urgent retry after the mode switch"
+    finally:
+        e._queue = real_q
+        real_q.shutdown()

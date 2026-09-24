@@ -546,20 +546,25 @@ class DesktopApp:
     and never talks to a real translation API.
     """
 
-    def __init__(self, port, offscreen=True):
+    def __init__(self, port, offscreen=True, mode="bilingual", provider=None,
+                 mode_control=False):
         self.port = port
         self.offscreen = offscreen
+        self.mode_control = mode_control
+        self.mode_port = free_port() if mode_control else None
         self.appdata = tempfile.mkdtemp(prefix="ytus-appdata-")
         self.log_path = os.path.join(self.appdata, "app.log")
         d = os.path.join(self.appdata, "SubOverlay")
         os.makedirs(d, exist_ok=True)
+        settings = {
+            "server": {"port": port},
+            "provider": provider or {"base_url": "", "api_key": "", "model": "",
+                                     "protocol": "auto", "mock": True},
+            "display": {"mode": mode},
+            "window": {"x": 220, "y": 150, "w": 780, "h": 130},
+        }
         with open(os.path.join(d, "setting.json"), "w", encoding="utf-8") as f:
-            json.dump({
-                "server": {"port": port},
-                "provider": {"base_url": "", "api_key": "", "model": "",
-                             "protocol": "auto", "mock": True},
-                "window": {"x": 220, "y": 150, "w": 780, "h": 130},
-            }, f, indent=2)
+            json.dump(settings, f, indent=2)
         self.proc = None
 
     def start(self):
@@ -567,10 +572,26 @@ class DesktopApp:
         env["APPDATA"] = self.appdata
         if self.offscreen:
             env["QT_QPA_PLATFORM"] = "offscreen"
+        app_path = os.path.join(DESKTOP_DIR, "app.py")
+        if self.mode_control:
+            env["YOUTUBESUB_E2E_MODE_PORT"] = str(self.mode_port)
+            app_path = os.path.join(HERE, "e2e_app.py")
         self._log = open(self.log_path, "wb")
-        self.proc = subprocess.Popen([sys.executable, os.path.join(DESKTOP_DIR, "app.py")],
+        self.proc = subprocess.Popen([sys.executable, app_path],
                                      cwd=DESKTOP_DIR, env=env,
                                      stdout=self._log, stderr=subprocess.STDOUT)
+
+    def set_mode(self, mode):
+        if not self.mode_control:
+            raise RuntimeError("mode control is available only in the test harness")
+        conn = http.client.HTTPConnection("127.0.0.1", self.mode_port, timeout=3)
+        conn.request("POST", "/mode", json.dumps({"mode": mode}),
+                     {"Content-Type": "application/json"})
+        response = conn.getresponse()
+        response.read()
+        conn.close()
+        if response.status != 202:
+            raise RuntimeError("E2E app rejected mode change: HTTP %d" % response.status)
 
     def wait_healthy(self, timeout=30.0):
         deadline = time.time() + timeout
@@ -613,7 +634,8 @@ class DesktopApp:
 class Harness:
     """One running scenario: fixture origin + real app + real Chrome + real script."""
 
-    def __init__(self, headed=False, proxy=None, bypass_csp=False):
+    def __init__(self, headed=False, proxy=None, bypass_csp=False,
+                 desktop_options=None):
         self.headed = headed
         self.proxy = proxy
         # Live mode only: a real GM_addElement injects from the extension context,
@@ -621,6 +643,7 @@ class Harness:
         # no such privilege, so the harness asks Chrome to drop CSP for the page -
         # otherwise a live run fails for a harness reason, not a product reason.
         self.bypass_csp = bypass_csp
+        self.desktop_options = desktop_options or {}
         self.fixture = None
         self.app = None
         self.chrome = None
@@ -632,7 +655,8 @@ class Harness:
     def start(self):
         self.fixture = FixtureServer()
         self.app_port = free_port()
-        self.app = DesktopApp(self.app_port, offscreen=not self.headed)
+        self.app = DesktopApp(self.app_port, offscreen=not self.headed,
+                              **self.desktop_options)
         self.app.start()
         self.app.wait_healthy()
         self.chrome = Chrome(headed=self.headed, proxy=self.proxy, log_dir=self._tmp)

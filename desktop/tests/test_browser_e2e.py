@@ -15,8 +15,12 @@ Skipped (not failed) when Chrome is not installed. ORDER MATTERS: the SPA test
 replaces the page's video and must stay last.
 """
 import os
+import json
+import re
 import sys
+import threading
 import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
@@ -62,6 +66,52 @@ def status_until(h, pred, timeout=20.0, what="condition"):
     return status
 
 
+class CountingProvider:
+    """Local OpenAI-compatible endpoint for proving browser-driven scheduling."""
+
+    def __init__(self):
+        self.requests = []
+        self.lock = threading.Lock()
+        owner = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def do_POST(self):
+                body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
+                with owner.lock:
+                    owner.requests.append(body)
+                system = body.get("messages", [{}])[0].get("content", "")
+                match = re.search(r"exactly (\d+) lines", system)
+                content = ("\n".join("%d|translated" % n
+                                     for n in range(1, int(match.group(1)) + 1))
+                           if match else "translated")
+                data = json.dumps({"choices": [{"message": {"content": content}}]}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.config = {"base_url": "http://127.0.0.1:%d/v1" % self.server.server_address[1],
+                       "api_key": "test-key", "model": "test-model",
+                       "protocol": "chat-completions", "mock": False,
+                       "timeout_s": 2, "max_retries": 0}
+
+    def count(self):
+        with self.lock:
+            return len(self.requests)
+
+    def stop(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=2)
+
+
 def test_real_userscript_connects_and_registers_a_source(h):
     """(a)(b): the injected script probes /health, opens a real WS with the page's
     Origin, and the server accepts it (frames counted server-side)."""
@@ -88,6 +138,34 @@ def test_real_timedtext_becomes_the_exact_subtitle(h):
     assert st["trans"].startswith(MOCK_MARK)
     assert st["trans_state"] == "ready", st
     assert E2E.cue_text(E2E.VIDEO_A, 0) in st["trans"], st["trans"]
+
+
+def test_original_only_browser_cues_do_not_reach_provider_until_mode_switch():
+    provider = CountingProvider()
+    harness = E2E.Harness(desktop_options={
+        "mode": "orig", "provider": provider.config, "mode_control": True})
+    try:
+        harness.start()
+        harness.open(E2E.VIDEO_A)
+        harness.cdp.evaluate("__fixture.pause(); __fixture.seek(1.0);")
+        st = status_until(harness, lambda s: s.get("state") == "ok"
+                          and s.get("orig") == CUE0,
+                          what="the real browser cue while the overlay is original-only")
+        assert st["mode"] == "orig" and st["trans_state"] == "idle", st
+        assert provider.count() == 0, \
+            "real browser cues must not trigger urgent or prefetch provider requests"
+
+        harness.app.set_mode("bilingual")
+        status_until(harness, lambda s: s.get("mode") == "bilingual",
+                     what="the test controller's translation-mode change")
+        st = status_until(harness, lambda s: s.get("trans_state") == "ready",
+                          what="a translation after switching modes")
+        assert st["trans"], st
+        assert provider.count() > 0, \
+            "switching back to a translation mode must start work from the current cue"
+    finally:
+        harness.stop()
+        provider.stop()
 
 
 def test_play_pause_reaches_the_desktop_clock(h):

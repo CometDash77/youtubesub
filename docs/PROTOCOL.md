@@ -6,7 +6,7 @@
 "state":"ok|no_cues","orig":"...","trans":"...","trans_state":"idle|waiting|translating|unconfigured|ready|failed:<reason>","trans_available":bool,"playing":bool,"rate":num,"title":"...",
 "sources":n,"active_source":"...","mode":"...","order":"...","history":[[orig,trans],...],"click_through":bool,"hook_error":"...","capture_error":"...","connection_test":report?}`
 `trans_available` = 这一轮究竟会不会产出译文 (显式 Mock, 或 base_url 与 model 都非空; 由 engine 判定)。
-`trans_state` 是顶层当前渲染句状态：`idle` / `waiting` / `translating` / `unconfigured` / `ready` / `failed:<reason>`；失败原因与浮窗使用同一固定短文案映射。尚无 display 时为 `idle`。
+`trans_state` 是顶层当前渲染句状态：`idle` / `waiting` / `translating` / `unconfigured` / `ready` / `failed:<reason>`；失败原因与浮窗使用同一固定短文案映射。`idle` 表示原文-only、没有当前渲染句或处于已知字幕轨的 cue 间隙；`waiting` 表示链路正常但当前活动视频尚未收到 cue。
 `trans` 为空只表示「这一刻没有译文」, 不表示「没有翻译可用」—— 浮窗的 trans 模式据此决定译文为空时回退显示原文 (issue #1);
 显示层不解析 provider 配置, 只读这个字段。
 `hook_error` 非空 = 脚本连上了、但页面钩子没装成功; `capture_error` 非空 = 钩子装上了、也看到了字幕请求, 但响应没有可用正文 (都见 register); 两者都空 = 正常。
