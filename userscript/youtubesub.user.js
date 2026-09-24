@@ -168,8 +168,8 @@
       var url = xhr.__ytusUrl;
       if (isCaption(url)) {
         xhr.addEventListener('load', function () {
-          try { deliver(url, xhr.responseText, xhr.status); }
-          catch (error) { unreadable(url, error); }
+          try { deliver(xhr.__ytusUrl, xhr.responseText, xhr.status); }
+          catch (error) { unreadable(xhr.__ytusUrl, error); }
         });
       }
       return originalSend.apply(this, arguments);
@@ -252,203 +252,184 @@
     return 'ytus-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
   }
 
-  function Bridge() {
-    this.ws = null;
-    this.state = 'idle';
-    this.attempts = 0;
-    this.stopped = false;
-    this.videoEl = null;
-    this.statusEl = null;
-    this.hookError = '';
-    this.resetSource('');
-  }
-
-  Bridge.prototype.resetSource = function (videoId) {
-    this.sourceId = uuid();
-    this.videoId = videoId;
-    this.trackKey = '';
-    this.cueSig = '';
-    this.cueCount = -1;
-    this.trackKind = '';
-    this.trackLang = '';
-    this.captureError = '';
-    this.cache = { register: null, cues: null, sync: null };
-  }
-
-  Bridge.prototype.health = function (cb) {
-    var url = 'http://' + CFG.host + ':' + CFG.port + '/health';
-    // Without GM_xmlhttpRequest (script injected outside Tampermonkey, or the
-    // grant was stripped) we cannot probe /health at all. Attempting the socket
-    // is the only liveness test left, so fall through instead of never connecting.
-    if (typeof GM_xmlhttpRequest !== 'function') { cb(true); return; }
-    GM_xmlhttpRequest({
-      method: 'GET',
-      url: url,
-      timeout: 2000,
-      onload: function (r) { cb(r.status >= 200 && r.status < 300); },
-      onerror: function () { cb(false); },
-      ontimeout: function () { cb(false); }
-    });
-  };
-
-  Bridge.prototype.send = function (obj) {
-    if (this.ws && this.ws.readyState === 1) {
-      try { this.ws.send(JSON.stringify(obj)); return true; } catch (e) { return false; }
+  class Bridge {
+    constructor() {
+      this.ws = null;
+      this.state = 'idle';
+      this.attempts = 0;
+      this.stopped = false;
+      this.videoEl = null;
+      this.statusEl = null;
+      this.hookError = '';
+      this.resetSource('');
     }
-    return false;
-  };
 
-  Bridge.prototype.cacheAndSend = function (slot, obj) {
-    this.cache[slot] = obj;
-    return this.send(obj);
-  };
-
-  Bridge.prototype.connect = function () {
-    var self = this;
-    if (this.stopped) return;
-    this.setState('probing');
-    this.health(function (ok) {
-      if (self.stopped) return;
-      if (!ok) { self.scheduleReconnect(); return; }
-      self.openSocket();
-    });
-  };
-
-  Bridge.prototype.openSocket = function () {
-    var self = this;
-    this.setState('connecting');
-    var ws;
-    try {
-      ws = new WebSocket('ws://' + CFG.host + ':' + CFG.port + '/ws');
-    } catch (e) {
-      this.scheduleReconnect();
-      return;
+    resetSource(videoId) {
+      this.sourceId = uuid();
+      this.videoId = videoId;
+      this.trackKey = '';
+      this.cueSig = '';
+      this.cueCount = -1;
+      this.trackKind = '';
+      this.trackLang = '';
+      this.captureError = '';
+      this.cache = { register: null, cues: null, sync: null };
     }
-    this.ws = ws;
-    ws.onopen = function () {
-      self.attempts = 0;
-      self.setState('connected');
-      self.replay();
-    };
-    ws.onclose = function () { self.setState('closed'); self.scheduleReconnect(); };
-    ws.onerror = function () { self.setState('error'); };
-  };
 
-  Bridge.prototype.replay = function () {
-    this.send(this.cache.register || this.buildRegister());
-    if (this.cache.cues) this.send(this.cache.cues);
-    // A cached sync keeps its original timestamp. The next player event makes a
-    // fresh one; replay alone must not pretend that old media time is current.
-    if (this.cache.sync) this.send(this.cache.sync);
-    else this.sendSync();
-  };
+    health(done) {
+      if (typeof GM_xmlhttpRequest !== 'function') { done(true); return; }
+      GM_xmlhttpRequest({
+        method: 'GET',
+        url: 'http://' + CFG.host + ':' + CFG.port + '/health',
+        timeout: 2000,
+        onload: function (response) { done(response.status >= 200 && response.status < 300); },
+        onerror: function () { done(false); },
+        ontimeout: function () { done(false); }
+      });
+    }
 
-  Bridge.prototype.scheduleReconnect = function () {
-    var self = this;
-    if (this.stopped) return;
-    var delay = Math.min(CFG.reconnectBaseMs * Math.pow(2, this.attempts), CFG.reconnectMaxMs);
-    this.attempts += 1;
-    this.setState('retry in ' + Math.round(delay / 1000) + 's');
-    setTimeout(function () { self.connect(); }, delay);
-  };
+    send(frame) {
+      if (!this.ws || this.ws.readyState !== 1) return false;
+      try { this.ws.send(JSON.stringify(frame)); return true; }
+      catch (error) { return false; }
+    }
 
-  Bridge.prototype.retryNow = function () {
-    this.stopped = false;
-    this.attempts = 0;
-    this.connect();
-  };
+    cacheAndSend(kind, frame) {
+      this.cache[kind] = frame;
+      return this.send(frame);
+    }
 
-  Bridge.prototype.stop = function () {
-    this.stopped = true;
-    if (this.ws) { try { this.ws.close(); } catch (e) {} }
-    this.setState('stopped');
-  };
+    connect() {
+      if (this.stopped) return;
+      this.setState('probing');
+      this.health((healthy) => {
+        if (this.stopped) return;
+        if (healthy) this.openSocket();
+        else this.scheduleReconnect();
+      });
+    }
 
-  Bridge.prototype.buildRegister = function () {
-    return {
-      type: 'register', provider: 'youtube', source_id: this.sourceId,
-      tab_title: document.title || '', video_id: this.videoId,
-      track_kind: this.trackKind || '', track_lang: this.trackLang || '',
-      hook_error: this.hookError || '',
-      capture_error: this.captureError || ''
-    };
-  };
+    openSocket() {
+      this.setState('connecting');
+      try { this.ws = new WebSocket('ws://' + CFG.host + ':' + CFG.port + '/ws'); }
+      catch (error) { this.scheduleReconnect(); return; }
+      this.ws.onopen = () => {
+        this.attempts = 0;
+        this.setState('connected');
+        this.replay();
+      };
+      this.ws.onclose = () => {
+        this.setState('closed');
+        this.scheduleReconnect();
+      };
+      this.ws.onerror = () => { this.setState('error'); };
+    }
 
-  Bridge.prototype.sendSync = function () {
-    var v = this.videoEl;
-    if (!v) return;
-    this.cacheAndSend('sync', {
-      type: 'sync', source_id: this.sourceId, video_id: this.videoId,
-      video_time_ms: Math.round(v.currentTime * 1000),
-      playing: !v.paused && !v.ended,
-      playback_rate: v.playbackRate || 1,
-      timestamp: Date.now()
-    });
-  };
+    replay() {
+      this.send(this.cache.register || this.buildRegister());
+      if (this.cache.cues) this.send(this.cache.cues);
+      if (this.cache.sync) this.send(this.cache.sync);
+      else this.sendSync();
+    }
 
-  Bridge.prototype.onTimedtextFailure = function (url, why) {
-    // The hook ran and saw a caption request, but the response carried no usable
-    // body. Staying silent here is what made "connected, never a subtitle"
-    // undiagnosable, so the reason travels to the desktop on the next register frame.
-    if (!isTimedtextUrl(url)) return;
-    var msg = String(why || 'caption response was unusable');
-    if (msg === this.captureError) return;   // one report per distinct reason
-    this.captureError = msg;
-    console.warn('[youtubesub] caption capture failed:', msg);
-    this.send(this.buildRegister());
-    this.setState(this.state);               // repaint the panel marker
-  };
+    scheduleReconnect() {
+      if (this.stopped) return;
+      const delay = Math.min(CFG.reconnectBaseMs * 2 ** this.attempts, CFG.reconnectMaxMs);
+      this.attempts += 1;
+      this.setState('retry in ' + Math.round(delay / 1000) + 's');
+      setTimeout(() => { this.connect(); }, delay);
+    }
 
-  Bridge.prototype.onTimedtext = function (url, data) {
-    if (!isTimedtextUrl(url)) return;
-    // A usable payload proves the capture path works again: drop the stale reason.
-    this.captureError = '';
-    var key = normKey(url);
-    var cues = parseJson3(data, url);
-    if (!cues.length) return;
-    var sig = cuesSignature(cues);
-    var kind = trackKindFromUrl(url);
-    var lang = trackLangFromUrl(url);
-    // A rotating pot/fmt yields the same normKey AND the same content signature:
-    // that is the only case worth skipping. Track kind/language are part of the
-    // key so the desktop metadata stays truthful.
-    if (key === this.trackKey && sig === this.cueSig &&
-        kind === this.trackKind && lang === this.trackLang) return;
-    Object.assign(this, {
-      trackKey: key, cueSig: sig, cueCount: cues.length,
-      trackKind: kind, trackLang: lang
-    });
-    this.send(this.buildRegister());
-    this.cacheAndSend('cues', {
-      type: 'cues', provider: 'youtube', source_id: this.sourceId,
-      tab_title: document.title || '', video_id: this.videoId,
-      track_kind: this.trackKind, track_lang: this.trackLang, cues: cues
-    });
-  };
+    retryNow() {
+      this.stopped = false;
+      this.attempts = 0;
+      this.connect();
+    }
 
-  Bridge.prototype.bindVideo = function (video) {
-    var self = this;
-    this.videoEl = video;
-    ['timeupdate', 'play', 'pause', 'seeked', 'ratechange'].forEach(function (ev) {
-      video.addEventListener(ev, function () { self.sendSync(); });
-    });
-    this.sendSync();
-  };
+    stop() {
+      this.stopped = true;
+      if (this.ws) {
+        try { this.ws.close(); } catch (error) { /* already closed */ }
+      }
+      this.setState('stopped');
+    }
 
-  Bridge.prototype.newSource = function () {
-    // SPA navigation: a different video must be a NEW source, otherwise stale cues
-    // from the previous video survive (dkitle defect).
-    if (this.cache.sync) this.send({ type: 'deactivate', source_id: this.sourceId });
-    this.resetSource(videoIdFromLocation());
-    this.send(this.buildRegister());
-  };
+    buildRegister() {
+      return {
+        type: 'register', provider: 'youtube', source_id: this.sourceId,
+        tab_title: document.title || '', video_id: this.videoId,
+        track_kind: this.trackKind, track_lang: this.trackLang,
+        hook_error: this.hookError, capture_error: this.captureError
+      };
+    }
 
-  Bridge.prototype.poll = function () {
-    var video = document.querySelector('video');
-    var vid = videoIdFromLocation();
-    if (vid && vid !== this.videoId) { this.videoId = vid; this.newSource(); }
-    if (video && video !== this.videoEl) this.bindVideo(video);
-  };
+    sendSync() {
+      const video = this.videoEl;
+      if (!video) return;
+      this.cacheAndSend('sync', {
+        type: 'sync', source_id: this.sourceId, video_id: this.videoId,
+        video_time_ms: Math.round(video.currentTime * 1000),
+        playing: !video.paused && !video.ended,
+        playback_rate: video.playbackRate || 1,
+        timestamp: Date.now()
+      });
+    }
+
+    onTimedtextFailure(url, reason) {
+      if (!isTimedtextUrl(url)) return;
+      const message = String(reason || 'caption response was unusable');
+      if (message === this.captureError) return;
+      this.captureError = message;
+      console.warn('[youtubesub] caption capture failed:', message);
+      this.send(this.buildRegister());
+      this.setState(this.state);
+    }
+
+    onTimedtext(url, data) {
+      if (!isTimedtextUrl(url)) return;
+      this.captureError = '';
+      const cues = parseJson3(data, url);
+      if (!cues.length) return;
+      const track = {
+        key: normKey(url), signature: cuesSignature(cues),
+        kind: trackKindFromUrl(url), lang: trackLangFromUrl(url)
+      };
+      if (track.key === this.trackKey && track.signature === this.cueSig &&
+          track.kind === this.trackKind && track.lang === this.trackLang) return;
+      this.trackKey = track.key;
+      this.cueSig = track.signature;
+      this.trackKind = track.kind;
+      this.trackLang = track.lang;
+      this.cueCount = cues.length;
+      this.send(this.buildRegister());
+      this.cacheAndSend('cues', {
+        type: 'cues', provider: 'youtube', source_id: this.sourceId,
+        tab_title: document.title || '', video_id: this.videoId,
+        track_kind: this.trackKind, track_lang: this.trackLang, cues: cues
+      });
+    }
+
+    bindVideo(video) {
+      this.videoEl = video;
+      ['timeupdate', 'play', 'pause', 'seeked', 'ratechange'].forEach((event) => {
+        video.addEventListener(event, () => { this.sendSync(); });
+      });
+      this.sendSync();
+    }
+
+    newSource() {
+      if (this.cache.sync) this.send({ type: 'deactivate', source_id: this.sourceId });
+      this.resetSource(videoIdFromLocation());
+      this.send(this.buildRegister());
+    }
+
+    poll() {
+      const video = document.querySelector('video');
+      const videoId = videoIdFromLocation();
+      if (videoId && videoId !== this.videoId) this.newSource();
+      if (video && video !== this.videoEl) this.bindVideo(video);
+    }
+  }
 
   function videoIdFromLocation() {
     var m = /[?&]v=([\w-]{6,})/.exec(location.search);
