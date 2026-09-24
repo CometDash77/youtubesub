@@ -26,9 +26,16 @@ PREVIEW_NEXT_EXAMPLE = "(next group)"
 def _ask_new_name(parent, initial):
     """Rename prompt. Module-level seam so offscreen tests can stub the
     modal input dialog instead of blocking on it."""
-    name, ok = QtWidgets.QInputDialog.getText(
-        parent, "Rename preset", "Name:", text=initial)
-    return (name or "").strip() if ok else ""
+    dialog = QtWidgets.QInputDialog(parent)
+    dialog.setInputMode(QtWidgets.QInputDialog.TextInput)
+    dialog.setWindowTitle("重命名预设")
+    dialog.setLabelText("名称：")
+    dialog.setTextValue(initial)
+    dialog.setOkButtonText("确定")
+    dialog.setCancelButtonText("取消")
+    if dialog.exec() != QtWidgets.QDialog.Accepted:
+        return ""
+    return dialog.textValue().strip()
 
 
 class SettingsDialog(QtWidgets.QDialog):
@@ -47,7 +54,7 @@ class SettingsDialog(QtWidgets.QDialog):
         super().__init__(parent)
         self.tester = tester
         self.settings = settings
-        self.setWindowTitle("AI Translation Settings")
+        self.setWindowTitle("AI 翻译设置")
         prov = settings["provider"]
         prompt = settings["prompt"]
         self._presets = [dict(p) for p in prompt.get("presets", [])]  # working copy
@@ -70,9 +77,9 @@ class SettingsDialog(QtWidgets.QDialog):
         self.preset = QtWidgets.QComboBox()
         self.preset.currentIndexChanged.connect(self._on_preset_changed)
         btn_row = QtWidgets.QHBoxLayout()
-        self.copy_btn = QtWidgets.QPushButton("Copy as custom")
-        self.rename_btn = QtWidgets.QPushButton("Rename")
-        self.delete_btn = QtWidgets.QPushButton("Delete")
+        self.copy_btn = QtWidgets.QPushButton("复制为自定义")
+        self.rename_btn = QtWidgets.QPushButton("重命名")
+        self.delete_btn = QtWidgets.QPushButton("删除")
         self.copy_btn.clicked.connect(self._copy_preset)
         self.rename_btn.clicked.connect(self._rename_preset)
         self.delete_btn.clicked.connect(self._delete_preset)
@@ -87,38 +94,38 @@ class SettingsDialog(QtWidgets.QDialog):
         self.preview.setFixedHeight(80)
         self.preview.setReadOnly(True)
         self.context_groups = QtWidgets.QCheckBox(
-            "Carry context (prev/next group)")
+            "携带上下文（前/后分组）")
         self.context_groups.setChecked(bool(prompt.get("context_groups", 1)))
         self.context_groups.toggled.connect(self._refresh_preview)
-        self.mock = QtWidgets.QCheckBox("Mock mode (no real API)")
+        self.mock = QtWidgets.QCheckBox("Mock 模式（不调用真实 API）")
         self.mock.setChecked(bool(prov.get("mock")))
         self.font_size = QtWidgets.QSpinBox()
         self.font_size.setRange(6, 40)
         self.font_size.setValue(int(settings["display"].get("font_size", 10)))
         form.addRow("Base URL", self.base_url)
         form.addRow("API Key", self.api_key)
-        form.addRow("Model", self.model)
-        form.addRow("Protocol", self.protocol)
-        form.addRow("Prompt preset", self.preset)
+        form.addRow("模型", self.model)
+        form.addRow("协议", self.protocol)
+        form.addRow("提示词预设", self.preset)
         form.addRow("", self._wrap(btn_row))
-        form.addRow("Prompt text", self.system)
-        form.addRow("Effective preview", self.preview)
+        form.addRow("提示词内容", self.system)
+        form.addRow("生效预览", self.preview)
         form.addRow("", self.context_groups)
         form.addRow("", self.mock)
-        form.addRow("Font size", self.font_size)
+        form.addRow("字号", self.font_size)
         # #23 thin GUI adapter over suboverlay/connection_test.py: this dialog
         # only wires signals - run mechanics and the report contract live in
         # the module, so they are testable without a window server.
-        self.test_btn = QtWidgets.QPushButton("Test connection")
-        self.cancel_btn = QtWidgets.QPushButton("Cancel test")
+        self.test_btn = QtWidgets.QPushButton("测试连接")
+        self.cancel_btn = QtWidgets.QPushButton("取消测试")
         self.cancel_btn.setEnabled(False)
         self.progress = QtWidgets.QLabel("")
         self.report_view = QtWidgets.QPlainTextEdit("")
         self.report_view.setReadOnly(True)
         self.report_view.setFixedHeight(150)
         form.addRow(self.test_btn, self.cancel_btn)
-        form.addRow("Test progress", self.progress)
-        form.addRow("Test report", self.report_view)
+        form.addRow("测试进度", self.progress)
+        form.addRow("测试报告", self.report_view)
         self.report_ready.connect(self._show_report)
         self._poll = QtCore.QTimer(self)
         self._poll.setInterval(200)
@@ -127,8 +134,10 @@ class SettingsDialog(QtWidgets.QDialog):
         self.cancel_btn.clicked.connect(self._cancel_connection_test)
         if self.tester is not None and self.tester.last_report():
             self._render_report(self.tester.last_report())
-            self.progress.setText("last run - see report")
+            self.progress.setText("上次运行——见下方报告")
         buttons = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
+        buttons.button(QtWidgets.QDialogButtonBox.Ok).setText("确定")
+        buttons.button(QtWidgets.QDialogButtonBox.Cancel).setText("取消")
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         form.addRow(buttons)
@@ -157,11 +166,11 @@ class SettingsDialog(QtWidgets.QDialog):
         keep = self._active
         self.preset.blockSignals(True)
         self.preset.clear()
-        self.preset.addItem("--- Built-in ---", None)
+        self.preset.addItem("——— 内置 ———", None)
         for b in S.BUILTIN_PROMPTS:
             self.preset.addItem(b["name"], b["id"])
         self.preset.insertSeparator(self.preset.count())
-        self.preset.addItem("--- My presets ---", None)
+        self.preset.addItem("——— 我的预设 ———", None)
         for p in self._presets:
             self.preset.addItem(p.get("name") or p["id"], p["id"])
         idx = self.preset.findData(keep)
@@ -314,7 +323,7 @@ class SettingsDialog(QtWidgets.QDialog):
             return  # single flight: a run is already in the air
         self.test_btn.setEnabled(False)
         self.cancel_btn.setEnabled(True)
-        self.progress.setText("starting...")
+        self.progress.setText("启动中……")
         self._poll.start()
 
     def _cancel_connection_test(self):
@@ -327,13 +336,13 @@ class SettingsDialog(QtWidgets.QDialog):
         self.test_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
         self.progress.setText(
-            "cancelled - the in-flight request keeps running; its quota is not refunded")
+            "已取消——进行中的请求仍会继续执行，其额度不退还")
 
     def _poll_progress(self):
         p = self.tester.progress()
         if p["running"]:
             step = max(1, min(2, int(p["step"] or 1)))
-            self.progress.setText("step %d/2 - %.1fs" % (step, p["elapsed_s"]))
+            self.progress.setText("第 %d/2 步 - %.1f 秒" % (step, p["elapsed_s"]))
         else:
             self._poll.stop()
 
@@ -341,39 +350,39 @@ class SettingsDialog(QtWidgets.QDialog):
         self._poll.stop()
         self.test_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
-        self.progress.setText("done in %s ms" % report.get("duration_ms", 0))
+        self.progress.setText("已完成，用时 %s 毫秒" % report.get("duration_ms", 0))
         self._render_report(report)
 
     def _render_report(self, report):
-        """Thin adapter: render the report's own fields verbatim - machine code
-        and human message travel together, so there is no UI-side code table
-        that could drift from the contract (#23 decision 15)."""
-        lines = ["VERDICT: " + str(report.get("verdict", "")).upper()]
+        """Render translated human-facing labels while preserving report values."""
+        lines = ["结论：" + str(report.get("verdict", "")).upper()]
         for lay in report.get("layers", []):
             passed = lay.get("passed")
             mark = "PASS" if passed is True else ("FAIL" if passed is False else "--")
             code = (" [" + lay["code"] + "]") if lay.get("code") else ""
-            lines.append("%s %s %s%s - %s (%s ms)"
+            lines.append("%s %s %s%s - %s (%s 毫秒)"
                          % (mark, lay.get("id", ""), lay.get("title", ""), code,
                             lay.get("message", ""), lay.get("elapsed_ms", 0)))
         if report.get("skipped"):
-            lines.append("Skipped: " + ", ".join(report["skipped"]))
-        lines.append("Attempts: %s" % report.get("attempts", 0))
+            lines.append("跳过：" + ", ".join(report["skipped"]))
+        lines.append("尝试次数：%s" % report.get("attempts", 0))
         sample = report.get("sample") or {}
-        lines.append("Source: " + str(sample.get("source", "")))
-        lines.append("Translation: " + (str(sample.get("translation"))
-                                        if sample.get("translation") else "(none)"))
+        lines.append("原文：" + str(sample.get("source", "")))
+        lines.append("译文：" + (str(sample.get("translation"))
+                                if sample.get("translation") else "（无）"))
         ml = report.get("model_list") or {}
         if ml.get("observed"):
-            lines.append("Models listed: %s (configured model present: %s)"
-                         % (ml.get("total", 0), ml.get("contains_model")))
+            contains = {True: "是", False: "否", None: "未知"}.get(
+                ml.get("contains_model"), "未知")
+            lines.append("模型列表：%s（包含所配模型：%s）"
+                         % (ml.get("total", 0), contains))
+        warning_messages = report.get("warning_messages") or {}
         for w in report.get("warnings", []):
-            lines.append("Warning: " + str(w))
+            lines.append("警告：" + str(warning_messages.get(w, w)))
         for n in report.get("notes", []):
-            lines.append("Note: " + str(n))
+            lines.append("备注：" + str(n))
         snap = report.get("snapshot") or {}
-        lines.append("Based on the inputs as of the click (base_url=%s, model=%s); "
-                     "no config file was written."
+        lines.append("基于点击时的输入（base_url=%s，model=%s）；未写入任何配置文件。"
                      % (snap.get("base_url", ""), snap.get("model", "")))
         lines.append(str(report.get("quota_notice", "")))
         self.report_view.setPlainText(chr(10).join(lines))
@@ -476,7 +485,7 @@ class App:
         self._ct_action = m.addAction("Click-through (Ctrl+Alt+U to unlock)")
         self._ct_action.setCheckable(True)
         self._ct_action.triggered.connect(self._toggle_click_through)
-        a_set = m.addAction("Settings...")
+        a_set = m.addAction("设置……")
         a_set.triggered.connect(self._open_settings)
         m.addSeparator()
         a_q = m.addAction("Quit")

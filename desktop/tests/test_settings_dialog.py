@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from PySide6 import QtWidgets
 
 import app as app_mod
-from app import SettingsDialog, PREVIEW_PREV_EXAMPLE, PREVIEW_NEXT_EXAMPLE
+from app import App, SettingsDialog, PREVIEW_PREV_EXAMPLE, PREVIEW_NEXT_EXAMPLE
 from suboverlay import provider as P
 from suboverlay import settings as S
 
@@ -34,6 +34,114 @@ def _save_spy(monkeypatch):
 
 def _ids(d):
     return [d.preset.itemData(i) for i in range(d.preset.count())]
+
+
+def test_settings_surface_uses_the_approved_chinese_copy(monkeypatch):
+    d = SettingsDialog(S.default_settings())
+    assert d.windowTitle() == "AI 翻译设置"
+    assert d.copy_btn.text() == "复制为自定义"
+    assert d.rename_btn.text() == "重命名"
+    assert d.delete_btn.text() == "删除"
+    assert d.test_btn.text() == "测试连接"
+    assert d.cancel_btn.text() == "取消测试"
+    assert d.context_groups.text() == "携带上下文（前/后分组）"
+    assert d.mock.text() == "Mock 模式（不调用真实 API）"
+    assert [d.preset.itemText(i) for i in range(d.preset.count())
+            if d.preset.itemData(i) is None and d.preset.itemText(i)] == [
+                "——— 内置 ———", "——— 我的预设 ———"]
+
+    labels = {d.layout().labelForField(field).text()
+              for field in (d.base_url, d.api_key, d.model, d.protocol,
+                            d.preset, d.system, d.preview, d.font_size,
+                            d.progress, d.report_view)}
+    assert {"Base URL", "API Key", "模型", "协议", "提示词预设", "提示词内容",
+            "生效预览", "字号", "测试进度", "测试报告"} <= labels
+    buttons = d.findChild(QtWidgets.QDialogButtonBox).buttons()
+    assert {button.text() for button in buttons} == {"确定", "取消"}
+
+    captured = {}
+    def accept_dialog(dialog):
+        captured.update(title=dialog.windowTitle(), label=dialog.labelText(),
+                        ok=dialog.okButtonText(), cancel=dialog.cancelButtonText())
+        dialog.setTextValue(" x ")
+        return QtWidgets.QDialog.Accepted
+
+    monkeypatch.setattr(QtWidgets.QInputDialog, "exec", accept_dialog)
+    assert app_mod._ask_new_name(d, "initial") == "x"
+    assert captured == {"title": "重命名预设", "label": "名称：",
+                        "ok": "确定", "cancel": "取消"}
+
+
+def test_tray_settings_action_is_chinese(tmp_path, monkeypatch):
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    instance = App()
+    try:
+        menu = instance._menu()
+        assert "设置……" in [action.text() for action in menu.actions()]
+    finally:
+        instance.engine._queue.shutdown()
+
+
+def test_report_localizes_human_labels_but_preserves_machine_and_sample_values():
+    d = SettingsDialog(S.default_settings())
+    d._render_report({
+        "verdict": "mock", "layers": [{"id": "L4", "passed": None,
+            "code": None, "title": "翻译可用", "message": "已跳过",
+            "elapsed_ms": 0}],
+        "skipped": ["step1", "step2"], "attempts": 0,
+        "sample": {"source": "The cat sat on the mat.", "translation": "猫坐在垫子上"},
+        "model_list": {"observed": True, "total": 2, "contains_model": False},
+        "warnings": ["MOCK_MASKS_REAL_CONFIG", "FUTURE_WARNING"],
+        "warning_messages": {"MOCK_MASKS_REAL_CONFIG": "当前为 Mock 模式；已填写的真实配置本次不会被使用。"},
+        "notes": ["尚未验证 Alignment（N|line）协议；本次探测仅使用整行模式。"],
+        "snapshot": {"base_url": "https://example.test/v1", "model": "gpt-test"},
+        "quota_notice": "Mock 模式：未发送网络请求，也未消耗额度。",
+    })
+    text = d.report_view.toPlainText()
+    assert "结论：MOCK" in text and "-- L4 翻译可用 - 已跳过 (0 毫秒)" in text
+    assert "跳过：step1, step2" in text and "尝试次数：0" in text
+    assert "原文：The cat sat on the mat." in text
+    assert "译文：猫坐在垫子上" in text
+    assert "模型列表：2（包含所配模型：否）" in text
+    assert "警告：当前为 Mock 模式；已填写的真实配置本次不会被使用。" in text
+    assert "警告：FUTURE_WARNING" in text
+    assert "备注：尚未验证 Alignment（N|line）协议" in text
+    assert "基于点击时的输入（base_url=https://example.test/v1，model=gpt-test）；未写入任何配置文件。" in text
+    assert "Mock 模式：未发送网络请求，也未消耗额度。" in text
+    assert "Warning: MOCK_MASKS_REAL_CONFIG" not in text
+    for value, expected in ((True, "是"), (None, "未知")):
+        report = {"model_list": {"observed": True, "total": 2,
+                                 "contains_model": value}}
+        d._render_report(report)
+        assert "模型列表：2（包含所配模型：%s）" % expected in d.report_view.toPlainText()
+
+
+def test_connection_test_progress_copy_is_chinese():
+    class Tester:
+        def __init__(self):
+            self.cancelled = False
+
+        def last_report(self):
+            return None
+
+        def start(self, snapshot, on_done):
+            return True
+
+        def progress(self):
+            return {"running": True, "step": 2, "elapsed_s": 1.25}
+
+        def cancel(self):
+            self.cancelled = True
+
+    tester = Tester()
+    d = SettingsDialog(S.default_settings(), tester=tester)
+    d._start_connection_test()
+    assert d.progress.text() == "启动中……"
+    d._poll_progress()
+    assert d.progress.text() == "第 2/2 步 - 1.2 秒"
+    d._cancel_connection_test()
+    assert tester.cancelled
+    assert d.progress.text() == "已取消——进行中的请求仍会继续执行，其额度不退还"
 
 
 def test_builtin_selection_locks_editor_and_actions():

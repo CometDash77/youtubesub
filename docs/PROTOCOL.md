@@ -4,7 +4,7 @@
 另有 `GET http://127.0.0.1:9877/health` -> `{"ok":true,"version":1}` 供脚本连接前做存活探测.
 诊断端点 `GET http://127.0.0.1:9877/status` -> `{"ok":true,"version":1,"stats":{frames,bad_frames,error},
 "state":"ok|no_cues","orig":"...","trans":"...","trans_available":bool,"playing":bool,"rate":num,"title":"...",
-"sources":n,"active_source":"...","mode":"...","order":"...","history":[[orig,trans],...],"click_through":bool,"hook_error":"...","capture_error":"..."}`
+"sources":n,"active_source":"...","mode":"...","order":"...","history":[[orig,trans],...],"click_through":bool,"hook_error":"...","capture_error":"...","connection_test":report?}`
 `trans_available` = 这一轮究竟会不会产出译文 (显式 Mock, 或 base_url 与 model 都非空; 由 engine 判定)。
 `trans` 为空只表示「这一刻没有译文」, 不表示「没有翻译可用」—— 浮窗的 trans 模式据此决定译文为空时回退显示原文 (issue #1);
 显示层不解析 provider 配置, 只读这个字段。
@@ -12,6 +12,10 @@
 — 用于人工/自动化确认"脚本连上了吗、浮窗现在显示什么", 免截图. 会回显字幕文本, 因此**仅 loopback 可用**;
 未注入 status provider 的实例只回 `ok/version/stats`; provider 抛错时记 `status_error` 且仍返回 200 (诊断路由永不 500).
 只绑定 loopback; 鉴权见 ADR-003 (v1 先做 Origin 检查 + 可选 token, 见下).
+
+状态对象还可能包含可选的 `connection_test` 字段：用户从设置对话框手动运行连接测试后，它等于最近一次测试报告；尚未运行时省略。报告保留 `verdict`（pass/fail/mock）、layer id、error code、skipped step id 和 `warnings` 中的机器值。报告中的标题、人类说明、quota notice 与 note 使用中文。`warning_messages` 是可选对象，以 warning code 为键提供中文说明；消费者应继续以 `warnings` 识别机器告警，展示时可按 code 查找说明，未命中则显示 code。此字段可向后兼容地忽略。
+
+连接报告不包含 API Key。`sample.source` 是实际发送的固定探测句，`sample.translation` 是服务端原样返回的译文；两者均不翻译。`snapshot.base_url` / `snapshot.model` 以及 provider 返回的诊断详情保留原值。
 
 ## browser -> desktop
 
