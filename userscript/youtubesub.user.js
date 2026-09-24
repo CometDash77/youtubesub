@@ -107,60 +107,77 @@
             cues[0].text, cues[n - 1].text].join(':');
   }
 
+  // This function is serialized into the page's main world. Keep it self-contained:
+  // the page's own request already has the credentials needed for timedtext.
+  function pageHook() {
+    function isCaption(url) {
+      var s = String(url || '');
+      return /timedtext|srv3|json3/i.test(s) && s.indexOf('youtube') !== -1;
+    }
+
+    function report(url, data, error) {
+      window.dispatchEvent(new CustomEvent('youtubesub-timedtext', {
+        detail: { url: url, data: data, error: error }
+      }));
+    }
+
+    function deliver(url, body, status) {
+      if (!body) {
+        report(url, null, 'caption response was empty (status ' + status + ')');
+        return;
+      }
+      try {
+        report(url, JSON.parse(body), '');
+      } catch (e) {
+        report(url, null, 'caption response was not JSON (status ' + status + ')');
+      }
+    }
+
+    function unreadable(url, error) {
+      report(url, null, 'caption response could not be read: ' + error);
+    }
+
+    var originalFetch = window.fetch;
+    if (originalFetch) {
+      window.fetch = function () {
+        var input = arguments[0];
+        var url = typeof input === 'string' ? input : (input && input.url) || '';
+        var response = originalFetch.apply(this, arguments);
+        if (isCaption(url)) {
+          response.then(function (result) {
+            try {
+              result.clone().text().then(
+                function (body) { deliver(url, body, result.status); },
+                function (error) { unreadable(url, error); }
+              );
+            } catch (error) { unreadable(url, error); }
+          });
+        }
+        return response;
+      };
+    }
+
+    var originalOpen = XMLHttpRequest.prototype.open;
+    var originalSend = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.open = function (method, url) {
+      this.__ytusUrl = url;
+      return originalOpen.apply(this, arguments);
+    };
+    XMLHttpRequest.prototype.send = function () {
+      var xhr = this;
+      var url = xhr.__ytusUrl;
+      if (isCaption(url)) {
+        xhr.addEventListener('load', function () {
+          try { deliver(url, xhr.responseText, xhr.status); }
+          catch (error) { unreadable(url, error); }
+        });
+      }
+      return originalSend.apply(this, arguments);
+    };
+  }
+
   function buildPageHookCode() {
-    // Page context is required: the player's timedtext request carries a pot token we
-    // cannot mint; reusing that exact request is the only reliable way (yt-dual-subs).
-    var testSrc = isTimedtextUrl.toString();
-    var code = [
-      '(function () {',
-      '  var test = ' + testSrc + ';',
-      '  function emit(url, data) {',
-      "    window.dispatchEvent(new CustomEvent('youtubesub-timedtext', { detail: { url: url, data: data, error: '' } }));",
-      '  }',
-      '  function emitFailure(url, why) {',
-      "    window.dispatchEvent(new CustomEvent('youtubesub-timedtext', { detail: { url: url, data: null, error: why } }));",
-      '  }',
-      '  // A response that arrived but cannot be used is REPORTABLE: 200 with an empty',
-      '  // body (what youtube.com returns to a headless Chrome) used to be swallowed by',
-      '  // a bare catch, leaving the panel on "connected" with nothing to show.',
-      '  function deliver(url, body, status) {',
-      '    if (!body) { emitFailure(url, "caption response was empty (status " + status + ")"); return; }',
-      '    try { emit(url, JSON.parse(body)); }',
-      '    catch (e) { emitFailure(url, "caption response was not JSON (status " + status + ")"); }',
-      '  }',
-      '  var of = window.fetch;',
-      '  if (of) {',
-      '    window.fetch = function () {',
-      '      var args = arguments;',
-      '      var url = typeof args[0] === "string" ? args[0] : (args[0] && args[0].url ? args[0].url : "");',
-      '      var p = of.apply(this, args);',
-      '      if (test(url)) {',
-      '        p.then(function (res) {',
-      '          try {',
-      '            res.clone().text().then(function (t) { deliver(url, t, res.status); },',
-      '              function (e) { emitFailure(url, "caption response could not be read: " + e); });',
-      '          } catch (e) { emitFailure(url, "caption response could not be read: " + e); }',
-      '        });',
-      '      }',
-      '      return p;',
-      '    };',
-      '  }',
-      '  var oo = XMLHttpRequest.prototype.open;',
-      '  var os = XMLHttpRequest.prototype.send;',
-      '  XMLHttpRequest.prototype.open = function (m, u) { this.__ytusUrl = u; return oo.apply(this, arguments); };',
-      '  XMLHttpRequest.prototype.send = function () {',
-      '    var xhr = this;',
-      '    if (test(xhr.__ytusUrl)) {',
-      "      xhr.addEventListener('load', function () {",
-      '        try { deliver(xhr.__ytusUrl, xhr.responseText, xhr.status); }',
-      '        catch (e) { emitFailure(xhr.__ytusUrl, "caption response could not be read: " + e); }',
-      '      });',
-      '    }',
-      '    return os.apply(this, arguments);',
-      '  };',
-      '})();'
-    ].join('\n');
-    return code;
+    return '(' + pageHook.toString() + ')();';
   }
 
   var _ttPolicy = null;
@@ -240,16 +257,22 @@
     this.state = 'idle';
     this.attempts = 0;
     this.stopped = false;
-    this.sourceId = uuid();
-    this.videoId = '';
     this.videoEl = null;
+    this.statusEl = null;
+    this.hookError = '';
+    this.resetSource('');
+  }
+
+  Bridge.prototype.resetSource = function (videoId) {
+    this.sourceId = uuid();
+    this.videoId = videoId;
     this.trackKey = '';
     this.cueSig = '';
     this.cueCount = -1;
+    this.trackKind = '';
+    this.trackLang = '';
+    this.captureError = '';
     this.cache = { register: null, cues: null, sync: null };
-    this.statusEl = null;
-    this.hookError = '';    // set by boot() when the page hook could not install
-    this.captureError = ''; // set when a caption response carried no usable body
   }
 
   Bridge.prototype.health = function (cb) {
@@ -305,16 +328,19 @@
     ws.onopen = function () {
       self.attempts = 0;
       self.setState('connected');
-      if (self.cache.register) self.send(self.cache.register);
-      else self.send(self.buildRegister());
-      if (self.cache.cues) self.send(self.cache.cues);
-      // replay sync WITHOUT refreshing timestamp: refreshing it makes the desktop
-      // overlay jump backwards on every reconnect (dkitle defect #2).
-      if (self.cache.sync) self.send(self.cache.sync);
-      else self.sendSync();
+      self.replay();
     };
     ws.onclose = function () { self.setState('closed'); self.scheduleReconnect(); };
     ws.onerror = function () { self.setState('error'); };
+  };
+
+  Bridge.prototype.replay = function () {
+    this.send(this.cache.register || this.buildRegister());
+    if (this.cache.cues) this.send(this.cache.cues);
+    // A cached sync keeps its original timestamp. The next player event makes a
+    // fresh one; replay alone must not pretend that old media time is current.
+    if (this.cache.sync) this.send(this.cache.sync);
+    else this.sendSync();
   };
 
   Bridge.prototype.scheduleReconnect = function () {
@@ -388,11 +414,10 @@
     // key so the desktop metadata stays truthful.
     if (key === this.trackKey && sig === this.cueSig &&
         kind === this.trackKind && lang === this.trackLang) return;
-    this.trackKey = key;
-    this.cueSig = sig;
-    this.cueCount = cues.length;
-    this.trackKind = kind;
-    this.trackLang = lang;
+    Object.assign(this, {
+      trackKey: key, cueSig: sig, cueCount: cues.length,
+      trackKind: kind, trackLang: lang
+    });
     this.send(this.buildRegister());
     this.cacheAndSend('cues', {
       type: 'cues', provider: 'youtube', source_id: this.sourceId,
@@ -414,13 +439,7 @@
     // SPA navigation: a different video must be a NEW source, otherwise stale cues
     // from the previous video survive (dkitle defect).
     if (this.cache.sync) this.send({ type: 'deactivate', source_id: this.sourceId });
-    this.sourceId = uuid();
-    this.videoId = videoIdFromLocation();
-    this.captureError = '';
-    this.trackKey = '';
-    this.cueSig = '';
-    this.cueCount = -1;
-    this.cache = { register: null, cues: null, sync: null };
+    this.resetSource(videoIdFromLocation());
     this.send(this.buildRegister());
   };
 
