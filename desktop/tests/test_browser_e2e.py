@@ -69,9 +69,15 @@ def status_until(h, pred, timeout=20.0, what="condition"):
 class CountingProvider:
     """Local OpenAI-compatible endpoint for proving browser-driven scheduling."""
 
-    def __init__(self):
+    def __init__(self, fail_once_for=None, hold=False):
         self.requests = []
         self.lock = threading.Lock()
+        self.fail_once_for = fail_once_for
+        self.failed_once = False
+        self.release_event = threading.Event()
+        self.request_started = threading.Event()
+        if not hold:
+            self.release_event.set()
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -82,7 +88,19 @@ class CountingProvider:
                 body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
                 with owner.lock:
                     owner.requests.append(body)
+                owner.request_started.set()
+                owner.release_event.wait(15)
                 system = body.get("messages", [{}])[0].get("content", "")
+                user = body.get("messages", [{}, {}])[-1].get("content", "")
+                if owner.fail_once_for and owner.fail_once_for in user:
+                    with owner.lock:
+                        should_fail = not owner.failed_once
+                        owner.failed_once = True
+                    if should_fail:
+                        self.send_response(400)
+                        self.send_header("Content-Length", "0")
+                        self.end_headers()
+                        return
                 match = re.search(r"exactly (\d+) lines", system)
                 content = ("\n".join("%d|translated" % n
                                      for n in range(1, int(match.group(1)) + 1))
@@ -95,6 +113,7 @@ class CountingProvider:
                 self.wfile.write(data)
 
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.server.daemon_threads = True
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         self.config = {"base_url": "http://127.0.0.1:%d/v1" % self.server.server_address[1],
@@ -106,7 +125,15 @@ class CountingProvider:
         with self.lock:
             return len(self.requests)
 
+    def hold(self):
+        self.request_started.clear()
+        self.release_event.clear()
+
+    def release(self):
+        self.release_event.set()
+
     def stop(self):
+        self.release()
         self.server.shutdown()
         self.server.server_close()
         self.thread.join(timeout=2)
@@ -166,6 +193,77 @@ def test_original_only_browser_cues_do_not_reach_provider_until_mode_switch():
     finally:
         harness.stop()
         provider.stop()
+
+
+def test_browser_translation_states_and_failed_seek_recovery():
+    provider = CountingProvider(fail_once_for=CUE0, hold=True)
+    harness = E2E.Harness(desktop_options={
+        "mode": "bilingual", "provider": provider.config, "mode_control": True})
+    try:
+        harness.start()
+        harness.open(E2E.VIDEO_A)
+        harness.cdp.evaluate("__fixture.pause(); __fixture.seek(1.0);")
+        assert E2E.wait_for(lambda: provider.request_started.is_set(),
+                            what="provider receives the current browser cue")
+        st = status_until(harness, lambda s: s.get("trans_state") == "translating",
+                          what="translating while the controlled provider is held")
+        assert st["orig"] == CUE0, st
+        provider.release()
+        st = status_until(harness, lambda s: s.get("trans_state") == "failed:翻译请求无效",
+                          what="fixed provider failure reason through real /status")
+        assert st["orig"] == CUE0, st
+
+        harness.cdp.evaluate("__fixture.seek(5.5);")
+        st = status_until(harness, lambda s: s.get("state") == "ok"
+                          and s.get("trans_state") == "idle" and not s.get("orig"),
+                          what="idle in the known-track cue gap")
+
+        harness.cdp.evaluate("__fixture.seek(6.5);")
+        st = status_until(harness, lambda s: s.get("orig") == CUE2
+                          and s.get("trans_state") == "ready",
+                          what="successful translation after seeking to another cue")
+
+        provider.hold()
+        previous = provider.count()
+        harness.cdp.evaluate("__fixture.seek(1.0);")
+        assert E2E.wait_for(lambda: provider.count() > previous,
+                            what="retry request after returning to the failed cue")
+        st = harness.status()
+        assert st.get("orig") == CUE0 and st.get("trans_state") == "failed:翻译请求无效", st
+        provider.release()
+        st = status_until(harness, lambda s: s.get("orig") == CUE0
+                          and s.get("trans_state") == "ready",
+                          what="the failed cue clearing after a successful retry")
+
+        harness.app.set_provider({"base_url": "", "api_key": "", "model": "",
+                                  "protocol": "auto", "mock": False})
+        st = status_until(harness, lambda s: s.get("trans_state") == "unconfigured",
+                          what="unconfigured provider through real Chrome and /status")
+        assert st["trans_available"] is False, st
+    finally:
+        harness.stop()
+        provider.stop()
+
+
+def test_browser_waiting_and_capture_diagnostics_preempt_translation_waiting():
+    harness = E2E.Harness(desktop_options={"mode_control": True})
+    try:
+        harness.start()
+        harness.open(E2E.VIDEO_NO_CUES)
+        st = status_until(harness, lambda s: s.get("state") == "no_cues"
+                          and s.get("trans_state") == "waiting",
+                          what="healthy active video with no subtitle cues")
+        assert not st.get("hook_error") and not st.get("capture_error"), st
+        harness.open(E2E.VIDEO_CAPTURE_ERROR)
+        st = status_until(harness, lambda s: bool(s.get("capture_error")),
+                          what="real userscript capture error reaching /status")
+        assert st["trans_state"] == "idle", st
+        harness.open(E2E.VIDEO_HOOK_ERROR)
+        st = status_until(harness, lambda s: bool(s.get("hook_error")),
+                          what="real browser hook error reaching /status")
+        assert st["trans_state"] == "idle", st
+    finally:
+        harness.stop()
 
 
 def test_play_pause_reaches_the_desktop_clock(h):

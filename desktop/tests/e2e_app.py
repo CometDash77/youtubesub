@@ -22,18 +22,23 @@ def main():
             pass
 
         def do_POST(self):
-            if self.path != "/mode":
+            if self.path not in ("/mode", "/provider"):
                 self.send_error(404)
                 return
             try:
                 body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
-                mode = body["mode"]
-                if mode not in ("orig", "trans", "bilingual"):
-                    raise ValueError("invalid mode")
+                if self.path == "/mode":
+                    value = body["mode"]
+                    if value not in ("orig", "trans", "bilingual"):
+                        raise ValueError("invalid mode")
+                else:
+                    value = body["provider"]
+                    if not isinstance(value, dict):
+                        raise ValueError("invalid provider")
             except Exception:
                 self.send_error(400)
                 return
-            requested_modes.put(mode)
+            requested_modes.put((self.path, value))
             self.send_response(202)
             self.end_headers()
 
@@ -43,12 +48,16 @@ def main():
     def apply_modes():
         while True:
             try:
-                mode = requested_modes.get_nowait()
+                path, value = requested_modes.get_nowait()
             except queue.Empty:
                 break
-            app.settings["display"]["mode"] = mode
-            app.overlay.mode = mode
-            app.overlay.update()
+            if path == "/mode":
+                app.settings["display"]["mode"] = value
+                app.overlay.mode = value
+                app.overlay.update()
+            else:
+                app.settings["provider"].clear()
+                app.settings["provider"].update(value)
 
     timer = QtCore.QTimer()
     timer.timeout.connect(apply_modes)

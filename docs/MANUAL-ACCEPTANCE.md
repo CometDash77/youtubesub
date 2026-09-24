@@ -13,12 +13,12 @@
 ## L0 · 自动基线（不需要人，先跑这个）
 
 ```
-python -m pytest desktop/tests -q                       # 期望全绿：当前 88 passed（含 7 条真浏览器 E2E；无 Chrome 会 skip，不算通过）
+python -m pytest desktop/tests -q                       # 期望全绿：当前 240 passed（含 10 条真浏览器 E2E；无 Chrome 会 skip，不算通过）
 cd userscript; node --test "tests/*.test.mjs"           # 期望全绿：当前 38 pass / 0 fail（必须用 glob 形式）
 node --check userscript/youtubesub.user.js              # 语法检查
 ```
 
-通过标准：pytest **0 failed / 0 skipped**（当前 88 passed，数字随提交增长）；node 38 pass 0 fail；7 条 E2E 没有被 skip
+通过标准：pytest **0 failed / 0 skipped**（当前 240 passed，数字随提交增长）；node 38 pass 0 fail；10 条 E2E 没有被 skip
 （skip 说明 harness 没找到 Chrome，这时浏览器侧**等于没验**，要记下来）。
 
 E2E 用的测试特权（`--disable-web-security`、CDP `Page.setBypassCSP`）**只存在于测试 harness**，
@@ -57,6 +57,8 @@ python desktop/tests/browser_e2e.py --demo [--seconds 30]
 随时可看机器可读状态（另开一个终端）：`Invoke-RestMethod http://127.0.0.1:<harness 打印的端口>/status`。
 harness 只 kill 自己启动的 Chrome；**不要 kill 你自己常驻的 chrome.exe**。
 
+自动验收补充：当前有 10 条真实 Chrome + userscript + desktop app 黑盒 E2E，其中保留原有 7 条；新增用例通过 `/status` 验证翻译状态、失败后 seek 恢复、hook/capture 诊断到达及原文-only 请求拦截。浮窗状态行优先级由 `desktop/tests/test_overlay_status.py` 单测覆盖。受控 provider 是本机测试服务，不代表真实 AI 服务或 Tampermonkey 已验证。
+
 **失败时记什么**：哪一步、`/status` 的 `state/orig/trans/playing/rate/hook_error` 原文、控制台里 `[youtubesub]` 开头的行。
 
 ---
@@ -81,6 +83,19 @@ start-desktop.cmd          # 默认设置，不填任何模型
 - [ ] 有真实译文时（L4 配好 provider）：translation 模式仍只显示译文，行为与以前一致
 
 **失败时记什么**：`/status` 的 `state/orig/trans/trans_available/mode` 原文，以及浮窗截图。
+
+### L1c · 翻译状态可见化（map #61）
+
+**自动状态**：真实 Chrome E2E 已通过受控本机 provider 覆盖 `waiting`、`translating`、`ready`、`unconfigured`、`failed:<原因>`、已知 cue 间隙 `idle`、原文-only 拦截、失败句 seek 后保持并成功恢复，以及 hook/capture 错误抵达 `/status`；浮窗状态行优先级由独立单测覆盖。E2E 的 provider 不发送真实外网请求。
+
+**仍需真人眼验**：
+
+- [ ] 双语模式下【译】通道依次显示等待、翻译中、失败和未配置文案；成功后恢复正常译文。
+- [ ] 仅译文模式状态显示正确；原文-only 模式只显示原文，cue 间隙不留状态残影。
+- [ ] 翻译失败后 seek 离开再回来，失败提示仍属于该句；该句成功后失败提示消失。
+- [ ] hook/capture 出错时，浮窗状态行显示链路诊断，不显示“等待原字幕”。
+
+实际 AI 服务与真 Tampermonkey 仍按 L3/L4 单独验收；没有可用扩展或真实 Base URL / Key / Model 时，不得把受控 provider 结果记成它们已通过。
 
 ---
 
