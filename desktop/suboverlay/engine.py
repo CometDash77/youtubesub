@@ -284,24 +284,20 @@ class Engine:
         if job is not None:
             self._queue.submit(job)
 
-    def _fill_window(self, src, gi, t_ms):
-        """Window fill (spec #24 / ADR-007): prefetch every group from the
-        playhead within the lead window, measured in SECONDS (decoupled from
-        subtitle density) and bounded by the group hard cap - first of the two
-        to hit wins. The fill is the burst point: its pending groups are
-        chunked into batches (<= batch.max_groups / <= batch.max_chars) and
-        sent as batches; a lone pending group stays a single request. Steady
-        state crosses one group at a time, so this submits exactly one group -
-        one-request-per-group behaviour is unchanged there."""
+    def _window_group_indices(self, src, gi, t_ms):
+        """Return the ordered prefetch window, bounded by time and group count."""
         lead_ms = self._window_lead_ms()
         horizon = t_ms + lead_ms
+        end = min(len(src.groups), gi + self._window_max_groups())
         window = []
-        for idx in range(gi, min(len(src.groups), gi + self._window_max_groups())):
+        for idx in range(gi, end):
             if idx > gi and src.groups[idx].start_ms > horizon:
                 break
             window.append(idx)
-        todo = [idx for idx in window
-                if idx != gi and not self._translated(src, idx)]
+        return window
+
+    def _submit_prefetch_groups(self, src, todo):
+        """Submit a fill burst in contract-sized chunks, preserving group order."""
         if not todo:
             return
         if len(todo) == 1:
@@ -325,6 +321,18 @@ class Engine:
                 self._queue.submit(jobs[0])
             elif jobs:
                 self._queue.submit_batch(jobs)
+
+    def _fill_window(self, src, gi, t_ms):
+        """Fill the time-and-count bounded window around the playhead.
+
+        A fill is the only batch formation point. Steady-state crossings still
+        submit one group, while a burst is split by the configured group and
+        request-character budgets.
+        """
+        window = self._window_group_indices(src, gi, t_ms)
+        todo = [idx for idx in window
+                if idx != gi and not self._translated(src, idx)]
+        self._submit_prefetch_groups(src, todo)
 
     def _identity(self, prov, instructions, client_key, g, prompt_ctx):
         prompt = g.text
