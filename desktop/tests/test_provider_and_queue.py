@@ -49,6 +49,21 @@ def test_map_status_error_retryable():
     assert not P.map_status_error(400, "x").retryable
 
 
+def test_provider_results_preserve_http_status_without_exposing_it_as_text(monkeypatch):
+    def fake_post(url, headers, payload, timeout_s):
+        return 402, {}, "secret provider detail"
+
+    monkeypatch.setattr(P, "_do_post", fake_post)
+    cfg = {"base_url": "https://api.example.test/v1", "api_key": "k",
+           "model": "m", "protocol": "responses", "max_retries": 0}
+    single = P.translate_group(cfg, "hello")
+    batch = P.translate_batch(cfg, [{"text": "hello", "expected": 1}])
+    assert single["error"] == "RATE_LIMITED" and single["status"] == 402
+    assert batch[0]["error"] == "RATE_LIMITED" and batch[0]["status"] == 402
+    assert "secret provider detail" in single["message"]
+    assert "secret provider detail" in batch[0]["message"]
+
+
 def test_extract_complete_text_both_protocols():
     chat = {"choices": [{"message": {"content": "hi"}}]}
     resp = {"output_text": "yo"}

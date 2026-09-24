@@ -80,6 +80,10 @@ class _Source:
         self.groups = []
         self.cue_to_group = {}
         self.group_trans = {}   # group_idx -> whole-line translation
+        self.group_states = {}  # group_idx -> translating / ready
+        # Per-group terminal provider failures. Kept across seeks, and removed
+        # only when that group succeeds or provider-derived state is reset.
+        self.group_failures = {}  # group_idx -> failed:<fixed short reason>
         self.sync = SyncState()
         self.last_group_idx = None
         self.window_anchor = None        # group idx the prefetch window was last filled from
@@ -88,6 +92,8 @@ class _Source:
     def reset_translations(self):
         """Drop everything a provider produced; keep the cues and the live clock."""
         self.group_trans = {}
+        self.group_states = {}
+        self.group_failures = {}
         for c in self.cues:
             c.trans = ""
         self.last_group_idx = None
@@ -282,7 +288,9 @@ class Engine:
     def _submit_group(self, src, gi, priority):
         job = self._build_job(src, gi, priority)
         if job is not None:
-            self._queue.submit(job)
+            accepted = self._queue.submit(job)
+            if accepted and gi not in src.group_failures:
+                src.group_states[gi] = "translating"
 
     def _window_group_indices(self, src, gi, t_ms):
         """Return the ordered prefetch window, bounded by time and group count."""
@@ -452,7 +460,7 @@ class Engine:
         return r
 
     def _on_done(self, job, result):
-        if result.get("error") or not job or job.cancelled:
+        if not job or job.cancelled:
             return
         with self._lock:
             if job.context is not None and job.context.namespace != self._provider_ns:
@@ -462,6 +470,22 @@ class Engine:
                 return
             src = self.sources.get(job.source_id)
             if src is None or job.group_idx >= len(src.groups):
+                return
+            if result.get("error"):
+                # Prefetch failures are deliberately invisible. A failed batch
+                # is voided and the urgent sentence request owns the verdict.
+                if job.priority == URGENT:
+                    reason = self._failure_reason(result)
+                    if reason is not None:
+                        verdict = "failed:" + reason
+                        src.group_failures[job.group_idx] = verdict
+                        src.group_states[job.group_idx] = verdict
+                elif (self.active_source == job.source_id
+                      and src.last_group_idx == job.group_idx):
+                    # A prefetched sentence may have become current while its
+                    # batch was in flight. Replace that void result with the
+                    # ordinary urgent single-sentence path.
+                    self._submit_group(src, job.group_idx, URGENT)
                 return
             g = src.groups[job.group_idx]
             if result.get("aligned") and result.get("values"):
@@ -474,6 +498,8 @@ class Engine:
                 src.group_trans[job.group_idx] = result["text"]
             else:
                 return
+            src.group_failures.pop(job.group_idx, None)
+            src.group_states[job.group_idx] = "ready"
         if self.display_cb:
             try:
                 self.display_cb()
@@ -499,6 +525,32 @@ class Engine:
                                _provider_usable(self.settings.get("provider", {})))
             return {"sources": len(self.sources), "active_source": self.active_source,
                     "display": display}
+
+    @staticmethod
+    def _failure_reason(result):
+        """Map provider wire/worker errors to the fixed, user-safe vocabulary."""
+        code = result.get("error")
+        status = result.get("status")
+        if status == 402:
+            return "额度不足"
+        if status == 429:
+            return "请求受限"
+        if code == "RATE_LIMITED":
+            return "请求受限"
+        if code == "AUTH":
+            return "API Key 无效"
+        if code == "FORBIDDEN":
+            return "访问被拒绝"
+        if code in ("TIMEOUT", "NETWORK", "SERVER", "INVALID_MODEL_OUTPUT"):
+            return {"TIMEOUT": "翻译请求超时", "NETWORK": "无法连接翻译服务",
+                    "SERVER": "翻译服务异常", "INVALID_MODEL_OUTPUT": "译文格式异常"}[code]
+        if code == "BAD_REQUEST":
+            return "翻译请求无效"
+        if code in ("BAD_CONFIG", "NO_MODEL"):
+            return "翻译配置无效"
+        if code == "SHAPE_MISS":
+            return None
+        return "翻译内部错误"
 
     @staticmethod
     def _timeline_display(src, video_time_ms):
@@ -532,10 +584,15 @@ class Engine:
                 # that connected but cannot see captions must not look like a video that
                 # simply has none: hook_error = the page hook never installed;
                 # capture_error = the hook ran but the caption response was unusable.
-                return {"state": "no_cues", "title": src.meta.get("tab_title") if src else "",
-                        "hook_error": (src.meta.get("hook_error") or "") if src else "",
-                        "capture_error": (src.meta.get("capture_error") or "") if src else "",
-                        "trans_available": _provider_usable(self.settings.get("provider", {}))}
+                usable = _provider_usable(self.settings.get("provider", {}))
+                hook_error = (src.meta.get("hook_error") or "") if src else ""
+                capture_error = (src.meta.get("capture_error") or "") if src else ""
+                trans_state = ("unconfigured" if not usable else
+                               "waiting" if not hook_error and not capture_error else "idle")
+                return {"state": "no_cues", "trans_state": trans_state,
+                        "title": src.meta.get("tab_title") if src else "",
+                        "hook_error": hook_error, "capture_error": capture_error,
+                        "trans_available": usable}
             t = estimate_ms(src.sync)
             cue, gi, trans = self._timeline_display(src, t)
             if gi is not None and gi != src.last_group_idx:
@@ -563,12 +620,18 @@ class Engine:
                 src.window_anchor = gi
                 self._fill_window(src, gi, t)
             title = src.meta.get("tab_title") or ""
+            usable = _provider_usable(self.settings.get("provider", {}))
+            trans_state = ("idle" if gi is None else
+                           "unconfigured" if not usable else
+                           "ready" if trans else
+                           src.group_failures.get(gi, src.group_states.get(gi, "translating")))
             return {"state": "ok", "orig": cue.text if cue else "",
                     "trans": trans,
+                    "trans_state": trans_state,
                     # Issue #1: the one authority on whether this run can translate
                     # at all, so the overlay never reads provider config itself and
                     # never has to guess "no translation" from an empty string.
-                    "trans_available": _provider_usable(self.settings.get("provider", {})),
+                    "trans_available": usable,
                     "playing": src.sync.playing,
                     "rate": src.sync.playback_rate, "title": title,
                     "hook_error": src.meta.get("hook_error") or "",

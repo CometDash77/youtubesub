@@ -111,6 +111,57 @@ def test_engine_full_pipeline_with_mock_translation():
     e._queue.shutdown()
 
 
+def test_translation_state_tracks_current_sentence_failure_and_recovery():
+    e = mk_engine(tempfile.mkdtemp())
+    real_q = e._queue
+    e._queue = RecordingQueue()
+    real_q.shutdown()
+    e.ingest_json3("s1", {"video_id": "v1", "track_kind": "manual"}, ONE_GROUP)
+    e.handle_event({"type": "sync", "source_id": "s1", "video_time_ms": 1500.0,
+                    "playing": False, "playback_rate": 1.0, "timestamp": time.time() * 1000})
+    d = e.tick()
+    src = e.sources["s1"]
+    job = e._queue.jobs[0]
+    assert d["trans_state"] == "translating"
+
+    e._on_done(job, {"error": "RATE_LIMITED", "status": 402,
+                     "message": "provider supplied text must not be shown"})
+    assert e.tick()["trans_state"] == "failed:额度不足"
+
+    # Seeking away and back must preserve the sentence's terminal verdict.
+    src.last_group_idx = None
+    assert e.tick()["trans_state"] == "failed:额度不足"
+    e._on_done(job, {"text": "译文", "error": None})
+    assert e.tick()["trans_state"] == "ready"
+
+
+def test_translation_state_ignores_batch_failure_until_urgent_result():
+    from suboverlay.queue_cache import NORMAL, URGENT
+    e = mk_engine(tempfile.mkdtemp())
+    real_q = e._queue
+    e._queue = RecordingQueue()
+    real_q.shutdown()
+    e.ingest_json3("s1", {"video_id": "v1", "track_kind": "manual"}, ONE_GROUP)
+    e.handle_event({"type": "sync", "source_id": "s1", "video_time_ms": 1500.0,
+                    "playing": False, "playback_rate": 1.0, "timestamp": time.time() * 1000})
+    e.tick()
+    src = e.sources["s1"]
+    job = e._queue.jobs[0]
+    job.priority = NORMAL
+    e._on_done(job, {"error": "BAD_REQUEST"})
+    assert e.tick()["trans_state"] == "translating"
+    assert [(j.group_idx, j.priority) for j in e._queue.jobs] == [(0, NORMAL), (0, URGENT)]
+
+
+def test_translation_state_waiting_and_idle_boundaries():
+    e = mk_engine(tempfile.mkdtemp(), mock=False)
+    e.handle_event({"type": "register", "source_id": "s1", "video_id": "v1"})
+    assert e.tick()["trans_state"] == "unconfigured"
+    e.settings["provider"].update({"base_url": CFG_URL, "model": CFG_MODEL})
+    assert e.tick()["trans_state"] == "waiting"
+    e._queue.shutdown()
+
+
 def test_engine_seek_cancels_pending_and_reschedules():
     e = mk_engine(tempfile.mkdtemp())
     e.ingest_json3("s1", {"video_id": "v1", "track_kind": "asr"}, JSON3)
