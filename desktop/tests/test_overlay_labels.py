@@ -14,7 +14,7 @@ import sys
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from PySide6 import QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 
 from suboverlay.overlay import OverlayWindow
 from suboverlay.settings import default_settings
@@ -30,6 +30,7 @@ class PaintLog:
 
     def __init__(self, w):
         self.events = []
+        self.colors = []
         w._draw_wrapped = self._draw_wrapped
         w._draw_divider = self._draw_divider
 
@@ -47,6 +48,7 @@ class PaintLog:
 
     def _draw_wrapped(self, p, font, text, area, y, color, stroke_w):
         self.events.append(("text", text))
+        self.colors.append(color)
         return y + 20
 
     def _draw_divider(self, p, area, y):
@@ -54,12 +56,14 @@ class PaintLog:
         return y + 4
 
 
-def paint(mode, orig, trans, order="trans_first", trans_available=False):
+def paint(mode, orig, trans, order="trans_first", trans_available=False,
+          trans_state="idle"):
     w = OverlayWindow(default_settings())
     w.resize(420, 140)
     w.mode, w.order = mode, order
     w.orig_text, w.trans_text = orig, trans
     w.trans_available = trans_available
+    w.trans_state = trans_state
     log = PaintLog(w)
     w.paintEvent(None)
     return log
@@ -145,3 +149,61 @@ def test_a_text_that_already_carries_its_label_is_not_labelled_twice():
     depend on that; the row label must not double up on it."""
     log = paint("trans", "\u539f\u6587", TRANS_LABEL + "\u539f\u6587", trans_available=True)
     assert log.texts == [TRANS_LABEL + "\u539f\u6587"]
+
+
+def test_translation_states_replace_the_translation_row_with_fixed_copy_and_color():
+    cases = [
+        ("waiting", "（等待原字幕中）", "#ffe082"),
+        ("translating", "（翻译中）", "#ffe082"),
+        ("failed:请求受限", "（翻译失败：请求受限）", "#ff5a5a"),
+        ("unconfigured", "（未配置翻译）", "#ffe082"),
+    ]
+    for state, expected, color in cases:
+        log = paint("trans", "Original", "", trans_available=True,
+                    trans_state=state)
+        assert log.texts == [TRANS_LABEL + expected]
+        assert [c.name() for c in log.colors] == [color]
+
+
+def test_ready_state_restores_translation_and_original_only_hides_all_translation_state():
+    ready = paint("trans", "Original", "Translated", trans_available=True,
+                  trans_state="ready")
+    assert ready.texts == [TRANS_LABEL + "Translated"]
+
+    original_only = paint("orig", "Original", "", trans_available=True,
+                          trans_state="failed:请求受限")
+    assert original_only.texts == [ORIG_LABEL + "Original"]
+
+
+def test_translation_failure_reason_is_truncated_to_sixteen_unicode_characters():
+    log = paint("trans", "Original", "", trans_available=True,
+                trans_state="failed:" + "\u7532" * 17)
+    assert log.texts == [TRANS_LABEL + "（翻译失败：" + "\u7532" * 16 + "…）"]
+
+
+def test_bilingual_unconfigured_state_keeps_original_and_divider():
+    log = paint("bilingual", "Original", "", trans_available=False,
+                trans_state="unconfigured")
+    assert log.texts == [TRANS_LABEL + "（未配置翻译）", ORIG_LABEL + "Original"]
+    assert log.shape == ["text", "divider", "text"]
+
+
+def test_waiting_state_is_visible_before_the_first_cue():
+    w = OverlayWindow(default_settings())
+    w.mode = "trans"
+    w.set_display({"state": "no_cues", "trans_state": "waiting",
+                   "trans_available": True, "title": "Some video"})
+    log = PaintLog(w)
+    w.paintEvent(None)
+    assert log.texts == [TRANS_LABEL + "（等待原字幕中）"]
+
+
+def test_caption_chain_error_suppresses_waiting_translation_state():
+    w = OverlayWindow(default_settings())
+    w.mode = "trans"
+    w.set_display({"state": "no_cues", "trans_state": "waiting",
+                   "trans_available": True, "hook_error": "hook unavailable"})
+    log = PaintLog(w)
+    w.paintEvent(None)
+    assert log.texts == []
+    assert "hook" in w.status_text.lower()

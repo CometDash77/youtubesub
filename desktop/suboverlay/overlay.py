@@ -29,6 +29,7 @@ class OverlayWindow(QtWidgets.QWidget):
         self.history = []   # list of (orig, trans), newest last
         self.orig_text = ""
         self.trans_text = ""
+        self.trans_state = "idle"
         self.status_text = ""
         # Engine's word on whether this run can translate at all; see _display_rows().
         self.trans_available = False
@@ -73,11 +74,20 @@ class OverlayWindow(QtWidgets.QWidget):
         # One default for an absent field everywhere: nothing has said a
         # translation is possible, so don't assume one is.
         self.trans_available = bool(d.get("trans_available", False))
+        self.trans_state = d.get("trans_state") or "idle"
         if d.get("state") == "no_cues":
-            if d.get("hook_error"):
+            hook_error = d.get("hook_error") or ""
+            capture_error = d.get("capture_error") or ""
+            if (hook_error or capture_error) and self.trans_state == "waiting":
+                # Subtitle capture diagnostics take precedence over a healthy
+                # provider's waiting state; keep them in the existing status line.
+                self.trans_state = "idle"
+            self.orig_text = ""
+            self.trans_text = ""
+            if hook_error:
                 self.status_text = ("page hook NOT installed - the script is connected "
                                     "but cannot see captions")
-            elif d.get("capture_error"):
+            elif capture_error:
                 self.status_text = ("caption body was empty - connected, but YouTube "
                                     "returned no caption data")
             else:
@@ -115,6 +125,7 @@ class OverlayWindow(QtWidgets.QWidget):
         area = self.rect().adjusted(margin, margin, -margin, -margin)
         y = area.top()
         rows = self._display_rows()
+        has_status = bool(self._translation_status_text())
         for i, (role, text) in enumerate(rows):
             size = float(disp.get("font_size", 15))
             if role == "trans":
@@ -123,7 +134,12 @@ class OverlayWindow(QtWidgets.QWidget):
             font.setBold(disp.get("font_bold") in ("both",) or
                          (role == "trans" and disp.get("font_bold") == "trans_only") or
                          (role == "orig" and disp.get("font_bold") == "sub_only"))
-            color = QtGui.QColor(255, 255, 255) if role == "orig" else QtGui.QColor(255, 224, 130)
+            if role == "orig":
+                color = QtGui.QColor(255, 255, 255)
+            elif has_status and self.trans_state.startswith("failed:"):
+                color = QtGui.QColor(255, 90, 90)
+            else:
+                color = QtGui.QColor(255, 224, 130)
             y = self._draw_wrapped(p, font, text, area, y, color,
                                     float(disp.get("stroke", 2.0)))
             if i == 0 and len(rows) == 2:
@@ -152,6 +168,9 @@ class OverlayWindow(QtWidgets.QWidget):
         cues) nothing is drawn at all.
         """
         orig, trans = self.orig_text or "", self.trans_text or ""
+        trans_status = self._translation_status_text()
+        if trans_status:
+            trans = trans_status
         if self.mode == "orig":
             rows = [("orig", orig)]
         elif self.mode == "trans" and not trans and not self.trans_available:
@@ -165,6 +184,25 @@ class OverlayWindow(QtWidgets.QWidget):
         if not any(text for _, text in rows):
             return []  # between cues: no floating labels, no divider
         return [(role, self._labelled(role, text)) for role, text in rows]
+
+    def _translation_status_text(self):
+        """The map's fixed status copy, displayed inside the translation row."""
+        state = self.trans_state or "idle"
+        labels = {
+            "waiting": "（等待原字幕中）",
+            "translating": "（翻译中）",
+            "unconfigured": "（未配置翻译）",
+        }
+        if state in labels:
+            return labels[state]
+        if state.startswith("failed:"):
+            reason = state[len("failed:"):]
+            if not reason:
+                reason = "翻译内部错误"
+            if len(reason) > 16:
+                reason = reason[:16] + "…"
+            return "（翻译失败：" + reason + "）"
+        return ""
 
     def _labelled(self, role, text):
         """Row text with its constant label. Text that already carries it (the
