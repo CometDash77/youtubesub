@@ -17,6 +17,7 @@
 ## 术语 (跨票共用; 讨论时按此用词)
 - **预取 (prefetch)**: 调度行为 —— 在播放点到达之前把前方尚未播出的句子组送去翻译, 使到达时译文已就绪或已在途。
 - **批量 (batch)**: 请求形态 —— 把多个句子组放进**同一次** provider 请求。
+- **智能上下文**: 默认开启的提示词上下文，由视频标题、简介和带时间戳的全轨字幕组成；每批共享固定分节 system prompt，过长轨道按播放点双锚截断。旧 ADR-009 的 ±1 邻组语义已被取代；批次与预取仍是正交概念。详见 [ADR-009](docs/adr/ADR-009-context-window-and-cache-identity.md)、[ADR-010](docs/adr/ADR-010-prompt-presets-and-composition.md) 与 [ADR-007](docs/adr/ADR-007-batch-request-contract.md)。
 - 两者正交、可独立取舍。注意参照实现 kiss-translator 的 `batchSize=20` 是它 DOM 段落翻译的通用参数, **与字幕预取无关** (取证见 #3); 讨论"批大小"时先确认说的是哪一个。
 - **翻译命名空间 (provider namespace)**: 一个 cache identity 值 —— 把逐句字段 (clientKey / prompt) 留空后算出来的那个, 只由 provider 配置 + 系统提示词决定。同一命名空间内按各句自己的 identity 命中缓存, 跨命名空间绝不命中。`mock` 是它的一个维度 (ADR-008), 所以"勾 Mock 跑过的句子"与"真实 provider 的同一句"是两个命名空间; 命名空间变动时内存里的旧译文同样作废。
 
