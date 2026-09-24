@@ -500,6 +500,26 @@ class Engine:
             return {"sources": len(self.sources), "active_source": self.active_source,
                     "display": display}
 
+    @staticmethod
+    def _timeline_display(src, video_time_ms):
+        """Resolve one clock position through cue -> sentence group -> translation.
+
+        Cue selection owns timing; sentence groups own translation. Keeping
+        that join in one place makes the display and urgent scheduler use the
+        same alignment result.
+        """
+        cue = find_cue_at(src.cues, video_time_ms)
+        if cue is None:
+            return None, None, ""
+        cue_index = src.cues.index(cue)
+        group_index = src.cue_to_group.get(cue_index)
+        if group_index is None:
+            return cue, None, ""
+        translation = src.group_trans.get(group_index, "")
+        if not translation and cue.trans:
+            translation = cue.trans
+        return cue, group_index, translation
+
     def _tick_locked(self):
         with self._lock:
             self._sync_namespace()
@@ -517,10 +537,7 @@ class Engine:
                         "capture_error": (src.meta.get("capture_error") or "") if src else "",
                         "trans_available": _provider_usable(self.settings.get("provider", {}))}
             t = estimate_ms(src.sync)
-            cue = find_cue_at(src.cues, t)
-            gi = None
-            if cue is not None:
-                gi = src.cue_to_group.get(src.cues.index(cue))
+            cue, gi, trans = self._timeline_display(src, t)
             if gi is not None and gi != src.last_group_idx:
                 src.last_group_idx = gi
                 # The sentence on screen (URGENT): never debounced, never throttled
@@ -545,14 +562,6 @@ class Engine:
                     and src.window_anchor != gi):
                 src.window_anchor = gi
                 self._fill_window(src, gi, t)
-            trans = ""
-            if cue is not None:
-                ci = src.cues.index(cue)
-                gi = src.cue_to_group.get(ci)
-                if gi is not None:
-                    trans = src.group_trans.get(gi, "")
-                    if not trans and cue.trans:
-                        trans = cue.trans
             title = src.meta.get("tab_title") or ""
             return {"state": "ok", "orig": cue.text if cue else "",
                     "trans": trans,
