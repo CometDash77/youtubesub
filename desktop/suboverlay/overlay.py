@@ -113,6 +113,11 @@ class OverlayWindow(QtWidgets.QWidget):
 
         margin = 14
         area = self.rect().adjusted(margin, margin, -margin, -margin)
+        # Rows and the bilingual divider share the content bounds. In
+        # particular, a wrapped first row must not push its divider below the
+        # visible subtitle area.
+        p.save()
+        p.setClipRect(area, QtCore.Qt.IntersectClip)
         y = area.top()
         rows = self._display_rows()
         for i, (role, text) in enumerate(rows):
@@ -130,6 +135,7 @@ class OverlayWindow(QtWidgets.QWidget):
                 # Issue #1 Q2a: two rows (bilingual) always get the divider
                 # between them, even while one of them is still empty.
                 y = self._draw_divider(p, area, y)
+        p.restore()
         if self.status_text:
             font = QtGui.QFont("Consolas", 9)
             p.setFont(font)
@@ -184,20 +190,42 @@ class OverlayWindow(QtWidgets.QWidget):
     def _draw_wrapped(self, p, font, text, area, y, color, stroke_w):
         fm = QtGui.QFontMetrics(font)
         line_h = fm.height() + 3
-        # simple greedy wrap to area width
+        # Wrap on spaces where possible, then split overlong words by character
+        # width. Chinese subtitles commonly contain no spaces at all.
         words = text.split(" ")
         lines, cur = [], ""
+
+        def split_word(word):
+            parts, part = [], ""
+            for char in word:
+                candidate = part + char
+                if part and fm.horizontalAdvance(candidate) > area.width():
+                    parts.append(part)
+                    part = char
+                else:
+                    part = candidate
+            if part:
+                parts.append(part)
+            return parts
+
         for w in words:
             cand = (cur + " " + w).strip()
-            if fm.horizontalAdvance(cand) <= area.width() or not cur:
+            if fm.horizontalAdvance(cand) <= area.width():
                 cur = cand
             else:
-                lines.append(cur)
-                cur = w
+                if cur:
+                    lines.append(cur)
+                    cur = ""
+                parts = split_word(w)
+                if parts:
+                    lines.extend(parts[:-1])
+                    cur = parts[-1]
         if cur:
             lines.append(cur)
         pen = QtGui.QPen(QtGui.QColor(0, 0, 0), stroke_w, QtCore.Qt.SolidLine,
                          QtCore.Qt.RoundCap, QtCore.Qt.RoundJoin)
+        p.save()
+        p.setClipRect(area, QtCore.Qt.IntersectClip)
         for ln in lines:
             if y + line_h > area.bottom() + 8:
                 break
@@ -212,6 +240,7 @@ class OverlayWindow(QtWidgets.QWidget):
                 p.drawText(QtCore.QRect(area.left(), y, area.width(), line_h),
                            QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter, ln)
             y += line_h
+        p.restore()
         return y + 4
 
     # ---- drag + resize (LiveSubs geometry, manual math) ----
