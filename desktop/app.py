@@ -411,6 +411,9 @@ class App:
     def __init__(self):
         self.settings = S.load()
         self.app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
+        # The overlay is a Qt.Tool window, so Qt does not count it as a primary
+        # window. Closing a parentless settings dialog must not end the app.
+        self.app.setQuitOnLastWindowClosed(False)
         # One app-lifetime connection tester: its last report must outlive the
         # dialog so /status can keep serving it (#23 decision 17).
         self.tester = ConnectionTester()
