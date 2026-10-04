@@ -1,12 +1,13 @@
 """youtubesub desktop app entry point.
 Wires: WSServer -> Engine -> OverlayWindow (Qt timer pump)."""
-import queue, sys, os, time, uuid
+import queue, sys, os, time, uuid, traceback
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from PySide6 import QtCore, QtWidgets
 
 from suboverlay.connection_test import ConnectionTester
+from suboverlay.debug_window import DebugWindow
 from suboverlay.engine import Engine
 from suboverlay.hotkey import ComboWatcher
 from suboverlay.overlay import OverlayWindow
@@ -427,8 +428,13 @@ class App:
         # dialog so /status can keep serving it (#23 decision 17).
         self.tester = ConnectionTester()
         self.overlay = OverlayWindow(self.settings)
+        # The debug window is created on first use and then reused (its diag
+        # page stops polling when it closes); App holds the reference so the
+        # non-modal window is never garbage collected (#158).
+        self.debug_window = None
         # Worker pool follows provider.max_concurrent (clamped [1,16];
-        # restart-effective - the SpinBox entry lives with the #21 work item).
+        # restart-effective - the SpinBox entry lives in the debug window's
+        # tuning page, #158).
         self.engine = Engine(self.settings)
         self.evq = queue.Queue(maxsize=2000)
         self.server = WSServer(self.settings.get("server", {}).get("port", DEFAULT_PORT), self.evq,
@@ -436,10 +442,16 @@ class App:
         # Build the menu here, not in run(): the unlock hotkey timer must never be
         # able to fire before the click-through action it manipulates exists.
         self.overlay._ctx_menu = self._menu()
+        self.tray = QtWidgets.QSystemTrayIcon(
+            self.app.style().standardIcon(QtWidgets.QStyle.SP_MediaPlay), self.app)
+        self.tray.setToolTip("YouTube 字幕浮窗")
+        self.tray.setContextMenu(self.overlay._ctx_menu)
+        self.tray.activated.connect(self._tray_activated)
 
     def run(self):
-        self.overlay.show()
         self.server.start()
+        self.overlay.show()
+        self.tray.show()
 
         pump = QtCore.QTimer()
         pump.timeout.connect(self._drain)
@@ -463,11 +475,15 @@ class App:
         self._hotkey_timer = hk
 
         self.app.aboutToQuit.connect(self.server.stop)
+        self.app.aboutToQuit.connect(self.tray.hide)
         sys.exit(self.app.exec())
 
     def _menu(self):
         from PySide6 import QtWidgets as QW
         m = QW.QMenu()
+        self._visibility_action = m.addAction("隐藏浮窗")
+        self._visibility_action.triggered.connect(self._toggle_overlay)
+        m.addSeparator()
         a_mode = m.addAction("Mode: original/translation/bilingual")
         a_mode.triggered.connect(self.overlay.cycle_mode)
         a_order = m.addAction("Swap bilingual order")
@@ -487,10 +503,24 @@ class App:
         self._ct_action.triggered.connect(self._toggle_click_through)
         a_set = m.addAction("设置……")
         a_set.triggered.connect(self._open_settings)
+        a_debug = m.addAction("调试……")
+        a_debug.triggered.connect(self._open_debug_window)
         m.addSeparator()
         a_q = m.addAction("Quit")
         a_q.triggered.connect(QtWidgets.QApplication.instance().quit)
         return m
+
+    def _toggle_overlay(self):
+        if self.overlay.isVisible():
+            self.overlay.hide()
+            self._visibility_action.setText("显示浮窗")
+        else:
+            self.overlay.show()
+            self._visibility_action.setText("隐藏浮窗")
+
+    def _tray_activated(self, reason):
+        if reason == QtWidgets.QSystemTrayIcon.DoubleClick and not self.overlay.isVisible():
+            self._toggle_overlay()
 
     def _toggle_click_through(self):
         self._set_click_through(self._ct_action.isChecked())
@@ -515,6 +545,16 @@ class App:
         dlg.exec()
         self.engine.settings = self.settings
 
+    def _open_debug_window(self):
+        """One instance, reused: created on first use, shown and raised after
+        that (closing it only hides it - its diag page stops polling)."""
+        if self.debug_window is None:
+            self.debug_window = DebugWindow(self.settings, port=self.server.port,
+                                            overlay=self.overlay)
+        self.debug_window.show()
+        self.debug_window.raise_()
+        self.debug_window.activateWindow()
+
     def _status(self):
         """GET /status payload: lets the user (and the E2E test) see what the
         overlay is showing without screenshots. Loopback only, same rules as /health."""
@@ -526,6 +566,7 @@ class App:
                    "trans_available": bool(d.get("trans_available", False)),
                    "playing": d.get("playing"),
                    "rate": d.get("rate"), "title": d.get("title", ""),
+                   "video_description": d.get("video_description", ""),
                    "hook_error": d.get("hook_error", ""),
                    "capture_error": d.get("capture_error", ""),
                    "sources": s.get("sources", 0),
@@ -557,7 +598,17 @@ class App:
 
 
 def main():
-    App().run()
+    try:
+        App().run()
+    except Exception as exc:  # noqa: BROAD_EXCEPT_OK - GUI entry point
+        app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
+        box = QtWidgets.QMessageBox()
+        box.setIcon(QtWidgets.QMessageBox.Critical)
+        box.setWindowTitle("字幕浮窗启动失败")
+        box.setText(str(exc) or type(exc).__name__)
+        box.setDetailedText(traceback.format_exc())
+        box.exec()
+        raise SystemExit(1) from exc
 
 
 if __name__ == "__main__":

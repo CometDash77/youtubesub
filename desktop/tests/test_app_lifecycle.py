@@ -3,6 +3,7 @@ import http.client
 import json
 import os
 import socket
+import pytest
 import sys
 import time
 
@@ -15,6 +16,60 @@ from app import App, SettingsDialog
 from suboverlay import settings as S
 
 _QAPP = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+
+def test_tray_menu_hides_and_restores_overlay_without_stopping_app(tmp_path, monkeypatch):
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    monkeypatch.setattr(S, "load", S.default_settings)
+    instance = App()
+    try:
+        instance.overlay.show()
+        assert instance.tray.contextMenu() is instance.overlay._ctx_menu
+        instance._toggle_overlay()
+        assert not instance.overlay.isVisible()
+        instance.overlay.pulse_topmost()
+        assert not instance.overlay.isVisible()
+        instance._toggle_overlay()
+        assert instance.overlay.isVisible()
+    finally:
+        instance.overlay.close()
+        instance.engine._queue.shutdown()
+
+
+def test_tray_quit_action_exits_the_app_and_stops_the_service(tmp_path, monkeypatch):
+    """#148 acceptance: the tray menu's Quit is effective. The Quit action comes
+    from the very QMenu the tray and the overlay share; triggering it must end
+    the event loop and release the service port (no orphaned server thread)."""
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    settings = S.default_settings()
+    settings["server"]["port"] = port
+    monkeypatch.setattr(S, "load", lambda: settings)
+
+    instance = App()
+    try:
+        assert instance.tray.contextMenu() is instance.overlay._ctx_menu
+        quits = [action for action in instance.overlay._ctx_menu.actions()
+                 if action.text() == "Quit"]
+        assert len(quits) == 1, "the tray menu offers exactly one Quit"
+        # Safety net: a wrongly wired Quit must fail the assertion below, not
+        # hang the suite on app.exec().
+        watchdog = []
+        QtCore.QTimer.singleShot(0, quits[0].trigger)
+        QtCore.QTimer.singleShot(5000, lambda: (watchdog.append(True),
+                                                instance.app.quit()))
+        with pytest.raises(SystemExit):
+            instance.run()
+        assert watchdog == [], "Quit action did not end the event loop"
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", port))  # freed => aboutToQuit stopped it
+    finally:
+        instance.server.stop()
+        instance.tray.hide()
+        instance.overlay.close()
+        instance.engine._queue.shutdown()
 
 
 def test_closing_settings_dialog_does_not_quit_the_application(tmp_path, monkeypatch):

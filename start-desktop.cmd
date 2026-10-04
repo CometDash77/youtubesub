@@ -13,11 +13,19 @@ if errorlevel 1 (
   exit /b 1
 )
 
-echo [youtubesub] starting desktop app...  ^(health: http://127.0.0.1:9877/health^)
-python "%~dp0desktop\app.py"
+where pythonw >nul 2>nul
 if errorlevel 1 (
-  echo [youtubesub] app exited with an error. Check that 127.0.0.1:9877 is free
-  echo [youtubesub] and that dependencies are installed:  pip install -r requirements.txt
+  echo [youtubesub] pythonw not found on PATH. Reinstall Python with the windowed executable.
   pause
+  exit /b 1
 )
+
+python -c "import PySide6, websockets" >nul 2>nul
+if errorlevel 1 (
+  echo [youtubesub] desktop dependencies are missing. Run: pip install -r requirements.txt
+  pause
+  exit /b 1
+)
+
+start "" pythonw "%~dp0desktop\app.py"
 endlocal

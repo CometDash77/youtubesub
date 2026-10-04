@@ -50,11 +50,11 @@ def default_settings():
         # array only (built-ins never appear here); legacy prompt.system is
         # migrated one-way in load() and never returns.
         "prompt": {"active": "default", "presets": [], "context_groups": 1},
-        # Prefetch / batch parameters (spec #24, ADR-007). Read-only defaults:
-        # they exist as config values but are deliberately NOT exposed in the
-        # settings UI (UI exposure belongs to the "config-trusted UX" work item).
-        # Values need real-Key calibration (milestone M) - do not treat them as
-        # final.
+        # Prefetch / batch parameters (spec #24, ADR-007). Exposed by the debug
+        # window's tuning page in its "experimental / uncalibrated" group since
+        # map #152 / spec #161; ranges and defaults live in TUNING_FIELDS below.
+        # Values still need real-Key calibration (milestone M) - do not treat
+        # them as final.
         "prefetch": {"lead_s": 90.0,       # lead window measured in SECONDS (decoupled from subtitle density)
                      "max_groups": 20,      # hard group cap bounding the window (first of the two to hit wins)
                      "seek_debounce_ms": 400},  # quiet time before a window refill after a timeline jump
@@ -66,6 +66,171 @@ def default_settings():
         "window": {"x": None, "y": None, "w": 380, "h": 64},
         "server": {"port": 9877},
     }
+
+
+# ---- Tuning-page field authority table (#152 / spec #161, ticket #158) ----
+# The parameters that own a config key but have no UI of their own. This table
+# is the ONE authority for their range, default, unit and effect timing: the
+# debug window's tuning page builds its controls from it and clamps through it
+# (spec #161 decision 5). Being listed here does NOT add a key to the file -
+# the schema stays frozen.
+#
+# `control` is the widget kind the page must use, one per spec #161's table:
+# "choice" (下拉), "int" / "float" (数字框), "slider" (滑条 + 数字框, 背景不透明度),
+# "color" (取色器).
+TUNING_GROUPS = ("display", "network", "experimental")
+
+
+def _tune(path, group, label, control, default, **kw):
+    spec = {"path": path, "group": group, "label": label, "control": control,
+            "default": default, "choices": (), "labels": (), "min": None,
+            "max": None, "step": None, "scale": 1, "unit": "",
+            "restart": False, "uncalibrated": False, "notify_overlay": False,
+            "hint": ""}
+    spec.update(kw)
+    return spec
+
+
+TUNING_FIELDS = (
+    _tune(("display", "mode"), "display", "显示模式", "choice", "bilingual",
+          choices=("bilingual", "trans", "orig"), labels=("双语", "只看译文", "只看原文"),
+          notify_overlay=True),
+    _tune(("display", "order"), "display", "上下顺序", "choice", "trans_first",
+          choices=("trans_first", "orig_first"), labels=("译文在上", "原文在上"),
+          notify_overlay=True, hint="仅双语模式可用"),
+    _tune(("display", "history_lines"), "display", "历史保留行数", "int", 2,
+          min=0, max=10, step=1),
+    _tune(("display", "font_bold"), "display", "粗体范围", "choice", "none",
+          choices=("none", "trans_only", "sub_only", "both"),
+          labels=("都不粗", "只译文", "只原文", "都粗")),
+    _tune(("display", "stroke"), "display", "描边宽度", "float", 1.5,
+          min=0.0, max=10.0, step=0.5, hint="0 = 不描边"),
+    _tune(("display", "bg_color"), "display", "背景色", "color", [0, 0, 0],
+          min=0, max=255),
+    _tune(("display", "bg_opacity"), "display", "背景不透明度", "slider", 150,
+          min=0, max=255, step=1),
+    _tune(("provider", "timeout_s"), "network", "请求超时", "float", 60.0,
+          min=1.0, max=600.0, step=1.0, unit="秒"),
+    _tune(("provider", "max_concurrent"), "network", "同时请求数", "int", 5,
+          min=1, max=16, step=1, restart=True, hint="重启后生效"),
+    _tune(("server", "port"), "network", "服务端口", "int", 9877,
+          min=1, max=65535, step=1, restart=True, hint="重启后生效"),
+    _tune(("prefetch", "lead_s"), "experimental", "预取窗口秒数", "float", 90.0,
+          min=0.0, max=600.0, step=1.0, unit="秒", uncalibrated=True),
+    _tune(("prefetch", "max_groups"), "experimental", "预取组数上限", "int", 20,
+          min=1, max=200, step=1, uncalibrated=True),
+    _tune(("prefetch", "seek_debounce_ms"), "experimental", "seek 静默等待",
+          "float", 0.4, min=0.0, max=5.0, step=0.1, unit="秒", scale=1000,
+          uncalibrated=True),
+    _tune(("batch", "max_groups"), "experimental", "批量组数上限", "int", 8,
+          min=1, max=64, step=1, uncalibrated=True),
+    _tune(("batch", "max_chars"), "experimental", "批量字符上限", "int", 8000,
+          min=100, max=64000, step=500, uncalibrated=True),
+)
+
+_FIELDS_BY_PATH = {f["path"]: f for f in TUNING_FIELDS}
+
+
+def field_by_path(path):
+    """Field spec for a (section, key) path; KeyError when not tunable."""
+    return _FIELDS_BY_PATH[tuple(path)]
+
+
+def is_scaled(field):
+    """True when the page shows one unit and the file stores another (seek)."""
+    return field.get("scale", 1) != 1
+
+
+def _is_number(value):
+    return not isinstance(value, bool) and isinstance(value, (int, float))
+
+
+def _raw(cfg, field):
+    section, key = field["path"]
+    node = cfg.get(section) if isinstance(cfg, dict) else None
+    return node.get(key) if isinstance(node, dict) else None
+
+
+def _clamp_number(field, value):
+    """Clamp a numeric UI value into range; None when it is not a number."""
+    if not _is_number(value):
+        return None
+    v = min(max(float(value), float(field["min"])), float(field["max"]))
+    return int(round(v)) if field["control"] in ("int", "slider") else float(v)
+
+
+def _clamp_channels(field, value):
+    if not isinstance(value, (list, tuple)) or len(value) != 3:
+        return None
+    out = []
+    for channel in value:
+        if not _is_number(channel):
+            return None
+        out.append(int(round(min(max(float(channel), float(field["min"])),
+                                 float(field["max"])))))
+    return out
+
+
+def display_value(field, cfg):
+    """Stored value -> UI value (clamped, UI unit). Never raises: a hand-edited
+    or corrupted value falls back to the field default."""
+    raw = _raw(cfg, field)
+    if field["control"] == "choice":
+        return raw if raw in field["choices"] else field["default"]
+    if field["control"] == "color":
+        channels = _clamp_channels(field, raw)
+        return channels if channels is not None else list(field["default"])
+    if not _is_number(raw):
+        return field["default"]
+    value = _clamp_number(field, raw / field.get("scale", 1))
+    return field["default"] if value is None else value
+
+
+def stored_value(field, ui_value):
+    """UI value -> stored value (clamped, stored unit)."""
+    if field["control"] == "choice":
+        return ui_value if ui_value in field["choices"] else field["default"]
+    if field["control"] == "color":
+        channels = _clamp_channels(field, ui_value)
+        return channels if channels is not None else list(field["default"])
+    value = _clamp_number(field, ui_value)
+    if value is None:
+        value = _clamp_number(field, field["default"])
+    scale = field.get("scale", 1)
+    return int(round(value * scale)) if scale != 1 else value
+
+
+def tuning_ui_state(cfg):
+    """UI-unit working copy of every tunable field (fresh lists, never aliases
+    cfg). The page edits this; the file is written only on 确定."""
+    return {f["path"]: display_value(f, cfg) for f in TUNING_FIELDS}
+
+
+def collect_edits(ui_state, initial_state):
+    """Paths whose UI value differs from the state the page loaded, in page
+    order. Value equality (not a dirty flag) is what makes an untouched key
+    stay untouched - including hand-edited out-of-range values."""
+    edits = []
+    for f in TUNING_FIELDS:
+        path = f["path"]
+        if path in ui_state and path in initial_state and ui_state[path] != initial_state[path]:
+            edits.append((path, ui_state[path]))
+    return edits
+
+
+def apply_edits(cfg, edits):
+    """Write clamped+converted values into cfg in place; returns the applied
+    paths. Keys outside TUNING_FIELDS raise - the page cannot reach them."""
+    applied = []
+    for path, ui_value in edits:
+        field = field_by_path(path)
+        section, key = field["path"]
+        node = cfg.get(section)
+        if not isinstance(node, dict):
+            node = cfg[section] = {}
+        node[key] = stored_value(field, ui_value)
+        applied.append(field["path"])
+    return applied
 
 
 def settings_dir():
