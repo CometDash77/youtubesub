@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         youtubesub - YouTube subtitle bridge
 // @namespace    https://github.com/local/youtubesub
-// @version      0.1.0
+// @version      0.1.1
 // @description  Streams YouTube subtitle cues + player state to the local desktop overlay (127.0.0.1:9877).
 // @match        *://*.youtube.com/*
 // @grant        GM_xmlhttpRequest
@@ -105,6 +105,16 @@
     for (var i = 0; i < n; i++) chars += cues[i].text.length;
     return [n, chars, cues[0].start_ms, cues[n - 1].end_ms,
             cues[0].text, cues[n - 1].text].join(':');
+  }
+
+  function videoMetadata() {
+    var title = String(document.title || '').replace(/\s+- YouTube\s*$/i, '').trim();
+    var metadata = { tab_title: title };
+    var description = document.querySelector('meta[name="description"]');
+    var content = description && typeof description.content === 'string'
+      ? description.content.trim() : '';
+    if (content) metadata.video_description = content;
+    return metadata;
   }
 
   // This function is serialized into the page's main world. Keep it self-contained:
@@ -355,12 +365,12 @@
     }
 
     buildRegister() {
-      return {
+      return Object.assign({
         type: 'register', provider: 'youtube', source_id: this.sourceId,
-        tab_title: document.title || '', video_id: this.videoId,
+        video_id: this.videoId,
         track_kind: this.trackKind, track_lang: this.trackLang,
         hook_error: this.hookError, capture_error: this.captureError
-      };
+      }, videoMetadata());
     }
 
     sendSync() {
@@ -402,11 +412,11 @@
       this.trackLang = track.lang;
       this.cueCount = cues.length;
       this.send(this.buildRegister());
-      this.cacheAndSend('cues', {
+      this.cacheAndSend('cues', Object.assign({
         type: 'cues', provider: 'youtube', source_id: this.sourceId,
-        tab_title: document.title || '', video_id: this.videoId,
+        video_id: this.videoId,
         track_kind: this.trackKind, track_lang: this.trackLang, cues: cues
-      });
+      }, videoMetadata()));
     }
 
     bindVideo(video) {

@@ -3,6 +3,10 @@
 Language selects either the no-space quality gate and 30-character pass, or
 the space-language silence, duration, comma-word and sign-start rules. Long
 space-language groups get one second pass with weak boundaries enabled.
+A space-language continuation cue (lowercase, non-weak-boundary start after a
+>=2-cue non-terminal buffer) suppresses the silence, duration and 15-word
+splits at that boundary; punctuation, sign, non-speech and the weak-boundary
+list are never suppressed.
 Non-speech bracket cues are omitted in both branches. Group ranges remain
 contiguous cue spans so translation and per-cue alignment keep their contract.
 """
@@ -109,15 +113,22 @@ def _split_groups(cues, candidates, no_space, second_pass=False):
             current_words = _word_count(current_text)
             starts_new_thought = (second_pass and len(current) > 1
                                   and _starts_with_weak_boundary(text))
+            continuation = (
+                not no_space
+                and len(current) >= 2
+                and not _ends_sentence(cues[current[-1]].text, no_space)
+                and "a" <= text[0] <= "z"
+                and not _starts_with_weak_boundary(text)
+            )
             should_split = (
-                silence > 1000
+                (silence > 1000 and not continuation)
                 or _ends_sentence(cues[current[-1]].text, no_space)
-                or (not no_space and duration >= 10000)
+                or (not no_space and duration >= 10000 and not continuation)
                 or (no_space and len(current_text) >= 30)
                 or (not no_space and current_words >= 15
                     and cues[current[-1]].text.rstrip().endswith(",")
-                    and not second_pass)
-                or (second_pass and current_words >= 15)
+                    and not second_pass and not continuation)
+                or (second_pass and current_words >= 15 and not continuation)
                 or starts_new_thought
             )
             if should_split:

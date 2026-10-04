@@ -4,9 +4,10 @@
 另有 `GET http://127.0.0.1:9877/health` -> `{"ok":true,"version":1}` 供脚本连接前做存活探测.
 诊断端点 `GET http://127.0.0.1:9877/status` -> `{"ok":true,"version":1,"stats":{frames,bad_frames,error},
 "state":"ok|no_cues","orig":"...","trans":"...","trans_state":"idle|waiting|translating|unconfigured|ready|failed:<reason>","trans_available":bool,"playing":bool,"rate":num,"title":"...",
-"sources":n,"active_source":"...","mode":"...","order":"...","history":[[orig,trans],...],"click_through":bool,"hook_error":"...","capture_error":"...","connection_test":report?}`
+"sources":n,"active_source":"...","mode":"...","order":"...","history":[[orig,trans],...],"click_through":bool,"hook_error":"...","capture_error":"...","video_description":"...","connection_test":report?}`
 `trans_available` = 这一轮究竟会不会产出译文 (显式 Mock, 或 base_url 与 model 都非空; 由 engine 判定)。
-`trans_state` 是顶层当前渲染句状态：`idle` / `waiting` / `translating` / `unconfigured` / `ready` / `failed:<reason>`；失败原因与浮窗使用同一固定短文案映射。`idle` 表示原文-only、没有当前渲染句或处于已知字幕轨的 cue 间隙；`waiting` 表示链路正常但当前活动视频尚未收到 cue。
+`trans_state` 是顶层当前渲染句状态：`idle` / `waiting` / `translating` / `unconfigured` / `ready` / `failed:<reason>`；失败原因与浮窗使用同一固定短文案映射。`idle` 表示原文-only、没有当前渲染句或处于已知字幕轨的 cue 间隙；识别为中文原文的句子组也保持 `idle`，不会进入翻译流程；`waiting` 表示链路正常但当前活动视频尚未收到 cue。
+中文原文检测在本地提交边界完成：非空 `track_lang` 以 `zh` 开头时跳过，其他非空标签优先于正文；没有标签时，Han 表意字占字母字符至少 30% 且不含假名或韩文字母则按中文处理。该语义不扩展 `trans_state`、`/status` 字段或协议 schema；翻译配置是否可用不改变中文句子组不提交模型请求的行为。
 `trans` 为空只表示「这一刻没有译文」, 不表示「没有翻译可用」—— 浮窗的 trans 模式据此决定译文为空时回退显示原文 (issue #1);
 显示层不解析 provider 配置, 只读这个字段。
 `hook_error` 非空 = 脚本连上了、但页面钩子没装成功; `capture_error` 非空 = 钩子装上了、也看到了字幕请求, 但响应没有可用正文 (都见 register); 两者都空 = 正常。
@@ -21,7 +22,9 @@
 ## browser -> desktop
 
 ### register
-`{"type":"register","provider":"youtube","source_id":"<uuid>","tab_title":"...","video_id":"...","track_kind":"manual|asr|tlang","track_lang":"en","hook_error":"...","capture_error":"..."}`
+`{"type":"register","provider":"youtube","source_id":"<uuid>","tab_title":"...","video_id":"...","track_kind":"manual|asr|tlang","track_lang":"en","hook_error":"...","capture_error":"...","video_description":"..."}`
+`tab_title` 去掉 YouTube 标题的末尾 ` - YouTube`; 新版脚本从同源 `meta[name="description"]` 读取并可选发送 `video_description`。字段缺省或空白表示无简介，不要求升级协议版本；旧脚本不发该字段时桌面端按空简介处理，新脚本的额外键可被旧桌面忽略。
+桌面端将简介并入 source 元数据，并通过 loopback `GET /status` 的诊断值 `video_description` 暴露；旧客户端帧缺省时该值为空串。
 每页加载一个 source_id; SPA 切视频 -> 新 video_id 视为新 source (修复 dkitle 无 SPA 处理的缺陷).
 `hook_error` (v1 可选, 后加): 页面钩子 (注入主世界的 fetch/XHR 包装) 安装失败时的人类可读原因; 成功时为空串, 也可以省略。
 桌面端把它并入该 source 的 meta, 经 `GET /status` 的 `hook_error` 暴露, 并在浮窗状态行显示 "page hook NOT installed ..."

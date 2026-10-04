@@ -38,6 +38,7 @@ F14 = ("one two three four five six seven eight nine ten eleven twelve "
 W34 = ("a b c d e f g h i j k l m n o p q r s t u v w x y z "
        "a1 a2 a3 a4 a5 a6 a7 a8")
 T10 = "aa bb cc dd ee ff gg hh ii jj"
+T10U = "Aa bb cc dd ee ff gg hh ii jj"
 HUGE = ("lorem ipsum dolor sit amet consectetur adipiscing elit sed do "
         "eiusmod tempor incididunt ut labore et dolore magna aliqua")
 LONG_ZH = ("这是一条非常非常长的字幕行用来把累计字符推过一百的阈值顺便展示"
@@ -55,9 +56,9 @@ CASES = [
      [mk(0, 3000, "the cat", 800),
       mk(1000, 4000, "the cat sat", 1800),
       mk(2000, 5000, "the cat sat down", 2600),
-      mk(6200, 8000, "next thought here", 6200)],
+      mk(6200, 8000, "Next thought here", 6200)],
      "", [(0, 2), (3, 3)],
-     ["the cat the cat sat the cat sat down", "next thought here"]),
+     ["the cat the cat sat the cat sat down", "Next thought here"]),
     ("silence of exactly 1000ms does not split",
      [mk(0, 1000, "hello there"), mk(2000, 3000, "my friend")],
      "", [(0, 1)], ["hello there my friend"]),
@@ -184,10 +185,11 @@ CASES = [
       mk(3300, 4300, "走吧")],
      "en", [(0, 0), (1, 3)], ["OK!", "好嘞 Hello my friend 走吧"]),
     # --- second pass (space branch only) ---
-    ("second pass splits a >100 char group by the 15-word rule "
-     "(no comma needed)",
-     [mk(i * 1100, i * 1100 + 1000, T10) for i in range(4)],
-     "", [(0, 1), (2, 3)], [T10 + " " + T10, T10 + " " + T10]),
+    ("second pass 15-word split fires when the next cue starts a new "
+     "sentence (uppercase)",
+     [mk(i * 1100, i * 1100 + 1000, t) for i, t in
+      enumerate([T10, T10, T10U, T10])],
+     "", [(0, 1), (2, 3)], [T10 + " " + T10, T10U + " " + T10]),
     ("second pass: the conjunction list fires once the buffer has "
      "more than one cue",
      [mk(0, 1000, "wordwordwordwordword wordwordwordwordword"),
@@ -212,6 +214,34 @@ CASES = [
           "日月星辰", "金木水火", LONG_ZH])],
      "zh", [(0, 7)],
      ["春夏秋冬风雨雷电山川湖海如此而已)花草树木日月星辰金木水火" + LONG_ZH]),
+    # --- continuation exemption (#149 / #151: sentence tail survives) ---
+    ("lowercase continuation absorbs a >1000ms silence gap",
+     [mk(0, 3000, "the cat"), mk(1000, 4000, "the cat sat"),
+      mk(2000, 5000, "the cat sat down"), mk(6200, 8000, "next thought here")],
+     "", [(0, 3)],
+     ["the cat the cat sat the cat sat down next thought here"]),
+    ("8:48 sample shape: sentence tail 'among many' survives a silence gap "
+     "(#149 fixture)",
+     [mk(0, 3000, "That is reason number two. Google's compute"),
+      mk(3100, 7000, "went to Google's customers and Gemini"),
+      mk(7100, 9000, "became one internal customer"),
+      mk(10100, 13000, "among many. The third reason is the")],
+     "", [(0, 3)],
+     ["That is reason number two. Google's compute went to Google's "
+      "customers and Gemini became one internal customer among many. "
+      "The third reason is the"]),
+    ("10s duration split is absorbed by a lowercase continuation",
+     [mk(0, 4000, "a long speech keeps going"),
+      mk(4100, 9000, "for a while longer"),
+      mk(14100, 15000, "lowercase tail words")],
+     "", [(0, 2)],
+     ["a long speech keeps going for a while longer lowercase tail words"]),
+    ("second pass 15-word split is exempted for an all-lowercase continuation",
+     [mk(i * 1100, i * 1100 + 1000, T10) for i in range(4)],
+     "", [(0, 3)], [T10 + " " + T10 + " " + T10 + " " + T10]),
+    ("15-word mechanical split still fires on a single-cue buffer",
+     [mk(0, 3000, HUGE), mk(3100, 4100, "lowercase tail words")],
+     "", [(0, 0), (1, 1)], [HUGE, "lowercase tail words"]),
 ]
 
 

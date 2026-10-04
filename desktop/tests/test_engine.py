@@ -1,5 +1,6 @@
 """Engine pipeline tests: cues -> groups -> queue -> mock translate -> display."""
-import json, os, sys, tempfile, time
+import json, os, sqlite3, sys, tempfile, time
+import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from suboverlay.engine import Engine
 from suboverlay.settings import default_settings
@@ -89,6 +90,127 @@ class RecordingQueue:
         return 0  # nothing runs here, so nothing is pending to cancel
 
 
+def test_chinese_tracks_skip_translation_with_provider_on_or_off(tmp_path):
+    """A known Chinese track stays original-only even when translation is usable."""
+    tracks = [
+        ("zh-Hans", ["这是一段简体中文字幕", "再来一行简体字幕", "第三行简体字幕"]),
+        ("zh-Hant-TW", ["這是一段繁體中文字幕", "再來一行繁體字幕", "第三行繁體字幕"]),
+    ]
+    for provider_on in (False, True):
+        for display_mode in ("bilingual", "orig"):
+            for track_lang, lines in tracks:
+                db = tmp_path / ("provider-%s-%s-%s.db" % (provider_on, display_mode, track_lang))
+                translated_calls = []
+                e = mk_engine(str(tmp_path), mock=False,
+                              base_url=CFG_URL if provider_on else "",
+                              model=CFG_MODEL if provider_on else "", db=str(db),
+                              translate_fn=lambda jobs: translated_calls.append(jobs) or [])
+                e.settings["display"]["mode"] = display_mode
+                real_q = e._queue
+                e._queue = RecordingQueue()
+                real_q.shutdown()
+                e.handle_event({"type": "cues", "source_id": "s1", "video_id": "v1",
+                                "track_lang": track_lang, "cues": zh_cues(lines)})
+                e.handle_event({"type": "sync", "source_id": "s1", "video_time_ms": 500.0,
+                                "playing": True, "playback_rate": 1.0,
+                                "timestamp": time.time() * 1000})
+
+                display = e.tick()
+                src = e.sources["s1"]
+                assert display["orig"] == lines[0]
+                assert display["trans"] == ""
+                assert display["trans_state"] == "idle"
+                assert display["trans_available"] is provider_on
+                assert e._queue.jobs == [] and e._queue.batches == []
+                assert translated_calls == []
+                assert set(src.group_states.values()) == {"idle"}
+                assert src.group_failures == {}
+                with sqlite3.connect(str(db)) as con:
+                    assert con.execute("SELECT COUNT(*) FROM translations").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("text,should_skip", [
+    ("中中文ABCDEFG", True),       # 3/10 letters: exactly the agreed threshold
+    ("中文ABCDEF", False),          # 2/8 letters: below the threshold
+    ("中文ABC", True),              # Chinese-English mixed line above threshold
+    ("今日は学校へ行く", False),    # Japanese Kana keeps CJK-only fallback conservative
+    ("ｶﾀｶﾅ", False),                # halfwidth Katakana is also Japanese
+    ("中中文ｶﾀﾅ", False),            # Kana exclusion wins despite >=30% Han
+    ("ﾻﾾ", False),                  # halfwidth Hangul is not Chinese
+    ("中文ﾻ", False),                # Hangul exclusion wins despite >=30% Han
+    ("한국어 자막", False),         # Korean is not mistaken for Chinese
+    ("ordinary English", False),
+])
+def test_missing_track_language_uses_local_cjk_ratio_fallback(tmp_path, text, should_skip):
+    e = mk_engine(str(tmp_path), mock=True)
+    real_q = e._queue
+    e._queue = RecordingQueue()
+    real_q.shutdown()
+    e.handle_event({"type": "cues", "source_id": "s1", "video_id": "v1",
+                    "cues": zh_cues([text])})
+    e.handle_event({"type": "sync", "source_id": "s1", "video_time_ms": 500.0,
+                    "playing": False, "playback_rate": 1.0,
+                    "timestamp": time.time() * 1000})
+
+    display = e.tick()
+    assert display["orig"] == text
+    if should_skip:
+        assert display["trans_state"] == "idle"
+        assert e._queue.jobs == []
+        assert e.sources["s1"].group_states == {0: "idle"}
+    else:
+        assert display["trans_state"] == "translating"
+        assert len(e._queue.jobs) == 1
+        assert e._queue.jobs[0].group_text == text
+
+
+def test_declared_non_chinese_language_overrides_cjk_text(tmp_path):
+    e = mk_engine(str(tmp_path), mock=True)
+    real_q = e._queue
+    e._queue = RecordingQueue()
+    real_q.shutdown()
+    e.handle_event({"type": "cues", "source_id": "s1", "video_id": "v1",
+                    "track_lang": "en", "cues": zh_cues(["中文ABC"] )})
+    e.handle_event({"type": "sync", "source_id": "s1", "video_time_ms": 500.0,
+                    "playing": False, "playback_rate": 1.0,
+                    "timestamp": time.time() * 1000})
+
+    display = e.tick()
+    assert display["trans_state"] == "translating"
+    assert len(e._queue.jobs) == 1
+
+
+@pytest.mark.parametrize("result", [
+    {"text": "late English translation", "error": None},
+    {"text": "", "error": "RATE_LIMITED", "status": 429},
+])
+def test_inflight_result_from_previous_track_does_not_translate_new_chinese_track(tmp_path, result):
+    e = mk_engine(str(tmp_path), mock=True)
+    real_q = e._queue
+    e._queue = RecordingQueue()
+    real_q.shutdown()
+    e.handle_event({"type": "cues", "source_id": "s1", "video_id": "v1",
+                    "track_lang": "en", "cues": zh_cues(["hello there friend"])})
+    e.handle_event({"type": "sync", "source_id": "s1", "video_time_ms": 500.0,
+                    "playing": False, "playback_rate": 1.0,
+                    "timestamp": time.time() * 1000})
+    assert e.tick()["trans_state"] == "translating"
+    old_job = e._queue.jobs[0]
+
+    e.handle_event({"type": "cues", "source_id": "s1", "video_id": "v1",
+                    "track_lang": "zh-Hans", "cues": zh_cues(["这是一段中文原文"] )})
+    e._on_done(old_job, result)
+
+    display = e.tick()
+    src = e.sources["s1"]
+    assert display["orig"] == "这是一段中文原文"
+    assert display["trans"] == ""
+    assert display["trans_state"] == "idle"
+    assert src.group_trans == {}
+    assert src.group_states == {0: "idle"}
+    assert src.group_failures == {}
+
+
 def test_engine_full_pipeline_with_mock_translation():
     e = mk_engine(tempfile.mkdtemp())
     e.ingest_json3("s1", {"video_id": "v1", "track_kind": "asr", "tab_title": "T"}, JSON3)
@@ -107,6 +229,14 @@ def test_engine_full_pipeline_with_mock_translation():
             break
         time.sleep(0.05)
     assert d["trans"], "mock translation should arrive"
+    # #151 方案 A (updated expectation): an aligned result renders cue-by-cue -
+    # at t=1500 cue0 shows its own slice, never the whole group text.
+    assert d["trans"] == "【译】the"
+    # the aligned remainder still reaches the display, on its own later cue
+    e.handle_event({"type": "sync", "source_id": "s1", "video_time_ms": 5500.0,
+                    "playing": True, "playback_rate": 1.0,
+                    "timestamp": time.time() * 1000})
+    d = e.tick()
     assert "the cat" in d["trans"]
     qstats = e._queue.stats()
     assert isinstance(qstats, dict)
@@ -673,7 +803,7 @@ def test_identity_forks_on_context_and_is_byte_identical_when_unchanged(tmp_path
     from suboverlay.queue_cache import URGENT
     e = mk_engine(tmp_path)
     e.handle_event({"type": "cues", "source_id": "s1", "video_id": "v1",
-                    "track_kind": "manual", "track_lang": "zh", "cues": zh_cues(ZH3)})
+                    "track_kind": "manual", "track_lang": "ja", "cues": zh_cues(ZH3)})
     src = e.sources["s1"]
     assert [(g.start_idx, g.end_idx) for g in src.groups] == [(0, 0), (1, 1), (2, 2)]
     real_q = e._queue
@@ -721,9 +851,9 @@ def test_prefetch_submission_set_does_not_follow_the_context_switch(tmp_path):
                                                 "pf%d.db" % context_groups))
         e.settings["prompt"]["context_groups"] = context_groups
         e.handle_event({"type": "cues", "source_id": "s1", "video_id": "v1",
-                        "track_kind": "manual", "track_lang": "zh",
+                        "track_kind": "manual", "track_lang": "ja",
                         "cues": zh_cues(ZH5)})
-        assert len(e.sources["s1"].groups) == 5, "one group per zh line"
+        assert len(e.sources["s1"].groups) == 5, "one group per no-space-language line"
         real_q = e._queue
         rec = e._queue = RecordingQueue()
         try:
@@ -1234,3 +1364,215 @@ def test_prefetch_failure_callback_cannot_resubmit_after_original_only_switch(tm
     finally:
         e._queue = real_q
         real_q.shutdown()
+
+
+# ---- display contract (#151 方案 A / map #149) ----
+
+def test_display_contract_aligned_result_shows_only_current_cue_translation(tmp_path):
+    """Contract #1: an aligned result lives cue-by-cue in cue.trans - the whole
+    group text must never be re-displayed on a later cue of the same group."""
+    e = mk_engine(str(tmp_path))
+    real_q = e._queue
+    e._queue = RecordingQueue()
+    real_q.shutdown()
+    e.ingest_json3("s1", {"video_id": "v1", "track_kind": "asr"}, JSON3)
+    src = e.sources["s1"]
+    # Fixture self-check: JSON3's three repaired cues must be one group (0, 2).
+    assert [(g.start_idx, g.end_idx) for g in src.groups] == [(0, 2)]
+    sync_at(e, "s1", 1500)
+    e.tick()
+    job = e._queue.jobs[0]  # URGENT, group 0
+    e._on_done(job, {"aligned": True, "values": ["译甲", "译乙", "译丙"],
+                     "error": None})
+    for t_ms, want in ((1500.0, "译甲"), (3000.0, "译乙"), (6000.0, "译丙")):
+        sync_at(e, "s1", t_ms)
+        d = e.tick()
+        assert d["trans"] == want, (t_ms, d["trans"])
+        assert d["trans"] != "译甲 译乙 译丙"  # whole-group leak canary
+        assert e.status()["display"]["trans"] == want  # /status shares the seam
+    assert len(e._queue.jobs) == 1  # display never produces per-cue requests
+
+
+def test_display_contract_unaligned_result_shows_whole_text_only_on_group_first_cue(tmp_path):
+    """Contract #2 + #5: a whole-line result renders only on the group's first
+    cue, and landing it clears stale per-cue residue - one representation at a time."""
+    e = mk_engine(str(tmp_path))
+    real_q = e._queue
+    e._queue = RecordingQueue()
+    real_q.shutdown()
+    e.ingest_json3("s1", {"video_id": "v1", "track_kind": "asr"}, JSON3)
+    src = e.sources["s1"]
+    sync_at(e, "s1", 1500)
+    e.tick()
+    job = e._queue.jobs[0]  # URGENT, group 0
+    src.cues[1].trans = "陈旧值"  # stale per-cue residue from an older aligned result
+    e._on_done(job, {"aligned": False, "text": "整组译文", "error": None})
+
+    d = e.tick()  # still at 1500: the group's first cue
+    assert d["trans"] == "整组译文"
+    assert d["trans_state"] == "ready"
+    assert src.cues[1].trans == "", "mutual exclusion: the stale cue value must be cleared"
+
+    sync_at(e, "s1", 3000)  # a group-member cue
+    d = e.tick()
+    assert d["trans"] == ""
+    assert d["trans_state"] == "ready"
+
+    sync_at(e, "s1", 1500)  # seek back: same rule through the single seam
+    d = e.tick()
+    assert d["trans"] == "整组译文"
+
+    sync_at(e, "s1", 6000)
+    d = e.tick()
+    assert d["trans"] == ""
+
+
+def test_display_contract_cached_unaligned_result_follows_same_cue_rule(tmp_path):
+    """Contract #4: a cache hit lands through the same _on_done seam, so the
+    whole-group text renders on the first cue only - with zero provider work."""
+    db = str(tmp_path / "t.db")
+    e1 = mk_engine(str(tmp_path), mock=False, base_url=CFG_URL,
+                   model=CFG_MODEL, db=db,
+                   translate_fn=lambda jobs: [{"aligned": False, "text": "整组译文",
+                                               "error": None} for _ in jobs])
+    e1.ingest_json3("s1", {"video_id": "v1", "track_kind": "asr"}, JSON3)
+    sync_at(e1, "s1", 1500)
+    d = wait_trans(e1)
+    assert d["trans"] == "整组译文"
+    e1._queue.shutdown()
+
+    calls = []
+    e2 = mk_engine(str(tmp_path), mock=False, base_url=CFG_URL,
+                   model=CFG_MODEL, db=db,
+                   translate_fn=lambda jobs: calls.append(1) or
+                   [{"error": "STUB"} for _ in jobs])
+    e2.ingest_json3("s1", {"video_id": "v1", "track_kind": "asr"}, JSON3)
+    sync_at(e2, "s1", 1500)
+    d = wait_trans(e2)
+    assert d["trans"] == "整组译文"  # cache hit renders through the same seam
+    assert calls == []              # a cache hit does zero provider work
+
+    sync_at(e2, "s1", 3000)  # group-member cue
+    assert e2.tick()["trans"] == ""
+    sync_at(e2, "s1", 1500)  # back to the group's first cue
+    assert e2.tick()["trans"] == "整组译文"
+    e2._queue.shutdown()
+
+
+def test_display_contract_failed_group_shows_no_translation_on_any_cue(tmp_path):
+    """Contract #3: a failed group shows no translation on any cue; the verdict
+    stays the whitelisted failed:<reason> (#64) with the sticky semantics (#65)."""
+    e = mk_engine(str(tmp_path))
+    real_q = e._queue
+    e._queue = RecordingQueue()
+    real_q.shutdown()
+    e.ingest_json3("s1", {"video_id": "v1", "track_kind": "asr"}, JSON3)
+    sync_at(e, "s1", 1500)
+    e.tick()
+    job = e._queue.jobs[0]
+    e._on_done(job, {"error": "RATE_LIMITED", "status": 429,
+                     "message": "provider text must not leak"})
+
+    d = e.tick()
+    assert d["trans"] == ""
+    assert d["trans_state"] == "failed:请求受限"
+
+    sync_at(e, "s1", 3000)
+    d = e.tick()
+    assert d["trans"] == ""
+    assert d["trans_state"] == "failed:请求受限"
+
+    sync_at(e, "s1", 1500)  # seek back: verdict persists on every cue
+    d = e.tick()
+    assert d["trans"] == ""
+    assert d["trans_state"] == "failed:请求受限"
+
+
+def test_display_contract_aligned_result_drops_the_whole_group_representation(tmp_path):
+    """Contract #5 (gap A): an aligned result landing after a whole-line one
+    must remove the stored group text - one representation per group at any
+    moment, and no cue may ever re-display the joined group text."""
+    e = mk_engine(str(tmp_path))
+    real_q = e._queue
+    e._queue = RecordingQueue()
+    real_q.shutdown()
+    e.ingest_json3("s1", {"video_id": "v1", "track_kind": "asr"}, JSON3)
+    src = e.sources["s1"]
+    sync_at(e, "s1", 1500)
+    e.tick()
+    job = e._queue.jobs[0]  # URGENT, group 0
+    # first landing: a whole-line result (contract #2 baseline)
+    e._on_done(job, {"aligned": False, "text": "整组译文", "error": None})
+    assert 0 in src.group_trans
+    d = e.tick()
+    assert d["trans"] == "整组译文"  # group's first cue shows the whole text
+    sync_at(e, "s1", 3000)
+    assert e.tick()["trans"] == ""  # member cues stay empty
+    sync_at(e, "s1", 6000)
+    assert e.tick()["trans"] == ""
+    # second landing: an aligned result takes over the same group
+    e._on_done(job, {"aligned": True, "values": ["译甲", "译乙", "译丙"],
+                     "error": None})
+    assert 0 not in src.group_trans, \
+        "contract #5: the whole-group representation must be gone after an aligned landing"
+    for t_ms, want in ((1500.0, "译甲"), (3000.0, "译乙"), (6000.0, "译丙")):
+        sync_at(e, "s1", t_ms)
+        d = e.tick()
+        assert d["trans"] == want, (t_ms, d["trans"])
+        assert d["trans"] != "整组译文", (t_ms, d["trans"])
+        assert "整组译文" not in d["trans"], (t_ms, d["trans"])
+
+
+def test_display_contract_failure_after_aligned_result_clears_every_cue(tmp_path):
+    """Contract #3 (gap B, aligned values): once the group's URGENT verdict
+    lands, an already-visible aligned result is gone - trans == "" and
+    failed:<reason> on every cue of the group, seek replay included."""
+    e = mk_engine(str(tmp_path))
+    real_q = e._queue
+    e._queue = RecordingQueue()
+    real_q.shutdown()
+    e.ingest_json3("s1", {"video_id": "v1", "track_kind": "asr"}, JSON3)
+    src = e.sources["s1"]
+    sync_at(e, "s1", 1500)
+    e.tick()
+    job = e._queue.jobs[0]  # URGENT, group 0
+    e._on_done(job, {"aligned": True, "values": ["译甲", "译乙", "译丙"],
+                     "error": None})
+    for t_ms, want in ((1500.0, "译甲"), (3000.0, "译乙"), (6000.0, "译丙")):
+        sync_at(e, "s1", t_ms)
+        assert e.tick()["trans"] == want, (t_ms, want)  # sanity: values were visible
+    # the same group's URGENT job fails (the existing URGENT-job pattern)
+    e._on_done(job, {"error": "RATE_LIMITED", "status": 429,
+                     "message": "provider text must not leak"})
+    for t_ms in (1500.0, 3000.0, 6000.0, 1500.0):  # incl. seek back replay
+        sync_at(e, "s1", t_ms)
+        d = e.tick()
+        assert d["trans"] == "", (t_ms, d["trans"])
+        assert d["trans_state"] == "failed:请求受限", (t_ms, d["trans_state"])
+
+
+def test_display_contract_failure_after_whole_line_result_clears_group(tmp_path):
+    """Contract #3 (gap B, whole-line value): a URGENT failure after an
+    unaligned landing must clear the stored group text too - no cue shows the
+    whole-line translation any more, the verdict stays failed:<reason>."""
+    e = mk_engine(str(tmp_path))
+    real_q = e._queue
+    e._queue = RecordingQueue()
+    real_q.shutdown()
+    e.ingest_json3("s1", {"video_id": "v1", "track_kind": "asr"}, JSON3)
+    src = e.sources["s1"]
+    sync_at(e, "s1", 1500)
+    e.tick()
+    job = e._queue.jobs[0]  # URGENT, group 0
+    e._on_done(job, {"aligned": False, "text": "整组译文", "error": None})
+    assert e.tick()["trans"] == "整组译文"  # sanity: the group text was visible
+    # the same group's URGENT job fails
+    e._on_done(job, {"error": "RATE_LIMITED", "status": 429,
+                     "message": "provider text must not leak"})
+    assert 0 not in src.group_trans, \
+        "contract #3: a failed group keeps no stored translation"
+    for t_ms in (1500.0, 3000.0, 6000.0, 1500.0):  # incl. seek back replay
+        sync_at(e, "s1", t_ms)
+        d = e.tick()
+        assert d["trans"] == "", (t_ms, d["trans"])
+        assert d["trans_state"] == "failed:请求受限", (t_ms, d["trans_state"])
