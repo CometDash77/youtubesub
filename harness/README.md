@@ -64,3 +64,11 @@ harness\scripts\selftest.cmd
 - [#17](https://github.com/CometDash77/youtubesub/issues/17) 建立本目录、备份/恢复脚本与上述约定。
 - [#13](https://github.com/CometDash77/youtubesub/issues/13) 提供 `scripts/session-metrics.cjs` 与会话口径。
 - [#16](https://github.com/CometDash77/youtubesub/issues/16) 决定 P0→P3 具体改造；每次改造按上面的 checkpoint 约定留痕。
+
+## 安全模式档案陷阱：插件重启后消失
+
+桌面版把 `active_profile == safe` 视为**安全模式**，启动流程的 `profile_prepare` 阶段会删除该档案里的全部用户插件（日志：`main::service::plugin::safe: safe mode: removing N user plugin(s) from the safe profile` → `SAFE_MODE_PLUGIN_PURGE: removed <pkg>`）。所以「装完插件 → 重启 → 插件消失」是这个清空动作，不是安装失败。
+
+进入安全模式的原因（2026-10-01 实测）：应用把桌面档案 `desktop` 改名为 `tauri` 后，档案 `node_modules` 内的内部插件链接是指向旧安装目录的**悬空 junction**；pnpm 遍历时报 `ERR_PNPM_CMD_SHIM_READ_MANIFEST ... 不受信任的装入点 (os error 448)`，内部插件安装失败，应用回落安全模式并新建 `profiles/safe`，此后每次启动都在 safe 档案里跑。junction 而非 symlink 的来源：未开开发者模式且非提升权限时 `symlink_dir` 失败（`CORE_PLUGIN_SYMLINK_FALLBACK`）。
+
+处置：`harness\scripts\fix-dsh-safe-mode.cmd`（体检）→ 退出桌面应用 → 同命令加 `-Apply`（改名 safe 档案并改写 `active_profile`）→ 重启应用，确认日志里不再出现 `safe mode: removing`。加固：开启 Windows 开发者模式（让应用能建 symlink），把 `<DSH_HOME>\profiles` 加入火绒实时防护排除项（应用自带提示），并清理卸载残留 `C:\Program Files\Deepseek Harness Desktop`（空目录）与 `C:\Program Files\DSH NEXT`（悬空链接来源）。
