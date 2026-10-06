@@ -16,9 +16,9 @@ NATURAL_PROMPT_TEXT = (
     "Translate the following subtitles into Chinese as natural, colloquial spoken language - the way a native speaker would actually say it in everyday conversation. Return ONLY the translation, one line per input line, in the same order. Do not add explanations.")
 
 BUILTIN_PROMPTS = (
-    {"id": "default", "name": "Default", "text": DEFAULT_PROMPT_TEXT},
-    {"id": "literal", "name": "Literal", "text": LITERAL_PROMPT_TEXT},
-    {"id": "natural", "name": "Natural", "text": NATURAL_PROMPT_TEXT},
+    {"id": "default", "name": "标准", "text": DEFAULT_PROMPT_TEXT},
+    {"id": "literal", "name": "直译", "text": LITERAL_PROMPT_TEXT},
+    {"id": "natural", "name": "口语", "text": NATURAL_PROMPT_TEXT},
 )
 
 # One-way migration of the legacy free-form prompt.system key (#39).
@@ -69,14 +69,20 @@ def default_settings():
 
 
 # ---- Tuning-page field authority table (#152 / spec #161, ticket #158) ----
-# The parameters that own a config key but have no UI of their own. This table
-# is the ONE authority for their range, default, unit and effect timing: the
-# debug window's tuning page builds its controls from it and clamps through it
+# The parameters the tuning page renders. This table is the ONE authority for
+# their range, default, unit, label/hint copy and effect timing: the debug
+# window's tuning page builds its controls from it and clamps through it
 # (spec #161 decision 5). Being listed here does NOT add a key to the file -
-# the schema stays frozen.
+# the schema stays frozen. `display.font_size` joined the table when the
+# settings dialog was absorbed into the window (#164 / #167): that control
+# moved here instead of getting a second home.
+#
+# `notify_overlay` means "after 保存, the overlay must look again": mode/order
+# are the two snapshotted choices, and the paint-consuming display fields
+# (font/stroke/colour/opacity) need a repaint so 改字号当场看得见 (#164).
 #
 # `control` is the widget kind the page must use, one per spec #161's table:
-# "choice" (下拉), "int" / "float" (数字框), "slider" (滑条 + 数字框, 背景不透明度),
+# "choice" (下拉), "int" / "float" (数字框), "slider" (滑条 + 数字框, 底板浓淡),
 # "color" (取色器).
 TUNING_GROUPS = ("display", "network", "experimental")
 
@@ -92,40 +98,56 @@ def _tune(path, group, label, control, default, **kw):
 
 
 TUNING_FIELDS = (
-    _tune(("display", "mode"), "display", "显示模式", "choice", "bilingual",
+    _tune(("display", "font_size"), "display", "字幕字号", "int", 10,
+          min=6, max=40, step=1, notify_overlay=True,
+          hint="浮窗里字有多大；越大越占地方"),
+    _tune(("display", "mode"), "display", "显示内容", "choice", "bilingual",
           choices=("bilingual", "trans", "orig"), labels=("双语", "只看译文", "只看原文"),
-          notify_overlay=True),
-    _tune(("display", "order"), "display", "上下顺序", "choice", "trans_first",
+          notify_overlay=True, hint="双语 = 原文译文都显示"),
+    _tune(("display", "order"), "display", "谁在上面", "choice", "trans_first",
           choices=("trans_first", "orig_first"), labels=("译文在上", "原文在上"),
-          notify_overlay=True, hint="仅双语模式可用"),
-    _tune(("display", "history_lines"), "display", "历史保留行数", "int", 2,
-          min=0, max=10, step=1),
-    _tune(("display", "font_bold"), "display", "粗体范围", "choice", "none",
+          notify_overlay=True, hint="只有双语模式看得到这一项"),
+    _tune(("display", "history_lines"), "display", "往上多留几行", "int", 2,
+          min=0, max=10, step=1,
+          hint="还能看到几句旧字幕；0 = 只显示当前这句"),
+    _tune(("display", "font_bold"), "display", "哪些行加粗", "choice", "none",
           choices=("none", "trans_only", "sub_only", "both"),
-          labels=("都不粗", "只译文", "只原文", "都粗")),
-    _tune(("display", "stroke"), "display", "描边宽度", "float", 1.5,
-          min=0.0, max=10.0, step=0.5, hint="0 = 不描边"),
-    _tune(("display", "bg_color"), "display", "背景色", "color", [0, 0, 0],
-          min=0, max=255),
-    _tune(("display", "bg_opacity"), "display", "背景不透明度", "slider", 150,
-          min=0, max=255, step=1),
-    _tune(("provider", "timeout_s"), "network", "请求超时", "float", 60.0,
-          min=1.0, max=600.0, step=1.0, unit="秒"),
-    _tune(("provider", "max_concurrent"), "network", "同时请求数", "int", 5,
-          min=1, max=16, step=1, restart=True, hint="重启后生效"),
-    _tune(("server", "port"), "network", "服务端口", "int", 9877,
-          min=1, max=65535, step=1, restart=True, hint="重启后生效"),
-    _tune(("prefetch", "lead_s"), "experimental", "预取窗口秒数", "float", 90.0,
-          min=0.0, max=600.0, step=1.0, unit="秒", uncalibrated=True),
-    _tune(("prefetch", "max_groups"), "experimental", "预取组数上限", "int", 20,
-          min=1, max=200, step=1, uncalibrated=True),
-    _tune(("prefetch", "seek_debounce_ms"), "experimental", "seek 静默等待",
+          labels=("都不加粗", "只有译文", "只有原文", "都加粗"),
+          notify_overlay=True, hint="让选中的那几行更醒目"),
+    _tune(("display", "stroke"), "display", "字外面的描边", "float", 1.5,
+          min=0.0, max=10.0, step=0.5, notify_overlay=True,
+          hint="给字加一圈黑边，压在亮画面上也看得清；0 = 不加"),
+    _tune(("display", "bg_color"), "display", "底板颜色", "color", [0, 0, 0],
+          min=0, max=255, notify_overlay=True,
+          hint="字幕后面那块底色"),
+    _tune(("display", "bg_opacity"), "display", "底板浓淡", "slider", 150,
+          min=0, max=255, step=1, notify_overlay=True,
+          hint="越小越透，能看见后面的画面"),
+    _tune(("provider", "timeout_s"), "network", "一次请求最多等多久", "float", 60.0,
+          min=1.0, max=600.0, step=1.0, unit="秒",
+          hint="超过就算这次失败；网络慢就调大"),
+    _tune(("provider", "max_concurrent"), "network", "同时发几个请求", "int", 5,
+          min=1, max=16, step=1, restart=True,
+          hint="调大翻得更快，但更容易撞上服务商的限流"),
+    _tune(("server", "port"), "network", "本地服务端口", "int", 9877,
+          min=1, max=65535, step=1, restart=True,
+          hint="浏览器插件连的就是这个端口，改了插件那边也要跟着改"),
+    _tune(("prefetch", "lead_s"), "experimental", "提前翻多少秒", "float", 90.0,
+          min=0.0, max=600.0, step=1.0, unit="秒", uncalibrated=True,
+          hint="播放前先翻好前面这么多秒；卡顿就调大"),
+    _tune(("prefetch", "max_groups"), "experimental", "最多提前翻几句", "int", 20,
+          min=1, max=200, step=1, uncalibrated=True,
+          hint="预先翻好的句子上限，够用就好"),
+    _tune(("prefetch", "seek_debounce_ms"), "experimental", "拖进度条后先等多久",
           "float", 0.4, min=0.0, max=5.0, step=0.1, unit="秒", scale=1000,
-          uncalibrated=True),
-    _tune(("batch", "max_groups"), "experimental", "批量组数上限", "int", 8,
-          min=1, max=64, step=1, uncalibrated=True),
-    _tune(("batch", "max_chars"), "experimental", "批量字符上限", "int", 8000,
-          min=100, max=64000, step=500, uncalibrated=True),
+          uncalibrated=True,
+          hint="安静这么久才开始翻，免得白翻一堆"),
+    _tune(("batch", "max_groups"), "experimental", "一次最多合并几句", "int", 8,
+          min=1, max=64, step=1, uncalibrated=True,
+          hint="合并得多更省额度，一行出错影响的行也更多"),
+    _tune(("batch", "max_chars"), "experimental", "一次最多合并多少字", "int", 8000,
+          min=100, max=64000, step=500, uncalibrated=True,
+          hint="和上一项谁先到算谁"),
 )
 
 _FIELDS_BY_PATH = {f["path"]: f for f in TUNING_FIELDS}

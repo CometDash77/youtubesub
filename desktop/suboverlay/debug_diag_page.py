@@ -28,8 +28,8 @@ from .debug_probe import Snapshot, fetch_status
 HOST = "127.0.0.1"
 FREQUENCIES = (0.5, 1.0, 2.0)
 STALE_AFTER_S = 10.0
-ZONES = (("link", "① 连接与帧"), ("playback", "② 播放与字幕"),
-         ("queue", "③ 翻译队列"), ("events", "④ 事件列表"))
+ZONES = (("link", "① 浏览器插件连接"), ("playback", "② 播放与字幕"),
+         ("queue", "③ 翻译队列"), ("events", "④ 事件记录"))
 LEVEL_OBJECT = {"ok": "debugBadgeOk", "warn": "debugBadgeWarn",
                 "error": "debugBadgeError"}
 ERROR_LABELS = {"服务端错误", "状态提供者错误", "页面钩子", "字幕抓取"}
@@ -201,8 +201,8 @@ class DiagPage(QtWidgets.QWidget):
 
     def set_connection_test_expanded(self, expanded):
         self._ct_expanded = bool(expanded)
-        self.ct_button.setText("收起连通性测试" if self._ct_expanded
-                               else "展开连通性测试")
+        self.ct_button.setText("收起连接测试" if self._ct_expanded
+                               else "看上次的连接测试")
         self._render()
 
     def start(self):
@@ -242,7 +242,7 @@ class DiagPage(QtWidgets.QWidget):
         bar = QtWidgets.QHBoxLayout()
         self.status_label = QtWidgets.QLabel("")
         bar.addWidget(self.status_label)
-        self.stale_label = QtWidgets.QLabel("以下为上一拍的值（已过期）")
+        self.stale_label = QtWidgets.QLabel("下面是上一次拿到的值，已经过期")
         self.stale_label.setObjectName("debugStale")
         bar.addWidget(self.stale_label)
         bar.addStretch(1)
@@ -262,12 +262,12 @@ class DiagPage(QtWidgets.QWidget):
         outer.addWidget(scroll, 1)
 
         footer = QtWidgets.QHBoxLayout()
-        self.ct_button = PushButton("展开连通性测试")
+        self.ct_button = PushButton("看上次的连接测试")
         self.ct_button.clicked.connect(
             lambda: self.set_connection_test_expanded(not self._ct_expanded))
         footer.addWidget(self.ct_button)
         footer.addStretch(1)
-        footer.addWidget(QtWidgets.QLabel("刷新频率"))
+        footer.addWidget(QtWidgets.QLabel("多久刷新一次"))
         self.frequency_box = ComboBox()
         for gear in FREQUENCIES:
             self.frequency_box.addItem("%g 秒" % gear, userData=gear)
@@ -275,10 +275,10 @@ class DiagPage(QtWidgets.QWidget):
             float(self._poller.interval)))
         self.frequency_box.currentIndexChanged.connect(self._frequency_changed)
         footer.addWidget(self.frequency_box)
-        self.copy_button = PushButton("复制全部")
+        self.copy_button = PushButton("复制全部内容")
         self.copy_button.clicked.connect(self.copy_to_clipboard)
         footer.addWidget(self.copy_button)
-        self.refresh_button = TOKENS.apply_primary_button(PrimaryPushButton("立即刷新"))
+        self.refresh_button = TOKENS.apply_primary_button(PrimaryPushButton("立刻刷新一次"))
         self.refresh_button.clicked.connect(self.refresh_now)
         footer.addWidget(self.refresh_button)
         outer.addLayout(footer)

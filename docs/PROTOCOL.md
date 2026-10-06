@@ -15,7 +15,7 @@
 未注入 status provider 的实例只回 `ok/version/stats`; provider 抛错时记 `status_error` 且仍返回 200 (诊断路由永不 500).
 只绑定 loopback; 鉴权见 ADR-003 (v1 先做 Origin 检查 + 可选 token, 见下).
 
-状态对象还可能包含可选的 `connection_test` 字段：用户从设置对话框手动运行连接测试后，它等于最近一次测试报告；尚未运行时省略。报告保留 `verdict`（pass/fail/mock）、layer id、error code、skipped step id 和 `warnings` 中的机器值。报告中的标题、人类说明、quota notice 与 note 使用中文。`warning_messages` 是可选对象，以 warning code 为键提供中文说明；消费者应继续以 `warnings` 识别机器告警，展示时可按 code 查找说明，未命中则显示 code。此字段可向后兼容地忽略。
+状态对象还可能包含可选的 `connection_test` 字段：用户从设置与调试窗口的**设置页**手动运行连接测试后，它等于最近一次测试报告；尚未运行时省略。报告保留 `verdict`（pass/fail/mock）、layer id、error code、skipped step id 和 `warnings` 中的机器值。报告中的标题、人类说明、quota notice 与 note 使用中文。`warning_messages` 是可选对象，以 warning code 为键提供中文说明；消费者应继续以 `warnings` 识别机器告警，展示时可按 code 查找说明，未命中则显示 code。此字段可向后兼容地忽略。
 
 连接报告不包含 API Key。`sample.source` 是实际发送的固定探测句，`sample.translation` 是服务端原样返回的译文；两者均不翻译。`snapshot.base_url` / `snapshot.model` 以及 provider 返回的诊断详情保留原值。
 

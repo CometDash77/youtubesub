@@ -1,8 +1,9 @@
-"""#39 / ADR-010 - SettingsDialog preset UI (Qt offscreen).
+"""设置页（#39 / ADR-010 的预设模型 + 地图 #164 / 落地票 #170 的窗口吸收）。
 
-Covers Testing Decision 4: built-in lock states, copy -> rename -> delete
-chain persistence shape, delete-active fallback, preview byte-identity with
-the single assembly function, and the context_groups round-trip."""
+原来测的是模态 `SettingsDialog`：本页把它整份搬进三页窗口后，页脚「保存 / 取消」
+归窗口级，所以断言改成两条线 —— 控件文案/预设模型仍按外部行为断言，落盘则走
+`page.apply()` + `page.snapshot()`，不再有 `accept()`。
+"""
 import json, os, sys
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -10,10 +11,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from PySide6 import QtWidgets
 
-import app as app_mod
-from app import App, SettingsDialog, PREVIEW_PREV_EXAMPLE, PREVIEW_NEXT_EXAMPLE
+import suboverlay.settings_page as page_mod
 from suboverlay import provider as P
 from suboverlay import settings as S
+from suboverlay.settings_page import (PREVIEW_NEXT_EXAMPLE, PREVIEW_PREV_EXAMPLE,
+                                      SettingsPage)
 
 _QAPP = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
 
@@ -21,15 +23,9 @@ PREV_LABEL = "Previous line (context only, do not translate): "
 NEXT_LABEL = "Next line (context only, do not translate): "
 
 
-def _save_spy(monkeypatch):
-    """Capture what accept() would write instead of touching %APPDATA%."""
-    box = {}
-
-    def fake_save(cfg, path=None):
-        box["cfg"] = json.loads(json.dumps(cfg, ensure_ascii=False))
-
-    monkeypatch.setattr(S, "save", fake_save)
-    return box
+def _page(settings=None, tester=None):
+    return SettingsPage(settings if settings is not None else S.default_settings(),
+                        tester=tester)
 
 
 def _ids(d):
@@ -37,27 +33,32 @@ def _ids(d):
 
 
 def test_settings_surface_uses_the_approved_chinese_copy(monkeypatch):
-    d = SettingsDialog(S.default_settings())
-    assert d.windowTitle() == "AI 翻译设置"
+    d = _page()
     assert d.copy_btn.text() == "复制为自定义"
     assert d.rename_btn.text() == "重命名"
     assert d.delete_btn.text() == "删除"
     assert d.test_btn.text() == "测试连接"
     assert d.cancel_btn.text() == "取消测试"
-    assert d.context_groups.text() == "携带上下文（前/后分组）"
-    assert d.mock.text() == "Mock 模式（不调用真实 API）"
+    assert d.context_groups.text().startswith("携带上下文")
+    assert d.mock.text().startswith("Mock 模式")
     assert [d.preset.itemText(i) for i in range(d.preset.count())
             if d.preset.itemData(i) is None and d.preset.itemText(i)] == [
                 "——— 内置 ———", "——— 我的预设 ———"]
+    # 内置预设名也过一遍「说人话」：不再是 Default / Literal / Natural。
+    assert [d.preset.itemText(i) for i in range(d.preset.count())
+            if d.preset.itemData(i) in ("default", "literal", "natural")] == [
+                "标准", "直译", "口语"]
 
-    labels = {d.layout().labelForField(field).text()
-              for field in (d.base_url, d.api_key, d.model, d.protocol,
-                            d.preset, d.system, d.preview, d.font_size,
-                            d.progress, d.report_view)}
-    assert {"Base URL", "API Key", "模型", "协议", "提示词预设", "提示词内容",
-            "生效预览", "字号", "测试进度", "测试报告"} <= labels
-    buttons = d.findChild(QtWidgets.QDialogButtonBox).buttons()
-    assert {button.text() for button in buttons} == {"确定", "取消"}
+    # 每个可编辑项都要有「一句改了会发生什么」（地图 #164 的判据）。
+    labels = {label.text() for label in d.findChildren(QtWidgets.QLabel)}
+    for wanted in ("接口地址", "密钥", "模型名", "接口协议", "用哪套提示词",
+                   "提示词内容", "实际发出去的提示词", "测试进度", "测试报告"):
+        assert wanted in labels, sorted(labels)
+    hints = [label.text() for label in d.findChildren(QtWidgets.QLabel)
+             if label.objectName() == "debugHint" and label.text()]
+    assert len(hints) >= 8, hints
+    assert all(len(text) >= 8 for text in hints), hints
+    assert not any("seek" in text or "帧" in text for text in hints), hints
 
     captured = {}
     def accept_dialog(dialog):
@@ -67,23 +68,13 @@ def test_settings_surface_uses_the_approved_chinese_copy(monkeypatch):
         return QtWidgets.QDialog.Accepted
 
     monkeypatch.setattr(QtWidgets.QInputDialog, "exec", accept_dialog)
-    assert app_mod._ask_new_name(d, "initial") == "x"
+    assert page_mod._ask_new_name(d, "initial") == "x"
     assert captured == {"title": "重命名预设", "label": "名称：",
                         "ok": "确定", "cancel": "取消"}
 
 
-def test_tray_settings_action_is_chinese(tmp_path, monkeypatch):
-    monkeypatch.setenv("APPDATA", str(tmp_path))
-    instance = App()
-    try:
-        menu = instance._menu()
-        assert "设置……" in [action.text() for action in menu.actions()]
-    finally:
-        instance.engine._queue.shutdown()
-
-
 def test_report_localizes_human_labels_but_preserves_machine_and_sample_values():
-    d = SettingsDialog(S.default_settings())
+    d = _page()
     d._render_report({
         "verdict": "mock", "layers": [{"id": "L4", "passed": None,
             "code": None, "title": "翻译可用", "message": "已跳过",
@@ -134,7 +125,7 @@ def test_connection_test_progress_copy_is_chinese():
             self.cancelled = True
 
     tester = Tester()
-    d = SettingsDialog(S.default_settings(), tester=tester)
+    d = _page(tester=tester)
     d._start_connection_test()
     assert d.progress.text() == "启动中……"
     d._poll_progress()
@@ -142,10 +133,14 @@ def test_connection_test_progress_copy_is_chinese():
     d._cancel_connection_test()
     assert tester.cancelled
     assert d.progress.text() == "已取消——进行中的请求仍会继续执行，其额度不退还"
+    # 关窗清理走同一条路（#23 决策 19：窗口关掉就放弃进行中的运行）。
+    tester.cancelled = False
+    d.cancel_test()
+    assert tester.cancelled
 
 
 def test_builtin_selection_locks_editor_and_actions():
-    d = SettingsDialog(S.default_settings())
+    d = _page()
     assert d.preset.currentData() == "default"
     assert d.system.isReadOnly(), "built-in text must be read-only"
     assert not d.rename_btn.isEnabled(), "built-ins cannot be renamed"
@@ -165,19 +160,18 @@ def test_builtin_selection_locks_editor_and_actions():
 
 
 def test_group_header_click_snaps_selection_back():
-    d = SettingsDialog(S.default_settings())
+    d = _page()
     header_idx = next(i for i in range(d.preset.count())
                       if d.preset.itemData(i) is None)
     d.preset.setCurrentIndex(header_idx)  # header carries no preset id
     assert d.preset.currentData() == "default", "selection must snap back"
 
 
-def test_copy_rename_delete_chain_persists_the_right_shape(monkeypatch):
-    saved = _save_spy(monkeypatch)
-    monkeypatch.setattr(app_mod, "_ask_new_name",
+def test_copy_rename_delete_chain_applies_the_right_shape(monkeypatch):
+    monkeypatch.setattr(page_mod, "_ask_new_name",
                         lambda parent, initial: "我的提示")
     s = S.default_settings()
-    d = SettingsDialog(s)
+    d = _page(s)
 
     # copy the built-in default -> new custom, selected, editable
     d.copy_btn.click()
@@ -186,13 +180,13 @@ def test_copy_rename_delete_chain_persists_the_right_shape(monkeypatch):
     assert not d.system.isReadOnly()
     assert d.rename_btn.isEnabled() and d.delete_btn.isEnabled()
     custom = d._find_custom(new_id)
-    assert custom["name"] == "Default 副本"
+    assert custom["name"] == "标准 副本"
     assert custom["text"] == S.DEFAULT_PROMPT_TEXT
 
     # a second copy from the same built-in gets the ordinal suffix
     d.preset.setCurrentIndex(d.preset.findData("default"))
     d.copy_btn.click()
-    assert [p["name"] for p in d._presets] == ["Default 副本", "Default 副本 2"]
+    assert [p["name"] for p in d._presets] == ["标准 副本", "标准 副本 2"]
 
     # rename the first copy
     d.preset.setCurrentIndex(d.preset.findData(new_id))
@@ -204,10 +198,9 @@ def test_copy_rename_delete_chain_persists_the_right_shape(monkeypatch):
     d.system.setPlainText("Edited custom text.")
     assert d._find_custom(new_id)["text"] == "Edited custom text."
 
-    # nothing hit settings before OK (#4 semantics)
+    # nothing hit settings before apply()（编辑期间不碰引擎正在读的那份 dict）
     assert "system" not in s["prompt"] or s["prompt"].get("active") == "default"
     assert s["prompt"]["presets"] == []
-    assert not saved, "no write before accept()"
 
     # delete the OTHER copy (not the persisted active) - chain step
     other_id = next(p["id"] for p in d._presets if p["id"] != new_id)
@@ -216,13 +209,12 @@ def test_copy_rename_delete_chain_persists_the_right_shape(monkeypatch):
     d.delete_btn.click()
     assert [p["id"] for p in d._presets] == [new_id]
     assert d.preset.currentData() == "default", \
-        "deleting a non-active preset returns to the active choice the dialog opened with"
+        "deleting a non-active preset returns to the active choice the page opened with"
 
-    # OK -> persisted shape
+    # apply -> persisted shape
     d.preset.setCurrentIndex(d.preset.findData(new_id))
-    d.accept()
-    assert saved, "accept() must save"
-    pr = saved["cfg"]["prompt"]
+    assert d.apply(), "apply() must report the fields it wrote"
+    pr = s["prompt"]
     assert "system" not in pr, "legacy key must never come back"
     assert pr["active"] == new_id
     assert len(pr["presets"]) == 1, "the deleted copy must not be persisted"
@@ -230,13 +222,12 @@ def test_copy_rename_delete_chain_persists_the_right_shape(monkeypatch):
     assert mine == {"id": new_id, "name": "我的提示", "text": "Edited custom text."}
 
 
-def test_delete_active_custom_falls_back_to_default(monkeypatch):
-    saved = _save_spy(monkeypatch)
+def test_delete_active_custom_falls_back_to_default():
     s = S.default_settings()
     s["prompt"]["presets"] = [{"id": "prompt_deadbee", "name": "Doomed",
                                "text": "Doomed text."}]
     s["prompt"]["active"] = "prompt_deadbee"
-    d = SettingsDialog(s)
+    d = _page(s)
     assert d.preset.currentData() == "prompt_deadbee"
     assert not d.system.isReadOnly()
 
@@ -249,17 +240,17 @@ def test_delete_active_custom_falls_back_to_default(monkeypatch):
         S.DEFAULT_PROMPT_TEXT, PREVIEW_PREV_EXAMPLE, PREVIEW_NEXT_EXAMPLE, 0), \
         "preview must refresh immediately after the fallback"
 
-    d.accept()
-    assert saved["cfg"]["prompt"] == {"active": "default", "presets": [],
-                                      "context_groups": 1}
+    d.apply()
+    assert s["prompt"] == {"active": "default", "presets": [],
+                           "context_groups": 1}
 
 
 def test_preview_is_byte_identical_to_the_production_assembly(monkeypatch):
-    """The UI half of Testing Decision 5: the dialog preview and the system
+    """The UI half of Testing Decision 5: the page preview and the system
     translate_group actually sends, for the same (preset, ctx, expected_lines)
     inputs, are byte-identical - and both come out of the SAME function object
     (asserted by identity, not by comparing two hard-coded constants)."""
-    assert app_mod.P.build_instructions is P.build_instructions
+    assert page_mod.P.build_instructions is P.build_instructions
 
     def fake_post(url, headers, payload, timeout_s):
         fake_post.seen = payload
@@ -272,7 +263,7 @@ def test_preview_is_byte_identical_to_the_production_assembly(monkeypatch):
     s["prompt"]["presets"] = [{"id": "prompt_11223344", "name": "Mine",
                                "text": "MY CUSTOM TASK"}]
     s["prompt"]["active"] = "prompt_11223344"
-    d = SettingsDialog(s)
+    d = _page(s)
     assert d.context_groups.isChecked()  # default on
 
     preview_on = d.preview.toPlainText()
@@ -299,30 +290,85 @@ def test_preview_is_byte_identical_to_the_production_assembly(monkeypatch):
     assert preview_off != preview_on
 
 
-def test_context_groups_checkbox_round_trip(monkeypatch):
-    saved = _save_spy(monkeypatch)
-    d = SettingsDialog(S.default_settings())
+def test_context_groups_checkbox_round_trip():
+    d = _page()
     assert d.context_groups.isChecked()  # default truthy
 
     d.context_groups.setChecked(False)
-    d.accept()
-    assert saved["cfg"]["prompt"]["context_groups"] == 0
+    d.apply()
+    assert d.settings["prompt"]["context_groups"] == 0
 
-    d2 = SettingsDialog(saved["cfg"])
+    d2 = _page(d.settings)
     assert not d2.context_groups.isChecked()
     d2.context_groups.setChecked(True)
-    d2.accept()
-    assert saved["cfg"]["prompt"]["context_groups"] == 1
+    d2.apply()
+    assert d2.settings["prompt"]["context_groups"] == 1
 
 
-def test_edits_only_persist_on_ok(monkeypatch):
-    saved = _save_spy(monkeypatch)
+def test_edits_stay_out_of_settings_until_apply():
     s = S.default_settings()
-    d = SettingsDialog(s)
+    d = _page(s)
     d.copy_btn.click()
     d.system.setPlainText("Unsaved draft.")
     assert s["prompt"]["presets"] == [], \
-        "Cancel must discard: settings untouched before accept()"
-    assert not saved
-    d.reject()
-    assert not saved, "reject() must never write"
+        "编辑期间不许碰那份 settings：引擎正在读它"
+    d.snapshot()
+    assert d.preset.currentData() == "default", "取消 = 回到盘上的活动预设"
+    assert d.is_dirty() is False
+
+
+def test_dirty_counts_only_the_fields_that_would_be_written():
+    s = S.default_settings()
+    s["prompt"]["presets"] = [{"id": "prompt_aabbccdd", "name": "Mine",
+                               "text": "MINE"}]
+    d = _page(s)
+    assert d.is_dirty() is False and d.count_dirty() == 0
+
+    # 改一个字段 -> 恰好 1 项；改回原值 -> 又不脏（值相等不算脏，不用 dirty flag）
+    d.model.setText("gpt-test")
+    assert d.count_dirty() == 1
+    d.model.setText("")
+    assert d.is_dirty() is False
+
+    # 活动预设改走再改回：同样不算脏
+    d.preset.setCurrentIndex(d.preset.findData("prompt_aabbccdd"))
+    assert d.is_dirty() is True
+    d.preset.setCurrentIndex(d.preset.findData("default"))
+    assert d.is_dirty() is False
+
+    # 预设改个名字再改回：规范化比较（json 指纹）之后不该再算脏
+    d.preset.setCurrentIndex(d.preset.findData("prompt_aabbccdd"))
+    d._presets[0]["name"] = "Renamed"
+    assert d.count_dirty() == 2, "活动预设 + 预设名字各算一项"
+    d._presets[0]["name"] = "Mine"
+    assert d.count_dirty() == 1, "名字改回来之后只剩「活动预设变了」这一项"
+    d.preset.setCurrentIndex(d.preset.findData("default"))
+    assert d.is_dirty() is False
+
+    # 勾一下 Mock 与上下文：各算一项
+    d.mock.setChecked(True)
+    d.context_groups.setChecked(False)
+    assert d.count_dirty() == 2
+    d.mock.setChecked(False)
+    d.context_groups.setChecked(True)
+    assert d.count_dirty() == 0
+
+
+def test_snapshot_rolls_every_control_back_to_the_settings_dict():
+    s = S.default_settings()
+    s["provider"]["api_key"] = "sk-on-disk"
+    d = _page(s)
+    d.base_url.setText("https://elsewhere.test/v1")
+    d.api_key.setText("sk-typo")
+    d.protocol.setCurrentText("responses")
+    d.mock.setChecked(True)
+    d.context_groups.setChecked(False)
+    assert d.count_dirty() == 5
+
+    d.cancel()
+    assert d.is_dirty() is False
+    assert d.base_url.text() == ""
+    assert d.api_key.text() == "sk-on-disk", "密钥要回滚到那份 settings 里的值"
+    assert d.protocol.currentText() == "auto"
+    assert d.mock.isChecked() is False
+    assert d.context_groups.isChecked() is True

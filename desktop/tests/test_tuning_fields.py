@@ -10,8 +10,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from suboverlay import settings as S
 
-# Spec #161 「逐字段范围护栏」表的 15 条路径，顺序即页面顺序。
+# 权威表里的 16 条路径，顺序即页面顺序（`display.font_size` 由 #167 决议补入，
+# 因为设置对话框被窗口吸收后字号不再是「已有入口」）。
 SPEC_PATHS = [
+    ("display", "font_size"),
     ("display", "mode"), ("display", "order"), ("display", "history_lines"),
     ("display", "font_bold"), ("display", "stroke"), ("display", "bg_color"),
     ("display", "bg_opacity"),
@@ -20,13 +22,12 @@ SPEC_PATHS = [
     ("prefetch", "seek_debounce_ms"), ("batch", "max_groups"), ("batch", "max_chars"),
 ]
 
-# 规格明令不收录：已有入口 / 凭证 / 有隐式 UI。
+# 规格明令不收录：凭证 / 有隐式 UI（窗口几何由拖动决定）。
 NOT_TUNABLE = [
     ("provider", "base_url"), ("provider", "api_key"), ("provider", "model"),
     ("provider", "protocol"), ("provider", "mock"),
     ("prompt", "active"), ("prompt", "context_groups"),
-    ("display", "font_size"), ("window", "x"), ("window", "y"),
-    ("window", "w"), ("window", "h"),
+    ("window", "x"), ("window", "y"), ("window", "w"), ("window", "h"),
 ]
 
 
@@ -151,7 +152,12 @@ def test_restart_and_uncalibrated_flags_match_the_spec():
                             ("prefetch", "seek_debounce_ms"), ("batch", "max_groups"),
                             ("batch", "max_chars")}
     notify = {f["path"] for f in S.TUNING_FIELDS if f["notify_overlay"]}
-    assert notify == {("display", "mode"), ("display", "order")}
+    # 会改画面的显示类字段保存后都要让浮窗看一眼（#170：改字号当场要看得见；
+    # 此前只有 mode/order 会立刻生效，其余要等下一拍才重画）。
+    assert notify == {("display", "font_size"), ("display", "mode"),
+                      ("display", "order"), ("display", "font_bold"),
+                      ("display", "stroke"), ("display", "bg_color"),
+                      ("display", "bg_opacity")}
     groups = {f["group"] for f in S.TUNING_FIELDS}
     assert groups == set(S.TUNING_GROUPS)
 
@@ -159,10 +165,12 @@ def test_restart_and_uncalibrated_flags_match_the_spec():
 def test_every_field_carries_a_label_and_hint_slot():
     for f in S.TUNING_FIELDS:
         assert isinstance(f["label"], str) and f["label"].strip(), f["path"]
-        assert isinstance(f["hint"], str), f["path"]
-    assert _field(("provider", "max_concurrent"))["hint"] == "重启后生效"
-    assert _field(("server", "port"))["hint"] == "重启后生效"
-    assert _field(("display", "stroke"))["hint"] == "0 = 不描边"
+        assert isinstance(f["hint"], str) and f["hint"].strip(), f["path"]
+    # 「重启后生效」/「未校准」现在是页签统一补的徽标，字段自己的 hint 只写
+    # 「改了会发生什么」—— 同一句话不再两处维护（#170）。
+    assert "重启后生效" not in _field(("provider", "max_concurrent"))["hint"]
+    assert "重启后生效" not in _field(("server", "port"))["hint"]
+    assert _field(("display", "stroke"))["hint"].startswith("给字加一圈黑边")
     for f in S.TUNING_FIELDS:
         if f["uncalibrated"]:
             assert f["group"] == "experimental", f["path"]

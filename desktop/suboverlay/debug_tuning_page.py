@@ -1,16 +1,17 @@
-"""调参页：把「有键无 UI」的 15 个参数按三组呈现（spec #161）。
+"""调参页：把「有键无 UI」的参数按三组呈现（spec #161，地图 #164 起 16 项）。
 
 控件层不产生非法值（枚举下拉 / 有范围的数字框 / 取色器），写回只夹**本次动过
-的键**；点「确定」才把改动合并回内存并一次落盘，「取消」全丢。编辑与生效解耦：
-编辑期间不写内存里引擎正在读的那份设置，因此拖控件不会让运行中的预取/批量抖动。
+的键**；页脚「保存」在窗口级（`debug_window.DebugWindow`），本页只负责把改动
+套用进那份 settings。编辑与生效解耦：编辑期间不写内存里引擎正在读的那份设置，
+因此拖控件不会让运行中的预取/批量抖动。
 
 页面不认识任何具体字段：它整张从 `settings.TUNING_FIELDS` 长出来，范围/默认/
 单位/文案都来自那张唯一权威表。
 """
 from PySide6 import QtCore, QtWidgets
 
-from qfluentwidgets import (BodyLabel, ComboBox, DoubleSpinBox,
-                            PrimaryPushButton, PushButton, Slider, SpinBox)
+from qfluentwidgets import (BodyLabel, ComboBox, DoubleSpinBox, PushButton,
+                            Slider, SpinBox)
 
 from . import debug_tokens as TOKENS
 from . import settings as S
@@ -35,12 +36,13 @@ def _normalize(field, value):
 
 
 class TuningPage(QtWidgets.QWidget):
-    def __init__(self, settings, overlay=None, save=None, pick_color=None, parent=None):
+    # 任何一次编辑都通知窗口刷新页脚（「保存」的可用态与那行计数）。
+    changed = QtCore.Signal()
+
+    def __init__(self, settings, pick_color=None, parent=None):
         super().__init__(parent)
         self.setObjectName("debugTuningPage")
         self.settings = settings
-        self.overlay = overlay
-        self._save = save or S.save
         self._pick_color = pick_color or self._ask_color
         self._initial = S.tuning_ui_state(settings)
         self._controls = {}
@@ -55,8 +57,11 @@ class TuningPage(QtWidgets.QWidget):
         return self._group_titles[group]
 
     def hint_for(self, path):
+        """一行「改了会发生什么」；重启生效 / 未校准是页签统一补的徽标，不写在字段里。"""
         field = S.field_by_path(path)
         parts = [field["hint"]] if field["hint"] else []
+        if field["restart"]:
+            parts.append("重启后生效")
         if field["uncalibrated"]:
             parts.append("未校准")
         return " · ".join(parts)
@@ -96,23 +101,34 @@ class TuningPage(QtWidgets.QWidget):
             self._controls[path].setValue(float(value))
         self._sync_enabled()
 
-    # ---- buttons ----
+    # ---- 窗口页脚要的三件事：脏没脏、计数、套用 ----
 
-    def ok(self):
-        edits = S.collect_edits(self._ui_state(), self._initial)
-        applied = S.apply_edits(self.settings, edits)
-        if applied:
-            self._save(self.settings)          # 一次原子写盘（settings.save）
-        if self.overlay is not None and any(S.field_by_path(p)["notify_overlay"]
-                                            for p in applied):
-            self.overlay.reread_settings()     # mode/order 是浮窗的启动快照
+    def collect_edits(self):
+        """本次动过的键，按权威表顺序；值相等就不算动过（不是 dirty flag）。"""
+        return S.collect_edits(self._ui_state(), self._initial)
+
+    def count_dirty(self):
+        return len(self.collect_edits())
+
+    def is_dirty(self):
+        return self.count_dirty() > 0
+
+    def apply(self):
+        """把改动套用进那份 settings（**不写盘**）；返回被改的 path 列表。
+
+        写盘与浮窗通知都在窗口级做（`debug_window.DebugWindow.save`）—— 整窗一次
+        原子写盘，浮窗只对 notify_overlay 字段重读。
+        """
+        return S.apply_edits(self.settings, self.collect_edits())
+
+    def snapshot(self):
+        """重新取基线并把控件按基线落回（打开窗口 / 保存成功 / 取消后）。"""
         self._initial = S.tuning_ui_state(self.settings)
         self._load_controls()
-        return applied
 
     def cancel(self):
-        self._initial = S.tuning_ui_state(self.settings)
-        self._load_controls()
+        """丢弃本页未落盘的编辑（回到那份 settings 的当前值）。"""
+        self.snapshot()
 
     # ---- construction ----
 
@@ -121,15 +137,6 @@ class TuningPage(QtWidgets.QWidget):
         for group in S.TUNING_GROUPS:
             layout.addWidget(self._group_card(group))
         layout.addStretch(1)
-        footer = QtWidgets.QHBoxLayout()
-        footer.addStretch(1)
-        self.cancel_button = PushButton("取消")
-        self.ok_button = TOKENS.apply_primary_button(PrimaryPushButton("确定"))
-        self.cancel_button.clicked.connect(self.cancel)
-        self.ok_button.clicked.connect(self.ok)
-        footer.addWidget(self.cancel_button)
-        footer.addWidget(self.ok_button)
-        layout.addLayout(footer)
         self._sync_enabled()
 
     def _group_card(self, group):
@@ -188,8 +195,20 @@ class TuningPage(QtWidgets.QWidget):
             control = PushButton(self._color_text(self._initial[path]))
             control.clicked.connect(lambda _=False, p=path: self._pick_color_for(p))
             self._colors[path] = list(self._initial[path])
+        if kind != "slider":                       # 滑条那行自己在 _slider_row 里接线
+            self._wire_changed(control)
         self._controls[path] = control
         return control
+
+    def _wire_changed(self, widget):
+        """任何一次编辑都通知窗口刷新页脚：逐个试它有的那几个变更信号。"""
+        for name in ("currentIndexChanged", "valueChanged", "clicked"):
+            signal = getattr(widget, name, None)
+            if signal is not None:
+                signal.connect(self._on_edited)
+
+    def _on_edited(self, *_):
+        self.changed.emit()
 
     def _slider_row(self, field):
         """滑条 + 数字框（spec #161 字段表：背景不透明度）。两者永远同值：改谁
@@ -225,6 +244,8 @@ class TuningPage(QtWidgets.QWidget):
 
         slider.valueChanged.connect(from_slider)
         spin.valueChanged.connect(from_spin)
+        self._wire_changed(slider)
+        self._wire_changed(spin)
         box.addWidget(slider, 1)
         box.addWidget(spin)
         self._pairs[path] = (slider, spin)

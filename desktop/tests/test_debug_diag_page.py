@@ -318,7 +318,7 @@ def test_frequency_gears_and_manual_refresh_go_through_the_poller():
     assert page.frequency() == 0.5
     page.refresh_button.click()
     assert poller.refreshes == 1
-    assert page.copy_button.text() == "复制全部"
+    assert page.copy_button.text() == "复制全部内容"
 
 
 def test_copy_button_puts_the_text_on_the_clipboard():

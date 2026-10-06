@@ -1,4 +1,4 @@
-"""Application lifetime must outlive the non-primary overlay and its dialogs."""
+"""Application lifetime must outlive the non-primary overlay and its windows."""
 import http.client
 import json
 import os
@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from PySide6 import QtCore, QtWidgets
 
-from app import App, SettingsDialog
+from app import App
 from suboverlay import settings as S
 
 _QAPP = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
@@ -72,8 +72,9 @@ def test_tray_quit_action_exits_the_app_and_stops_the_service(tmp_path, monkeypa
         instance.engine._queue.shutdown()
 
 
-def test_closing_settings_dialog_does_not_quit_the_application(tmp_path, monkeypatch):
-    """All production settings close paths leave the overlay and service alive."""
+def test_closing_the_settings_window_does_not_quit_the_application(tmp_path, monkeypatch):
+    """All production close paths of the settings/debug window leave the overlay
+    and the service alive: 保存 / 取消 / × 关窗（#164 起它们是同一个非模态窗口）。"""
     monkeypatch.setenv("APPDATA", str(tmp_path))
     saved = []
     monkeypatch.setattr(S, "save", lambda settings, path=None: saved.append(settings.copy()))
@@ -93,11 +94,6 @@ def test_closing_settings_dialog_does_not_quit_the_application(tmp_path, monkeyp
     completed = []
     instance.overlay.show()
     instance.server.start()
-    actions = (
-        ("ok", lambda dialog: dialog.accept()),
-        ("cancel", lambda dialog: dialog.reject()),
-        ("window-close", lambda dialog: dialog.close()),
-    )
 
     def health_is_ok():
         for _ in range(100):
@@ -112,33 +108,30 @@ def test_closing_settings_dialog_does_not_quit_the_application(tmp_path, monkeyp
                 time.sleep(0.01)
         return False
 
-    def show_next(index=0):
-        if index == len(actions):
-            QtCore.QTimer.singleShot(0, instance.app.quit)
-            return
-        name, close_dialog = actions[index]
-
-        def close_open_dialog():
-            dialogs = [widget for widget in QtWidgets.QApplication.topLevelWidgets()
-                       if isinstance(widget, SettingsDialog) and widget.isVisible()]
-            if not dialogs:
-                QtCore.QTimer.singleShot(1, close_open_dialog)
-                return
-            close_dialog(dialogs[-1])
-
-        QtCore.QTimer.singleShot(0, close_open_dialog)
-        instance._open_settings()
+    def run_path(name, act):
+        instance._open_window("settings")
+        window = instance.debug_window
+        assert window.isModal() is False, "窗口必须是非模态的 (%s)" % name
+        assert window.current_page_name() == "settings"
+        act(window)
         assert instance.overlay.isVisible(), f"overlay closed after {name}"
         assert health_is_ok(), f"/health stopped responding after {name}"
         completed.append(name)
-        QtCore.QTimer.singleShot(0, lambda: show_next(index + 1))
+
+    def type_then(action):
+        def act(window):
+            window.settings_page.api_key.setText("sk-half-typed")
+            action(window)
+        return act
 
     try:
         assert health_is_ok(), "test server did not start"
-        QtCore.QTimer.singleShot(0, show_next)
-        instance.app.exec()
-        assert completed == [name for name, _ in actions]
-        assert len(saved) == 1, "only OK should persist settings"
+        run_path("save", type_then(lambda window: window.save()))
+        run_path("cancel", type_then(lambda window: window.cancel()))
+        run_path("window-close", lambda window: window.close())
+        assert completed == ["save", "cancel", "window-close"]
+        assert not instance.debug_window.isVisible(), "× 关窗要真的关掉"
+        assert len(saved) == 1, "只有「保存」那一条路径会写盘"
     finally:
         instance.server.stop()
         instance.overlay.close()

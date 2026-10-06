@@ -1,6 +1,11 @@
 """youtubesub desktop app entry point.
-Wires: WSServer -> Engine -> OverlayWindow (Qt timer pump)."""
-import queue, sys, os, time, uuid, traceback
+Wires: WSServer -> Engine -> OverlayWindow (Qt timer pump).
+
+The one settings/debug surface is `suboverlay/debug_window.py` (three pages:
+设置 / 调参 / 排障, map #164). Both menu entries open that same non-modal
+window and only differ in which page it lands on.
+"""
+import queue, sys, os, traceback
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -13,408 +18,7 @@ from suboverlay.hotkey import ComboWatcher
 from suboverlay.overlay import OverlayWindow
 from suboverlay.server import WSServer
 from suboverlay import settings as S
-from suboverlay import provider as P
 from suboverlay.protocol import DEFAULT_PORT
-
-# The dialog has no live neighbours, so the effective preview demonstrates the
-# context label lines with these example texts when (and only when) the
-# context_groups switch is on - the switch state must be visible in the
-# preview (#39 Implementation Decision 5).
-PREVIEW_PREV_EXAMPLE = "(previous group)"
-PREVIEW_NEXT_EXAMPLE = "(next group)"
-
-
-def _ask_new_name(parent, initial):
-    """Rename prompt. Module-level seam so offscreen tests can stub the
-    modal input dialog instead of blocking on it."""
-    dialog = QtWidgets.QInputDialog(parent)
-    dialog.setInputMode(QtWidgets.QInputDialog.TextInput)
-    dialog.setWindowTitle("重命名预设")
-    dialog.setLabelText("名称：")
-    dialog.setTextValue(initial)
-    dialog.setOkButtonText("确定")
-    dialog.setCancelButtonText("取消")
-    if dialog.exec() != QtWidgets.QDialog.Accepted:
-        return ""
-    return dialog.textValue().strip()
-
-
-class SettingsDialog(QtWidgets.QDialog):
-    """Settings panel. The prompt section implements #39 / ADR-010: a preset
-    dropdown (built-in / custom groups), copy-as-custom, rename/delete (both
-    disabled on built-ins), a multiline editor (read-only on built-ins), a
-    read-only effective preview built by the ONE assembly function, and the
-    prompt.context_groups checkbox. Edits only persist on OK (#4 semantics).
-    Also hosts #23's connection-test controls (tester + report_ready)."""
-
-    # Marshals a finished connection test onto the GUI thread: the runner
-    # completes on its worker thread; Qt queues this emission to the slot.
-    report_ready = QtCore.Signal(object)
-
-    def __init__(self, settings, parent=None, tester=None):
-        super().__init__(parent)
-        self.tester = tester
-        self.settings = settings
-        self.setWindowTitle("AI 翻译设置")
-        prov = settings["provider"]
-        prompt = settings["prompt"]
-        self._presets = [dict(p) for p in prompt.get("presets", [])]  # working copy
-        self._active = prompt.get("active") or "default"
-        if self._find_custom(self._active) is None and not any(
-                b["id"] == self._active for b in S.BUILTIN_PROMPTS):
-            self._active = "default"
-        # The active choice as it was persisted when the dialog opened. Deleting
-        # a non-active preset must fall back here, not to default - only
-        # deleting THE active custom falls back to default (#39 D5).
-        self._persisted_active = self._active
-        form = QtWidgets.QFormLayout(self)
-        self.base_url = QtWidgets.QLineEdit(prov.get("base_url", ""))
-        self.api_key = QtWidgets.QLineEdit(prov.get("api_key", ""))
-        self.api_key.setEchoMode(QtWidgets.QLineEdit.Password)
-        self.model = QtWidgets.QLineEdit(prov.get("model", ""))
-        self.protocol = QtWidgets.QComboBox()
-        self.protocol.addItems(["auto", "responses", "chat-completions"])
-        self.protocol.setCurrentText(prov.get("protocol", "auto"))
-        self.preset = QtWidgets.QComboBox()
-        self.preset.currentIndexChanged.connect(self._on_preset_changed)
-        btn_row = QtWidgets.QHBoxLayout()
-        self.copy_btn = QtWidgets.QPushButton("复制为自定义")
-        self.rename_btn = QtWidgets.QPushButton("重命名")
-        self.delete_btn = QtWidgets.QPushButton("删除")
-        self.copy_btn.clicked.connect(self._copy_preset)
-        self.rename_btn.clicked.connect(self._rename_preset)
-        self.delete_btn.clicked.connect(self._delete_preset)
-        btn_row.addWidget(self.copy_btn)
-        btn_row.addWidget(self.rename_btn)
-        btn_row.addWidget(self.delete_btn)
-        btn_row.addStretch(1)
-        self.system = QtWidgets.QPlainTextEdit()
-        self.system.setFixedHeight(80)
-        self.system.textChanged.connect(self._on_text_edited)
-        self.preview = QtWidgets.QPlainTextEdit()
-        self.preview.setFixedHeight(80)
-        self.preview.setReadOnly(True)
-        self.context_groups = QtWidgets.QCheckBox(
-            "携带上下文（前/后分组）")
-        self.context_groups.setChecked(bool(prompt.get("context_groups", 1)))
-        self.context_groups.toggled.connect(self._refresh_preview)
-        self.mock = QtWidgets.QCheckBox("Mock 模式（不调用真实 API）")
-        self.mock.setChecked(bool(prov.get("mock")))
-        self.font_size = QtWidgets.QSpinBox()
-        self.font_size.setRange(6, 40)
-        self.font_size.setValue(int(settings["display"].get("font_size", 10)))
-        form.addRow("Base URL", self.base_url)
-        form.addRow("API Key", self.api_key)
-        form.addRow("模型", self.model)
-        form.addRow("协议", self.protocol)
-        form.addRow("提示词预设", self.preset)
-        form.addRow("", self._wrap(btn_row))
-        form.addRow("提示词内容", self.system)
-        form.addRow("生效预览", self.preview)
-        form.addRow("", self.context_groups)
-        form.addRow("", self.mock)
-        form.addRow("字号", self.font_size)
-        # #23 thin GUI adapter over suboverlay/connection_test.py: this dialog
-        # only wires signals - run mechanics and the report contract live in
-        # the module, so they are testable without a window server.
-        self.test_btn = QtWidgets.QPushButton("测试连接")
-        self.cancel_btn = QtWidgets.QPushButton("取消测试")
-        self.cancel_btn.setEnabled(False)
-        self.progress = QtWidgets.QLabel("")
-        self.report_view = QtWidgets.QPlainTextEdit("")
-        self.report_view.setReadOnly(True)
-        self.report_view.setFixedHeight(150)
-        form.addRow(self.test_btn, self.cancel_btn)
-        form.addRow("测试进度", self.progress)
-        form.addRow("测试报告", self.report_view)
-        self.report_ready.connect(self._show_report)
-        self._poll = QtCore.QTimer(self)
-        self._poll.setInterval(200)
-        self._poll.timeout.connect(self._poll_progress)
-        self.test_btn.clicked.connect(self._start_connection_test)
-        self.cancel_btn.clicked.connect(self._cancel_connection_test)
-        if self.tester is not None and self.tester.last_report():
-            self._render_report(self.tester.last_report())
-            self.progress.setText("上次运行——见下方报告")
-        buttons = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
-        buttons.button(QtWidgets.QDialogButtonBox.Ok).setText("确定")
-        buttons.button(QtWidgets.QDialogButtonBox.Cancel).setText("取消")
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        form.addRow(buttons)
-        # Populate last: _rebuild_preset_combo -> _sync_buttons needs the
-        # buttons and the editor to exist already.
-        self._rebuild_preset_combo()
-        self._load_active_into_editor()
-        self._refresh_preview()
-
-    @staticmethod
-    def _wrap(layout):
-        w = QtWidgets.QWidget()
-        w.setLayout(layout)
-        return w
-
-    # ---- preset working set (#39 / ADR-010) ----
-    def _find_custom(self, pid):
-        for p in self._presets:
-            if p.get("id") == pid:
-                return p
-        return None
-
-    def _rebuild_preset_combo(self):
-        """Two groups: built-ins first (locked), then custom. Selection is
-        restored to the current active id."""
-        keep = self._active
-        self.preset.blockSignals(True)
-        self.preset.clear()
-        self.preset.addItem("——— 内置 ———", None)
-        for b in S.BUILTIN_PROMPTS:
-            self.preset.addItem(b["name"], b["id"])
-        self.preset.insertSeparator(self.preset.count())
-        self.preset.addItem("——— 我的预设 ———", None)
-        for p in self._presets:
-            self.preset.addItem(p.get("name") or p["id"], p["id"])
-        idx = self.preset.findData(keep)
-        self.preset.setCurrentIndex(idx if idx >= 0 else self.preset.findData("default"))
-        self.preset.blockSignals(False)
-        self._sync_buttons()
-
-    def _current_id(self):
-        return self.preset.currentData()
-
-    def _is_builtin(self, pid=None):
-        pid = self._current_id() if pid is None else pid
-        return any(b["id"] == pid for b in S.BUILTIN_PROMPTS)
-
-    def _sync_buttons(self):
-        builtin = self._is_builtin()
-        self.rename_btn.setEnabled(not builtin)
-        self.delete_btn.setEnabled(not builtin)
-        self.system.setReadOnly(builtin)
-
-    def _active_text(self):
-        pid = self._current_id()
-        if self._is_builtin(pid):
-            for b in S.BUILTIN_PROMPTS:
-                if b["id"] == pid:
-                    return b["text"]
-        custom = self._find_custom(pid)
-        return custom["text"] if custom else S.DEFAULT_PROMPT_TEXT
-
-    def _load_active_into_editor(self):
-        self.system.blockSignals(True)
-        self.system.setPlainText(self._active_text())
-        self.system.blockSignals(False)
-        self._sync_buttons()
-
-    def _on_preset_changed(self, *_):
-        pid = self._current_id()
-        if pid is None:
-            # Group header or separator clicked - snap back to the real
-            # selection; headers carry no preset id.
-            idx = self.preset.findData(self._active)
-            if idx >= 0:
-                self.preset.blockSignals(True)
-                self.preset.setCurrentIndex(idx)
-                self.preset.blockSignals(False)
-            return
-        self._active = pid
-        self._load_active_into_editor()
-        self._refresh_preview()
-
-    def _on_text_edited(self, *_):
-        # Editing applies only to custom presets; built-ins are read-only.
-        if not self._is_builtin():
-            custom = self._find_custom(self._current_id())
-            if custom is not None:
-                custom["text"] = self.system.toPlainText()
-        self._refresh_preview()
-
-    def _unique_copy_name(self, base):
-        name = base + " \u526f\u672c"   # 副本 - naming fixed by #39
-        n = 2
-        existing = {p.get("name") for p in self._presets}
-        while name in existing:
-            name = "%s \u526f\u672c %d" % (base, n)
-            n += 1
-        return name
-
-    def _copy_preset(self):
-        """Copy the selected preset (built-in or custom) into a new custom one
-        and select it - the only way to edit a built-in (#39 / ADR-010)."""
-        pid = self._current_id()
-        text = self.system.toPlainText()  # unsaved edits included
-        base = pid
-        for b in S.BUILTIN_PROMPTS:
-            if b["id"] == pid:
-                base = b["name"]
-                break
-        else:
-            custom = self._find_custom(pid)
-            base = (custom.get("name") if custom else pid) or pid
-        new_id = "prompt_" + uuid.uuid4().hex[:8]
-        self._presets.append({"id": new_id,
-                              "name": self._unique_copy_name(base),
-                              "text": text})
-        self._active = new_id
-        self._rebuild_preset_combo()
-        self._load_active_into_editor()
-        self._refresh_preview()
-
-    def _rename_preset(self):
-        if self._is_builtin():
-            return
-        custom = self._find_custom(self._current_id())
-        if custom is None:
-            return
-        name = _ask_new_name(self, custom.get("name", ""))
-        if name:
-            custom["name"] = name
-            self._rebuild_preset_combo()
-            self._refresh_preview()
-
-    def _delete_preset(self):
-        if self._is_builtin():
-            return
-        pid = self._current_id()
-        self._presets = [p for p in self._presets if p.get("id") != pid]
-
-        def _known(x):
-            return any(b["id"] == x for b in S.BUILTIN_PROMPTS) or \
-                self._find_custom(x) is not None
-
-        if pid != self._persisted_active and _known(self._persisted_active):
-            # Deleted a non-active preset: selection returns to the active
-            # choice the dialog opened with - deleting junk must not silently
-            # change which preset is active.
-            self._active = self._persisted_active
-        else:
-            # Deleting THE active custom falls back to the default built-in -
-            # the user never lands in a "no prompt" empty state (#39 D5).
-            self._active = "default"
-        self._rebuild_preset_combo()
-        self._load_active_into_editor()
-        self._refresh_preview()
-
-    def _refresh_preview(self, *_):
-        """Read-only effective preview: built by the SAME assembly function
-        production uses (#39 Testing Decision 5 - preview == production, one
-        function, not two constants). The dialog has no live neighbours, so
-        the context label lines are demonstrated with example texts when the
-        switch is on - that is how the switch state stays visible here."""
-        on = self.context_groups.isChecked()
-        self.preview.setPlainText(
-            P.build_instructions(self._active_text(),
-                                 PREVIEW_PREV_EXAMPLE if on else "",
-                                 PREVIEW_NEXT_EXAMPLE if on else "",
-                                 0))
-
-    def _start_connection_test(self):
-        # Snapshot semantics (#23): the run tests the inputs as they are at
-        # this click; nothing is saved to disk and nothing auto-triggers.
-        if self.tester is None:
-            return
-        snap = {"base_url": self.base_url.text().strip(),
-                "api_key": self.api_key.text(),
-                "model": self.model.text().strip(),
-                "protocol": self.protocol.currentText(),
-                "system": self.system.toPlainText(),
-                "mock": self.mock.isChecked()}
-        if not self.tester.start(snap, on_done=self.report_ready.emit):
-            return  # single flight: a run is already in the air
-        self.test_btn.setEnabled(False)
-        self.cancel_btn.setEnabled(True)
-        self.progress.setText("启动中……")
-        self._poll.start()
-
-    def _cancel_connection_test(self):
-        # Cancel = stop waiting only: the HTTP request is not interrupted and
-        # its quota is not refunded - say so instead of implying a rollback.
-        if self.tester is None:
-            return
-        self.tester.cancel()
-        self._poll.stop()
-        self.test_btn.setEnabled(True)
-        self.cancel_btn.setEnabled(False)
-        self.progress.setText(
-            "已取消——进行中的请求仍会继续执行，其额度不退还")
-
-    def _poll_progress(self):
-        p = self.tester.progress()
-        if p["running"]:
-            step = max(1, min(2, int(p["step"] or 1)))
-            self.progress.setText("第 %d/2 步 - %.1f 秒" % (step, p["elapsed_s"]))
-        else:
-            self._poll.stop()
-
-    def _show_report(self, report):
-        self._poll.stop()
-        self.test_btn.setEnabled(True)
-        self.cancel_btn.setEnabled(False)
-        self.progress.setText("已完成，用时 %s 毫秒" % report.get("duration_ms", 0))
-        self._render_report(report)
-
-    def _render_report(self, report):
-        """Render translated human-facing labels while preserving report values."""
-        lines = ["结论：" + str(report.get("verdict", "")).upper()]
-        for lay in report.get("layers", []):
-            passed = lay.get("passed")
-            mark = "PASS" if passed is True else ("FAIL" if passed is False else "--")
-            code = (" [" + lay["code"] + "]") if lay.get("code") else ""
-            lines.append("%s %s %s%s - %s (%s 毫秒)"
-                         % (mark, lay.get("id", ""), lay.get("title", ""), code,
-                            lay.get("message", ""), lay.get("elapsed_ms", 0)))
-        if report.get("skipped"):
-            lines.append("跳过：" + ", ".join(report["skipped"]))
-        lines.append("尝试次数：%s" % report.get("attempts", 0))
-        sample = report.get("sample") or {}
-        lines.append("原文：" + str(sample.get("source", "")))
-        lines.append("译文：" + (str(sample.get("translation"))
-                                if sample.get("translation") else "（无）"))
-        ml = report.get("model_list") or {}
-        if ml.get("observed"):
-            contains = {True: "是", False: "否", None: "未知"}.get(
-                ml.get("contains_model"), "未知")
-            lines.append("模型列表：%s（包含所配模型：%s）"
-                         % (ml.get("total", 0), contains))
-        warning_messages = report.get("warning_messages") or {}
-        for w in report.get("warnings", []):
-            lines.append("警告：" + str(warning_messages.get(w, w)))
-        for n in report.get("notes", []):
-            lines.append("备注：" + str(n))
-        snap = report.get("snapshot") or {}
-        lines.append("基于点击时的输入（base_url=%s，model=%s）；未写入任何配置文件。"
-                     % (snap.get("base_url", ""), snap.get("model", "")))
-        lines.append(str(report.get("quota_notice", "")))
-        self.report_view.setPlainText(chr(10).join(lines))
-
-    def done(self, r):
-        # Closing the dialog abandons any in-flight run (generation bump): a
-        # late result must never write into a closed form (#23 decision 19).
-        if self.tester is not None:
-            self.tester.cancel()
-        self._poll.stop()
-        super().done(r)
-
-    def accept(self):
-        prov = self.settings["provider"]
-        prov["base_url"] = self.base_url.text().strip()
-        prov["api_key"] = self.api_key.text()
-        prov["model"] = self.model.text().strip()
-        prov["protocol"] = self.protocol.currentText()
-        prov["mock"] = self.mock.isChecked()
-        self.settings["display"]["font_size"] = self.font_size.value()
-        active = self._current_id() or "default"
-        if not self._is_builtin(active) and self._find_custom(active) is None:
-            active = "default"
-        # One-way schema (#39): the legacy "system" key is never written back.
-        self.settings["prompt"] = {
-            "active": active,
-            "presets": [dict(p) for p in self._presets],
-            "context_groups": 1 if self.context_groups.isChecked() else 0,
-        }
-        S.save(self.settings)
-        super().accept()
 
 
 class App:
@@ -422,19 +26,20 @@ class App:
         self.settings = S.load()
         self.app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
         # The overlay is a Qt.Tool window, so Qt does not count it as a primary
-        # window. Closing a parentless settings dialog must not end the app.
+        # window. Opening/closing the settings-and-debug window must not end the
+        # app either.
         self.app.setQuitOnLastWindowClosed(False)
         # One app-lifetime connection tester: its last report must outlive the
-        # dialog so /status can keep serving it (#23 decision 17).
+        # window so /status can keep serving it (#23 decision 17).
         self.tester = ConnectionTester()
         self.overlay = OverlayWindow(self.settings)
-        # The debug window is created on first use and then reused (its diag
-        # page stops polling when it closes); App holds the reference so the
-        # non-modal window is never garbage collected (#158).
+        # The settings-and-debug window is created on first use and then reused
+        # (its diag page stops polling when it closes); App holds the reference
+        # so the non-modal window is never garbage collected (#158).
         self.debug_window = None
         # Worker pool follows provider.max_concurrent (clamped [1,16];
-        # restart-effective - the SpinBox entry lives in the debug window's
-        # tuning page, #158).
+        # restart-effective - the SpinBox entry lives in the window's tuning
+        # page, #158).
         self.engine = Engine(self.settings)
         self.evq = queue.Queue(maxsize=2000)
         self.server = WSServer(self.settings.get("server", {}).get("port", DEFAULT_PORT), self.evq,
@@ -501,10 +106,11 @@ class App:
         self._ct_action = m.addAction("鼠标穿透（开启后点不到浮窗，Ctrl+Alt+U 解锁）")
         self._ct_action.setCheckable(True)
         self._ct_action.triggered.connect(self._toggle_click_through)
+        # 两个入口打开的是**同一个**窗口，只是落到不同的一页（#164 目标）。
         a_set = m.addAction("设置……")
-        a_set.triggered.connect(self._open_settings)
+        a_set.triggered.connect(lambda: self._open_window("settings"))
         a_debug = m.addAction("调试……")
-        a_debug.triggered.connect(self._open_debug_window)
+        a_debug.triggered.connect(lambda: self._open_window("tuning"))
         m.addSeparator()
         a_q = m.addAction("退出程序")
         a_q.triggered.connect(QtWidgets.QApplication.instance().quit)
@@ -538,20 +144,18 @@ class App:
         if self._unlock_watcher.poll():
             self._set_click_through(False)
 
-    def _open_settings(self):
+    def _open_window(self, page):
+        """One window, many ways in: created on first use, then reused - the two
+        menu entries only choose the page it lands on. Closing it hides it
+        (its diag page stops polling and the in-flight connection test is
+        abandoned), so the instance and the app outlive the visit."""
         if self.overlay._click_through:
-            self.overlay.set_click_through(False)
-            self._ct_action.setChecked(False)
-        dlg = SettingsDialog(self.settings, tester=self.tester)
-        dlg.exec()
-        self.engine.settings = self.settings
-
-    def _open_debug_window(self):
-        """One instance, reused: created on first use, shown and raised after
-        that (closing it only hides it - its diag page stops polling)."""
+            # 穿透状态会让新窗口点不到：先用同一条路径解开（文案也会跟着回到关态）。
+            self._set_click_through(False)
         if self.debug_window is None:
             self.debug_window = DebugWindow(self.settings, port=self.server.port,
-                                            overlay=self.overlay)
+                                            overlay=self.overlay, tester=self.tester)
+        self.debug_window.show_page(page)
         self.debug_window.show()
         self.debug_window.raise_()
         self.debug_window.activateWindow()

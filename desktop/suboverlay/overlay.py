@@ -404,15 +404,28 @@ class OverlayWindow(QtWidgets.QWidget):
         self.settings["display"]["order"] = self.order
         self.update()
 
-    def nudge_font(self, d):
-        v = max(6, min(40, int(self.settings["display"]["font_size"]) + d))
-        self.settings["display"]["font_size"] = v
+    def _nudge_tuned(self, key, delta):
+        """菜单里的 ± 快捷方式：范围取权威表（`settings.TUNING_FIELDS`），
+        **改完即落盘** —— 这两项是从外面改浮窗外观的唯一途径，不能等下次
+        挪窗口才顺手存进去（#167 决议）。"""
+        from . import settings as S
+        field = S.field_by_path(("display", key))
+        low, high = int(field["min"]), int(field["max"])
+        current = int(self.settings["display"].get(key, field["default"]))
+        value = max(low, min(high, current + delta))
+        self.settings["display"][key] = value
         self.update()
+        try:
+            S.save(self.settings)
+        except Exception:
+            pass
+        return value
+
+    def nudge_font(self, d):
+        return self._nudge_tuned("font_size", d)
 
     def nudge_opacity(self, d):
-        v = max(1, min(251, int(self.settings["display"]["bg_opacity"]) + d))
-        self.settings["display"]["bg_opacity"] = v
-        self.update()
+        return self._nudge_tuned("bg_opacity", d)
 
 
 def sys_has_windows():

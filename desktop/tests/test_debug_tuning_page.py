@@ -1,10 +1,10 @@
-"""地图 #152 / 实施票 #158 -- 调参页（spec #161 窗口接缝）。
+"""地图 #152 / 实施票 #158 -- 调参页（spec #161 窗口接缝；#164 / #170 起整窗提交）。
 
-offscreen Qt；写盘用注入的 save 替身抓取（照 `test_settings_dialog.py` 的
-`_save_spy` 先例），生效通知用假浮窗替身。断言只看外部行为：控件的范围与
-文案、写盘内容、通知是否发生——不断言控件类名，也不读 QSS 颜色。
+offscreen Qt；断言只看外部行为：控件的范围与文案、`apply()` 写进那份 settings 的
+内容、脏状态计数、`changed` 信号是否发出 —— 不断言控件类名，也不读 QSS 颜色。
+写盘与浮窗通知搬到了窗口级（`debug_window.DebugWindow.save`），所以这里不再有
+save 替身与假浮窗。
 """
-import json
 import os
 import sys
 
@@ -19,28 +19,13 @@ from suboverlay.debug_tuning_page import TuningPage
 _QAPP = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
 
 
-class FakeOverlay:
-    def __init__(self):
-        self.rereads = 0
-
-    def reread_settings(self):
-        self.rereads += 1
-
-
 def _page(cfg=None):
     cfg = cfg if cfg is not None else S.default_settings()
-    saved = []
-    overlay = FakeOverlay()
-
-    def save(c, path=None):
-        saved.append(json.loads(json.dumps(c, ensure_ascii=False)))
-
-    page = TuningPage(cfg, overlay=overlay, save=save)
-    return page, cfg, saved, overlay
+    return TuningPage(cfg), cfg
 
 
 def test_controls_expose_the_spec_ranges():
-    page, cfg, _, _ = _page()
+    page, cfg = _page()
     assert page.field_value(("display", "history_lines")) == 2
     page.set_field_value(("display", "history_lines"), 999)
     assert page.field_value(("display", "history_lines")) == 10
@@ -64,87 +49,85 @@ def test_opening_a_hand_broken_file_shows_clamped_values():
     cfg["display"]["bg_opacity"] = 999
     cfg["display"]["bg_color"] = [300, 0, 0]
     cfg["display"]["mode"] = "bogus"
-    page, _, _, _ = _page(cfg)
+    page, _ = _page(cfg)
     assert page.field_value(("provider", "timeout_s")) == 60.0
     assert page.field_value(("display", "bg_opacity")) == 255
     assert page.field_value(("display", "bg_color")) == [255, 0, 0]
     assert page.field_value(("display", "mode")) == "bilingual"
 
 
-def test_ok_writes_only_the_edited_keys_exactly_once():
+def test_apply_writes_only_the_edited_keys():
     cfg = S.default_settings()
-    cfg["display"]["font_size"] = 99          # 用户手写的越界值
+    cfg["display"]["font_size"] = 99          # 用户手写的越界值：没动就不许改它
     cfg["prefetch"]["draft_note"] = "keep me"
-    page, cfg, saved, _ = _page(cfg)
+    page, cfg = _page(cfg)
     page.set_field_value(("prefetch", "lead_s"), 30.0)
-    page.ok_button.click()
-    assert len(saved) == 1
-    written = saved[0]
-    assert written["prefetch"]["lead_s"] == 30.0
-    assert written["display"]["order"] == "trans_first"
-    assert written["batch"]["max_chars"] == 8000
-    assert written["display"]["font_size"] == 99
-    assert written["prefetch"]["draft_note"] == "keep me"
+    assert page.apply() == [("prefetch", "lead_s")]
     assert cfg["prefetch"]["lead_s"] == 30.0
+    assert cfg["display"]["order"] == "trans_first"
+    assert cfg["batch"]["max_chars"] == 8000
+    assert cfg["display"]["font_size"] == 99
+    assert cfg["prefetch"]["draft_note"] == "keep me"
 
 
-def test_ok_without_edits_does_not_touch_the_file():
-    page, _, saved, overlay = _page()
-    page.ok()
-    assert saved == []
-    assert overlay.rereads == 0
+def test_apply_without_edits_touches_nothing():
+    page, cfg = _page()
+    before = repr(cfg)
+    assert page.apply() == []
+    assert page.count_dirty() == 0
+    assert repr(cfg) == before
 
 
-def test_cancel_discards_everything_and_never_saves():
-    page, cfg, saved, overlay = _page()
+def test_cancel_discards_everything():
+    page, cfg = _page()
     page.set_field_value(("prefetch", "lead_s"), 30.0)
-    page.cancel_button.click()
-    assert saved == []
+    assert page.is_dirty() is True
+    page.cancel()
     assert cfg["prefetch"]["lead_s"] == 90.0
     assert page.field_value(("prefetch", "lead_s")) == 90.0
-    assert overlay.rereads == 0
+    assert page.is_dirty() is False
 
 
-def test_ok_notifies_the_overlay_only_for_the_two_snapshotted_fields():
-    page, cfg, _, overlay = _page()
-    page.set_field_value(("prefetch", "lead_s"), 30.0)
-    page.ok()
-    assert overlay.rereads == 0, "只改预取时长不该碰浮窗"
-    page.set_field_value(("display", "mode"), "trans")
-    page.ok()
-    assert overlay.rereads == 1
-    page.set_field_value(("display", "history_lines"), 5)
-    page.ok()
-    assert overlay.rereads == 1, "没改 mode/order 不该重复通知"
+def test_applied_display_fields_are_the_ones_the_overlay_has_to_repaint():
+    """整窗保存时窗口只对 notify_overlay 的字段喊浮窗重画（#167 决议）。
+
+    这里断言的是权威表这一侧的事实：改字号/描边/底板/加粗/显示内容都要喊，
+    改预取时长不喊。
+    """
+    page, _ = _page()
+    for path in (("display", "font_size"), ("display", "mode"), ("display", "order"),
+                 ("display", "stroke"), ("display", "bg_color"),
+                 ("display", "bg_opacity"), ("display", "font_bold")):
+        assert S.field_by_path(path)["notify_overlay"] is True, path
+    assert S.field_by_path(("prefetch", "lead_s"))["notify_overlay"] is False
+    assert S.field_by_path(("display", "history_lines"))["notify_overlay"] is False
 
 
 def test_order_is_disabled_outside_bilingual_but_keeps_its_value():
-    page, cfg, _, overlay = _page()
+    page, cfg = _page()
     assert page.is_field_enabled(("display", "order")) is True
     page.set_field_value(("display", "order"), "orig_first")
     page.set_field_value(("display", "mode"), "trans")
     assert page.is_field_enabled(("display", "order")) is False
     assert page.field_value(("display", "order")) == "orig_first"
-    page.ok()
+    page.apply()
     assert cfg["display"]["order"] == "orig_first"
     assert cfg["display"]["mode"] == "trans"
-    assert overlay.rereads == 1
     page.set_field_value(("display", "mode"), "bilingual")
     assert page.is_field_enabled(("display", "order")) is True
 
 
 def test_seek_is_shown_in_seconds_and_stored_in_milliseconds():
-    page, cfg, saved, _ = _page()
+    page, cfg = _page()
     assert page.field_value(("prefetch", "seek_debounce_ms")) == 0.4
     page.set_field_value(("prefetch", "seek_debounce_ms"), 0.5)
-    page.ok()
+    page.apply()
     assert cfg["prefetch"]["seek_debounce_ms"] == 500
-    assert saved[0]["prefetch"]["seek_debounce_ms"] == 500
 
 
 def test_opacity_is_a_slider_and_a_number_box_that_stay_in_sync():
     """spec #161 字段表：背景不透明度 = 滑条 + 数字框（用户故事 18）。"""
-    page, cfg, saved, _ = _page()
+    page, cfg = _page()
     sliders = page.findChildren(QtWidgets.QSlider)
     assert len(sliders) == 1, "只有背景不透明度这一项带滑条"
     slider = sliders[0]
@@ -154,33 +137,88 @@ def test_opacity_is_a_slider_and_a_number_box_that_stay_in_sync():
     assert page.field_value(("display", "bg_opacity")) == 200
     page.set_field_value(("display", "bg_opacity"), 40)
     assert slider.value() == 40
-    page.ok()
+    page.apply()
     assert cfg["display"]["bg_opacity"] == 40
-    assert saved[0]["display"]["bg_opacity"] == 40
+
+
+def test_font_size_lives_in_the_display_group_with_the_authority_range():
+    """#167 归位：字号补进权威表并归「显示」组（此前只有设置对话框有它）。"""
+    field = S.field_by_path(("display", "font_size"))
+    assert field["group"] == "display"
+    assert (field["control"], field["min"], field["max"], field["step"]) == \
+        ("int", 6, 40, 1)
+    assert S.TUNING_FIELDS[0]["path"] == ("display", "font_size"), "显示组第一项就是字号"
+    page, cfg = _page()
+    page.set_field_value(("display", "font_size"), 999)
+    assert page.field_value(("display", "font_size")) == 40
+    page.apply()
+    assert cfg["display"]["font_size"] == 40
+
+
+def test_dirty_counts_only_what_apply_would_write():
+    page, _ = _page()
+    assert page.is_dirty() is False and page.count_dirty() == 0
+    page.set_field_value(("display", "history_lines"), 5)
+    assert page.count_dirty() == 1
+    page.set_field_value(("display", "history_lines"), 2)     # 改回原值
+    assert page.is_dirty() is False, "值相等不算脏（不是 dirty flag）"
+    page.set_field_value(("display", "mode"), "trans")
+    page.set_field_value(("prefetch", "lead_s"), 30.0)
+    assert page.count_dirty() == 2
+
+
+def test_snapshot_rolls_the_controls_back_to_the_settings_dict():
+    cfg = S.default_settings()
+    page, cfg = _page(cfg)
+    page.set_field_value(("display", "history_lines"), 5)
+    page.apply()
+    assert cfg["display"]["history_lines"] == 5
+    page.set_field_value(("display", "history_lines"), 7)
+    assert page.is_dirty() is True
+    page.snapshot()                                            # 打开窗口 / 保存成功后的再快照
+    assert page.field_value(("display", "history_lines")) == 5
+    assert page.is_dirty() is False
+
+
+def test_every_edit_fires_the_changed_signal():
+    """窗口页脚的「保存」可用态靠这条信号刷新 —— 编辑不通知，按钮就永远点不了。"""
+    page, _ = _page()
+    seen = []
+    page.changed.connect(lambda: seen.append(True))
+    page.set_field_value(("display", "history_lines"), 5)      # 数字框
+    page.set_field_value(("display", "mode"), "trans")          # 下拉
+    page.set_field_value(("display", "bg_opacity"), 40)         # 滑条 + 数字框
+    assert len(seen) >= 3, seen
+    # 取色按钮也接了线（点它会弹真模态取色器，这里把取色替身换成「取消」）
+    page._pick_color = lambda title, current: None
+    page._controls[("display", "bg_color")].clicked.emit()
+    assert len(seen) >= 4, seen
 
 
 def test_group_titles_and_hints_match_the_spec():
-    page, _, _, _ = _page()
+    page, _ = _page()
     assert page.group_title("display") == "显示"
     assert page.group_title("network") == "网络与服务"
     assert "未校准" in page.group_title("experimental")
-    assert page.hint_for(("provider", "max_concurrent")) == "重启后生效"
-    assert page.hint_for(("server", "port")) == "重启后生效"
-    assert page.hint_for(("display", "stroke")) == "0 = 不描边"
+    # 重启生效 / 未校准 由页面统一补成徽标，字段自己的 hint 只写「改了会发生什么」。
+    assert page.hint_for(("provider", "max_concurrent")).endswith("重启后生效")
+    assert page.hint_for(("server", "port")).endswith("重启后生效")
+    assert page.hint_for(("display", "stroke")).startswith("给字加一圈黑边")
     for field in S.TUNING_FIELDS:
+        hint = page.hint_for(field["path"])
+        assert hint, field["path"]
         if field["uncalibrated"]:
-            assert "未校准" in page.hint_for(field["path"]), field["path"]
+            assert "未校准" in hint, field["path"]
         if field["restart"]:
-            assert page.hint_for(field["path"]) == "重启后生效", field["path"]
+            assert hint.endswith("重启后生效"), field["path"]
 
 
 def test_no_credential_path_is_reachable_or_rendered():
     cfg = S.default_settings()
     cfg["provider"]["api_key"] = "sk-secret-do-not-render"
-    page, _, _, _ = _page(cfg)
+    page, _ = _page(cfg)
     for path in (("provider", "api_key"), ("provider", "base_url"), ("provider", "model"),
-                 ("provider", "protocol"), ("display", "font_size"), ("window", "w"),
-                 ("prompt", "active")):
+                 ("provider", "protocol"), ("window", "w"), ("prompt", "active")):
         try:
             page.set_field_value(path, "x")
         except KeyError:
