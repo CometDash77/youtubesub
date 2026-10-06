@@ -1,7 +1,7 @@
 @echo off
 REM youtubesub desktop overlay - one-click start.
 REM Starts WS server + overlay on 127.0.0.1:9877 (port from setting.json).
-REM Right-click the overlay for Settings / Mode / Font / Opacity / Quit.
+REM Right-click the overlay for display mode / order / font size / background / click-through / settings / quit.
 setlocal
 cd /d "%~dp0"
 

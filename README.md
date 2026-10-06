@@ -16,10 +16,10 @@
 ## 运行
 1. 装依赖 (Python 3.12, 已实测版本见 `requirements.txt`): `pip install -r requirements.txt`.
 2. 起桌面端: 双击 `start-desktop.cmd`，CMD 会在启动后退出；系统托盘提供显示/隐藏浮窗、设置和退出。也可用 `python desktop/app.py` 在命令行调试 (监听 127.0.0.1:9877)。
-   右键浮窗仍可使用 Mode / 字号 / 透明度 / Click-through (Ctrl+Alt+U 解锁) / 设置 / Quit。
+   右键浮窗仍可使用 显示内容（原文 / 译文 / 双语）/ 上下顺序对调 / 字号 ± / 背景浓淡 / 鼠标穿透（Ctrl+Alt+U 解锁）/ 设置 / 退出程序。
 3. 浏览器装 Tampermonkey, 导入 `userscript/youtubesub.user.js`.
 4. 打开 YouTube 播放, 浮窗自动出现并同步字幕.
-5. 首次使用在右键菜单 Settings… 填 Base URL / API Key / Model 并取消勾选 "Mock mode"
+5. 首次使用在右键菜单「设置……」填 Base URL / API Key / Model 并取消勾选 "Mock mode"
    (Key 只存本机 `%APPDATA%/SubOverlay/setting.json`, 不进 Git/日志/页面).
 
 诊断端点 (只绑 loopback; `/status` 会回显字幕文本, 因此不要绑到非 loopback):

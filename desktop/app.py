@@ -484,21 +484,21 @@ class App:
         self._visibility_action = m.addAction("隐藏浮窗")
         self._visibility_action.triggered.connect(self._toggle_overlay)
         m.addSeparator()
-        a_mode = m.addAction("Mode: original/translation/bilingual")
+        a_mode = m.addAction("显示内容：原文 / 译文 / 双语（点一下换下一种）")
         a_mode.triggered.connect(self.overlay.cycle_mode)
-        a_order = m.addAction("Swap bilingual order")
+        a_order = m.addAction("上下顺序：原文 ↔ 译文（点一下对调）")
         a_order.triggered.connect(self.overlay.swap_order)
         m.addSeparator()
-        a_fu = m.addAction("Font +")
+        a_fu = m.addAction("字号调大")
         a_fu.triggered.connect(lambda: self.overlay.nudge_font(1))
-        a_fd = m.addAction("Font -")
+        a_fd = m.addAction("字号调小")
         a_fd.triggered.connect(lambda: self.overlay.nudge_font(-1))
-        a_ou = m.addAction("Opacity +")
+        a_ou = m.addAction("背景调浓")
         a_ou.triggered.connect(lambda: self.overlay.nudge_opacity(25))
-        a_od = m.addAction("Opacity -")
+        a_od = m.addAction("背景调淡")
         a_od.triggered.connect(lambda: self.overlay.nudge_opacity(-25))
         m.addSeparator()
-        self._ct_action = m.addAction("Click-through (Ctrl+Alt+U to unlock)")
+        self._ct_action = m.addAction("鼠标穿透（开启后点不到浮窗，Ctrl+Alt+U 解锁）")
         self._ct_action.setCheckable(True)
         self._ct_action.triggered.connect(self._toggle_click_through)
         a_set = m.addAction("设置……")
@@ -506,7 +506,7 @@ class App:
         a_debug = m.addAction("调试……")
         a_debug.triggered.connect(self._open_debug_window)
         m.addSeparator()
-        a_q = m.addAction("Quit")
+        a_q = m.addAction("退出程序")
         a_q.triggered.connect(QtWidgets.QApplication.instance().quit)
         return m
 
@@ -530,8 +530,9 @@ class App:
         off is unreachable: Ctrl+Alt+U is the way back (see suboverlay/hotkey.py)."""
         self.overlay.set_click_through(on)
         self._ct_action.setChecked(on)
-        self._ct_action.setText("Click-through ON (Ctrl+Alt+U to unlock)" if on
-                                else "Click-through (Ctrl+Alt+U to unlock)")
+        self._ct_action.setText(
+            "鼠标穿透：已开启（Ctrl+Alt+U 解锁）" if on
+            else "鼠标穿透（开启后点不到浮窗，Ctrl+Alt+U 解锁）")
 
     def _check_unlock_hotkey(self):
         if self._unlock_watcher.poll():

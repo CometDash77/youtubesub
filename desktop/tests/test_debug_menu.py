@@ -4,6 +4,7 @@ App 需要真实 settings 文件，照 `test_app_lifecycle.py` 的既有手法�
 把 `S.load` 指向临时的默认配置（并给一个空闲端口，免得真占 9877）。
 """
 import os
+import re
 import socket
 import sys
 
@@ -49,6 +50,10 @@ def test_menu_offers_the_debug_entries_and_reuses_one_window(tmp_path, monkeypat
         # order 同步给浮窗，而那两条路径（调参页确定、浮窗自身的 cycle/swap）都已
         # 自动重读，留着只会与「调试……」重复（见票「浮窗菜单去重」）。
         assert "重读设置" not in actions, sorted(actions)
+        # #172：菜单不许再留英文条目。这里钉的是浮窗右键 / 托盘共用的那一份
+        # QMenu 上的**全部**可见文案（含 #164 范围内的「设置……」「调试……」）。
+        non_chinese = [t for t in actions if t and not re.search(r"[\u4e00-\u9fff]", t)]
+        assert non_chinese == [], "菜单条目还有英文: %s" % non_chinese
         actions["调试……"].trigger()
         window = instance.debug_window
         assert window is not None
@@ -57,6 +62,44 @@ def test_menu_offers_the_debug_entries_and_reuses_one_window(tmp_path, monkeypat
         actions["调试……"].trigger()
         assert instance.debug_window is window, "关闭/再次打开必须复用同一实例"
         assert window.isVisible()
+    finally:
+        if instance.debug_window is not None:
+            instance.debug_window.close()
+        instance.overlay.close()
+        instance.engine._queue.shutdown()
+
+
+def test_every_menu_label_says_what_it_changes(tmp_path, monkeypatch):
+    """#172：菜单文案要能自解释（换日常词 + 一句「点一下会怎样」），并且
+    「鼠标穿透」在开 / 关两种状态下的说法都要对。
+
+    这张用例守住三件事：菜单里没有纯英文条目；开关状态的文案互不相同且都带
+    解锁键位；`Quit` 的文案改成中文之后仍然只有一颗、仍然真的结束事件循环
+    （托盘与浮窗共用同一份 QMenu，见 app.py:444 / :448）。"""
+    instance = _app(tmp_path, monkeypatch)
+    try:
+        labels = [action.text() for action in instance.overlay._ctx_menu.actions()
+                  if action.text()]
+        assert labels, "菜单不能是空的"
+        assert all(re.search(r"[\u4e00-\u9fff]", t) for t in labels), labels
+        # 每条都要说清楚点下去会怎样，不是光换个名词（「设置……」这类入口除外，
+        # 它开的是窗口，本来就是名词）。
+        for t in labels:
+            if t.endswith("……"):
+                continue
+            assert any(word in t for word in ("调", "换", "显示", "顺序", "穿", "隐藏", "退出")), t
+
+        off = instance._ct_action.text()
+        assert "鼠标穿透" in off and "Ctrl+Alt+U" in off
+        instance._set_click_through(True)
+        on = instance._ct_action.text()
+        assert "已开启" in on and "Ctrl+Alt+U" in on
+        assert on != off, "开 / 关两种状态必须能一眼区分"
+        instance._set_click_through(False)
+        assert instance._ct_action.text() == off, "关掉之后要回到原来的说法"
+
+        quits = [a for a in instance.overlay._ctx_menu.actions() if a.text() == "退出程序"]
+        assert len(quits) == 1, [a.text() for a in instance.overlay._ctx_menu.actions()]
     finally:
         if instance.debug_window is not None:
             instance.debug_window.close()

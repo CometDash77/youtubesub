@@ -51,8 +51,8 @@ python desktop/tests/browser_e2e.py --demo [--seconds 30]
 | 6 | `2.0x / 1.0x` | 字幕推进速度跟随（`/status` 的 `rate` 同步变） |
 | 7 | `SPA: switch video` | 出现新 source，旧 cue 不残留 |
 | 8 | 拖动 / 拖边缘 resize | 浮窗跟随；放大后还能缩小 |
-| 9 | 右键浮窗 | 菜单出现：Mode / Swap order / Font ± / Opacity ± / Click-through / Settings… / Quit |
-| 10 | 开 Click-through，再按 **Ctrl+Alt+U** | 窗口恢复接收鼠标（这是 click-through 的唯一回路，必须验） |
+| 9 | 右键浮窗 | 菜单出现且**全中文**：显示内容（原文 / 译文 / 双语）/ 上下顺序对调 / 字号 ± / 背景浓淡 / 鼠标穿透（Ctrl+Alt+U 解锁）/ 设置…… / 调试…… / 退出程序 |
+| 10 | 开「鼠标穿透」，再按 **Ctrl+Alt+U** | 窗口恢复接收鼠标（这是 click-through 的唯一回路，必须验） |
 
 随时可看机器可读状态（另开一个终端）：`Invoke-RestMethod http://127.0.0.1:<harness 打印的端口>/status`。
 harness 只 kill 自己启动的 Chrome；**不要 kill 你自己常驻的 chrome.exe**。
@@ -73,7 +73,7 @@ start-desktop.cmd          # 默认设置，不填任何模型
 ```
 
 1. 打开任意带 CC 字幕的视频，等浮窗出原文；
-2. 右键浮窗 → **Mode: original/translation/bilingual** 切到 `translation`。
+2. 右键浮窗 → **显示内容：原文 / 译文 / 双语（点一下换下一种）** 连点两下切到 `译`。
 
 核对：
 
@@ -172,8 +172,8 @@ Protocol 先留 `auto`，**取消勾选** "Mock mode (no real API)" → OK（写
 
 核对：
 
-- [ ] 译文出现且语言合理；模式切 `original / translation / bilingual` 三态都正常（右键菜单 Mode）
-- [ ] `Swap bilingual order` 生效
+- [ ] 译文出现且语言合理；模式切 `原文 / 译文 / 双语` 三态都正常（右键菜单「显示内容」）
+- [ ] 「上下顺序：原文 ↔ 译文（点一下对调）」生效
 - [ ] 重复播放同一段：命中本地缓存（`data/translations.db`），不再发请求
 - [ ] 断网 / 填错 Key / 超时：**原字幕不受影响**，不崩、不空白
 - [ ] `auto` 与显式 `responses` / `chat-completions` 两种协议各验一次

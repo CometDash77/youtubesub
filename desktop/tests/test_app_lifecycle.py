@@ -52,7 +52,7 @@ def test_tray_quit_action_exits_the_app_and_stops_the_service(tmp_path, monkeypa
     try:
         assert instance.tray.contextMenu() is instance.overlay._ctx_menu
         quits = [action for action in instance.overlay._ctx_menu.actions()
-                 if action.text() == "Quit"]
+                 if action.text() == "退出程序"]
         assert len(quits) == 1, "the tray menu offers exactly one Quit"
         # Safety net: a wrongly wired Quit must fail the assertion below, not
         # hang the suite on app.exec().
