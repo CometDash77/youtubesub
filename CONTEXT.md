@@ -27,13 +27,31 @@
 - 「背景调浓 / 调淡」= 改的是 `display.bg_opacity`（浮窗底板不透明度），不是窗口透明度；「鼠标穿透」= 既有 click-through（`Ctrl+Alt+U` 是唯一解锁回路）。
 - 文案三处照抄在别处，改菜单文案必须同步：[README.md:19](README.md#L19)、[docs/MANUAL-ACCEPTANCE.md:54](docs/MANUAL-ACCEPTANCE.md#L54)、[start-desktop.cmd:4](start-desktop.cmd#L4)。
 - 注：浮窗菜单是**独立表面**，地图「设置调试合并 map」的整窗文案判据不覆盖它。
+- 更正（2026-10-06，地图 #164 / 落地票 #170 已落地）：菜单里的 `设置……` / `调试……` 是**同一个**「设置与调试窗口」的两个入口，分别落到设置页与调参页（见「设置与调试窗口」一节）。
 
 ### 调试窗口（地图「调试设置前端 map」；术语，不含实现）
 - **调试窗口**: 桌面端一个独立、非模态的窗口，含调参页与排障页两页。作用范围仅限该窗口本身，现有「AI 翻译设置」对话框与浮窗不在其内。
 - **调参页**: 调试窗口里的**可写**一页 —— 改设置并落盘生效。归属「调参页字段清单与保存 / 生效语义」票。
 - **排障页**: 调试窗口里的**只读**一页 —— 观测运行状态与错误，不改任何配置、不新增任何后端信号。它消费的是**公开的 `/status` 接口**，因此它观察到的"连不上"是关于服务是否活着的结论，而不是它的前提。
 - **事件留痕**: 排障页在**本页内存**里记下的事件（状态翻转，带时间戳），关窗即弃。**不是「日志」**（不落盘、跨会话不留）、**不是「快照」**（不导出、不归档）。已知边界：只看得见**本页打开之后**的事件。
+- 更正（2026-10-06，地图 #164 / 落地票 #170 已落地）：**上一条起，上面那个「两页调试窗口」与「AI 翻译设置对话框」的划分已作废** —— 模态对话框作为外壳被删除，能力搬进新的一页，窗口本身成为桌面端**唯一**的设置 / 调试入口面。上面四行保留作历史；当下的说法见本节末尾的「设置与调试窗口」几条。
+- **设置与调试窗口**: 桌面端**唯一**的设置 / 调试入口面 —— 一个非模态无边框窗口，三页「设置 / 调参 / 排障」（`PAGES = ("settings", "tuning", "diag")`，[desktop/suboverlay/debug_window.py:35](desktop/suboverlay/debug_window.py#L35)）。菜单两个入口开的是**同一个实例**、只落到不同初始页。设置页在 [desktop/suboverlay/settings_page.py](desktop/suboverlay/settings_page.py)（原来的 `SettingsDialog` 已整份搬进去并删除）；浮窗仍不在其内。
+- **设置页**: 三页里的**可写**一页 —— 凭据（接口地址 / 密钥 / 模型名 / 接口协议 / Mock 模式）、提示词（用哪套 / 内容 / 实际发出去的预览 / 携带上下文）与「测试连接」。它的写通道恰好是 8 个字段（`SettingsPage.STATE_KEYS`，[desktop/suboverlay/settings_page.py:59](desktop/suboverlay/settings_page.py#L59)）；`provider.*` / `prompt.*` **不进** `TUNING_FIELDS` 权威表（表外键 `apply_edits` 会 raise，[desktop/suboverlay/settings.py:221](desktop/suboverlay/settings.py#L221)）。
+- **调参页（16 项）**: 三页里的**可写**一页 —— 按三组渲染权威字段（显示 / 网络与服务 / 实验（未校准））。`display.font_size` 自 #167 起也在表内，所以调参页现在 16 项、字号不再属于设置页。
+- **整窗页脚**: 「保存 / 取消」只有窗口级一份（页内不再各有确定 / 取消）。保存 = 两页各自把改动套用到**同一份** settings 后**只写盘一次**（原子写盘 `settings.save`）；取消 = 两页都回到那份 settings 的当前值，不写盘、不动浮窗。`Ctrl+S` = 保存且**不关窗**，`Esc` = 关窗。
+- **脏状态**: 「脏 = 会落盘的编辑」。调参页用 `settings.collect_edits`（值相等不算脏，不是 dirty flag）；设置页自建 8 字段快照（`presets` 用 json 规范化后比较）。窗口级只暴露 `is_dirty()` / `dirty_counts()`（[desktop/suboverlay/debug_window.py:170](desktop/suboverlay/debug_window.py#L170)）；排障页**永不参与**。关窗时若还脏，先弹三选一（默认「回去继续改」，见 [desktop/suboverlay/debug_window.py:61](desktop/suboverlay/debug_window.py#L61)）—— 选它时什么都不停，因为排障页重启取数的挂点只有 `showEvent`。
+- **再快照挂点**: `DebugWindow.showEvent`（首次显示时）重新取基线 —— 窗口实例被 App 永久复用，构造时那一次快照早就过期。
+- **事件留痕**: 排障页在**本页内存**里记下的事件（状态翻转，带时间戳），关窗即弃。**不是「日志」**（不落盘、跨会话不留）、**不是「快照」**（不导出、不归档）。已知边界：只看得见**本页打开之后**的事件。
 
+
+### 浮窗外观键（#174；术语 + 键表形状，不含实现）
+- **外观键族（6 键，全落 `display.*`）**: 字体族 1 键 + 颜色 4 键（原文 / 译文各一对：字身色 + 描边色）+ 预览字号 1 键。键名与形状由 [#174](https://github.com/CometDash77/youtubesub/issues/174) 定案（细节只在该票的 Answer 区）；本块只钉用语。
+- **字身色（`orig_text_color` / `trans_text_color`）** 与 **描边色（`orig_stroke_color` / `trans_stroke_color`）**: 地图「浮窗外观细调与透明实时预览 map」里的「内填充 / 外填充」指的就是**字的填充色**与**描边圈的颜色**，**不是**两层底板 —— 底板仍是 `display.bg_color` + `display.bg_opacity`，没有第二层。
+- **预览字号（`preview_font_size`）**: 只影响「调参 → 显示」组顶部那块透明预览画布，**不动浮窗**；浮窗字号仍是 `display.font_size`（译文行按既有 1.25 比例放大，不改）。
+- 颜色一律存**三元素 int list（RGB，无 alpha）**: 与既有 `display.bg_color` 同形，取色器与 `_clamp_channels` 直接可用；alpha 不入键，底板浓淡只由 `display.bg_opacity` 表达。
+- **回退式兼容**: 老配置没有这 6 个键是**正常状态**，不是损坏 —— 浮窗按今天硬编码的观感画，调参页显示表默认值，保存时只写真正被改过的键；不强制迁移。
+- **失败态红（`#FF5A5A`）不在键族内**: 译文失败那几行恒红，是既有契约（[desktop/tests/test_overlay_labels.py:154](desktop/tests/test_overlay_labels.py#L154)），用户自定义字色只管正常那几行。 译文的状态占位行（等待 / 翻译中 / 未配置）算正常行、吃 `trans_text_color`；原文侧占位行吃 `orig_text_color`；失败行描边照常吃 `trans_stroke_color`。
+- 用语落定后：`display.stroke`（描边宽度）不再只管「黑边」—— 描边色可调，宽度为 0 时看不到描边。上一条「调参页（16 项）」在 6 键落地前仍是当下事实，落地后为 22 项。
 
 ## 许可证边界
 - dkitle: Rust 端无 LICENSE (GitHub license:null) -> 只参考设计, 不抄代码; 其 userscript 有 @license MIT 头, 可改写适配。
