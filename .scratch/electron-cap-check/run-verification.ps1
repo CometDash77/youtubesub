@@ -128,6 +128,17 @@ function Wait-Overlay {
   throw "overlay window never appeared"
 }
 
+function Move-PointerGradual($tx, $ty, $fx, $fy) {
+  # Single SetCursorPos jumps can drop the WM_MOUSEMOVE chain that
+  # setIgnoreMouseEvents(forward:true) relies on; move in steps.
+  for ($i = 1; $i -le 5; $i++) {
+    $x = [int]($fx + ($tx - $fx) * $i / 5)
+    $y = [int]($fy + ($ty - $fy) * $i / 5)
+    [void][W]::SetCursorPos($x, $y)
+    Start-Sleep -Milliseconds 80
+  }
+}
+
 $results = @{}
 
 function Run-Scene($s) {
@@ -162,15 +173,18 @@ function Run-Scene($s) {
         Write-Host "bits:          $($bits | ConvertTo-Json -Compress)"
       }
       "hover-unlock" {
-        Start-Sleep -Seconds 4
+        # All verdict points must land in the click-through state: the app
+        # turns CT on right after renderer load. Gradual pointer moves keep
+        # WM_MOUSEMOVE flowing so forwarded events reach the renderer.
+        Start-Sleep -Seconds 2
         $before = Test-PointHit $h $cx $cy
-        [void][W]::SetCursorPos($r.R - 33, $r.B - 33)
-        Start-Sleep -Milliseconds 1200
+        Move-PointerGradual ($r.R - 33) ($r.B - 33) $cx $cy
+        Start-Sleep -Milliseconds 800
         $hotspot = Test-PointHit $h ($r.R - 33) ($r.B - 33)
         # set-ignore is window-global; leaving the hotspot must make the
-        # renderer restore click-through. Move back to center and re-probe.
-        [void][W]::SetCursorPos($cx, $cy)
-        Start-Sleep -Milliseconds 1200
+        # renderer restore click-through. Move back gradually and re-probe.
+        Move-PointerGradual $cx $cy ($r.R - 33) ($r.B - 33)
+        Start-Sleep -Milliseconds 800
         $mid = Test-PointHit $h $cx $cy
         $bits = Test-StyleBits $h
         Save-WindowShot $h (Join-Path $ev "sceneC-hover-unlock.png")
@@ -181,10 +195,16 @@ function Run-Scene($s) {
         Write-Host "bits:          $($bits | ConvertTo-Json -Compress)"
       }
       "tray-menu" {
-        Start-Sleep -Milliseconds 6500
+        # popUpContextMenu fires at 5s (main process); grab three full shots
+        # in a row to maximize the chance of catching the open menu.
+        Start-Sleep -Milliseconds 5300
+        Save-FullShot (Join-Path $ev "sceneD-tray-menu-1.png")
+        Start-Sleep -Milliseconds 700
+        Save-FullShot (Join-Path $ev "sceneD-tray-menu-2.png")
+        Start-Sleep -Milliseconds 700
         Save-FullShot (Join-Path $ev "sceneD-tray-menu-full.png")
-        $results.trayMenu = @{ note = "popUpContextMenu at 5s; full screenshot shows open menu" }
-        Write-Host "full shot saved"
+        $results.trayMenu = @{ note = "popUpContextMenu at 5s; triple shots at ~5.3/6.0/6.7s" }
+        Write-Host "triple shots saved"
       }
       "hotkey" {
         Start-Sleep -Seconds 4

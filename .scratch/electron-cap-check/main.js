@@ -83,11 +83,20 @@ app.whenReady().then(() => {
   tray.on("double-click", () => { win.show(); logLine("tray double-click -> show"); });
 
   // 场景编排（穿透 3s 后开启，外部取证脚本按此时序对齐）。
-  if (SCENE === "clickthrough" || SCENE === "hover-unlock" || SCENE === "hotkey") {
+  if (SCENE === "clickthrough" || SCENE === "hotkey") {
     setTimeout(() => setClickThrough(true), 3000);
   }
+  if (SCENE === "hover-unlock") {
+    // 取证要求所有判点都落在穿透态：renderer 就绪即开穿透，
+    // forward mousemove 链路（热区解锁 -> 离开恢复）才真正被验证。
+    win.webContents.once("did-finish-load", () => setTimeout(() => setClickThrough(true), 500));
+  }
   if (SCENE === "tray-menu") {
-    setTimeout(() => { logLine("tray popUpContextMenu"); tray.popUpContextMenu(ctxMenu); }, 5000);
+    setTimeout(() => {
+      logLine("tray popUpContextMenu");
+      tray.popUpContextMenu(ctxMenu);   // 同步阻塞至菜单关闭
+      logLine("tray menu closed");
+    }, 5000);
   }
 });
 
