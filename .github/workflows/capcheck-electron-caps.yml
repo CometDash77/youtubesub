@@ -21,10 +21,19 @@ jobs:
         with:
           node-version: 22
 
-      - name: Install deps (electron postinstall fetches binary)
+      - name: Install deps
         working-directory: .scratch/electron-cap-check
         shell: cmd
-        run: npm install --no-audit --no-fund
+        run: |
+          echo ignore-scripts=$(npm config get ignore-scripts)
+          npm install --no-audit --no-fund
+
+      - name: Ensure electron binary (explicit postinstall fallback)
+        working-directory: .scratch/electron-cap-check
+        shell: cmd
+        run: |
+          if not exist node_modules\electron\dist\electron.exe node node_modules\electron\install.js
+          dir node_modules\electron\dist\electron.exe
 
       - name: Verify electron binary
         working-directory: .scratch/electron-cap-check
