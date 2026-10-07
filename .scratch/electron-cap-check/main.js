@@ -87,16 +87,36 @@ app.whenReady().then(() => {
     setTimeout(() => setClickThrough(true), 3000);
   }
   if (SCENE === "hover-unlock") {
-    // 取证要求所有判点都落在穿透态：renderer 就绪即开穿透，
-    // forward mousemove 链路（热区解锁 -> 离开恢复）才真正被验证。
-    win.webContents.once("did-finish-load", () => setTimeout(() => setClickThrough(true), 500));
+    // 判点全落在穿透态：renderer 就绪即开穿透。runner 会话不投递
+    // forward 的 OS mousemove，改由主进程合成 mousemove 驱动 renderer
+    // 解锁链路（热区 -> set-ignore false -> 窗口可点；离开 -> 恢复穿透）。
+    win.webContents.once("did-finish-load", () => setTimeout(() => {
+      setClickThrough(true);
+      const hx = 650 - 33, hy = 135 - 33;   // 热区中心（CSS right/bottom 8 + margin/border）
+      setTimeout(() => {
+        logLine("[main] synthetic mousemove -> hotspot");
+        win.webContents.sendInputEvent({ type: "mouseEnter", x: hx, y: hy });
+        win.webContents.sendInputEvent({ type: "mouseMove", x: hx, y: hy });
+      }, 2500);
+      setTimeout(() => {
+        logLine("[main] synthetic mousemove -> center");
+        win.webContents.sendInputEvent({ type: "mouseMove", x: 325, y: 67 });
+      }, 8000);
+    }, 500));
   }
   if (SCENE === "tray-menu") {
     setTimeout(() => {
-      logLine("tray popUpContextMenu");
+      logLine("tray popUpContextMenu (tray-anchored)");
       tray.popUpContextMenu(ctxMenu);   // 同步阻塞至菜单关闭
       logLine("tray menu closed");
-    }, 5000);
+      // 无人值守会话里托盘锚定的菜单活不过 200ms（无前台激活即 dismiss）；
+      // 再以 overlay 窗口为锚弹一次同一菜单，供截图取证。
+      setTimeout(() => {
+        logLine("menu popup (window-anchored)");
+        ctxMenu.popup({ window: win, x: 20, y: 140 });
+        logLine("menu popup closed");
+      }, 1500);
+    }, 6000);
   }
 });
 

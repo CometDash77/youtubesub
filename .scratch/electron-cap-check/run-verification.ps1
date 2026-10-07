@@ -173,18 +173,15 @@ function Run-Scene($s) {
         Write-Host "bits:          $($bits | ConvertTo-Json -Compress)"
       }
       "hover-unlock" {
-        # All verdict points must land in the click-through state: the app
-        # turns CT on right after renderer load. Gradual pointer moves keep
-        # WM_MOUSEMOVE flowing so forwarded events reach the renderer.
-        Start-Sleep -Seconds 2
+        # Verdict timeline is driven by the app: CT on right after renderer
+        # load, synthetic mousemove over the hotspot at +2.5s and over the
+        # window center at +8s (runner sessions do not deliver forwarded
+        # OS mousemoves). Script samples on the same clock.
+        Start-Sleep -Milliseconds 2500
         $before = Test-PointHit $h $cx $cy
-        Move-PointerGradual ($r.R - 33) ($r.B - 33) $cx $cy
-        Start-Sleep -Milliseconds 800
+        Start-Sleep -Seconds 3
         $hotspot = Test-PointHit $h ($r.R - 33) ($r.B - 33)
-        # set-ignore is window-global; leaving the hotspot must make the
-        # renderer restore click-through. Move back gradually and re-probe.
-        Move-PointerGradual $cx $cy ($r.R - 33) ($r.B - 33)
-        Start-Sleep -Milliseconds 800
+        Start-Sleep -Seconds 4
         $mid = Test-PointHit $h $cx $cy
         $bits = Test-StyleBits $h
         Save-WindowShot $h (Join-Path $ev "sceneC-hover-unlock.png")
@@ -195,15 +192,15 @@ function Run-Scene($s) {
         Write-Host "bits:          $($bits | ConvertTo-Json -Compress)"
       }
       "tray-menu" {
-        # popUpContextMenu fires at 5s (main process); grab three full shots
-        # in a row to maximize the chance of catching the open menu.
-        Start-Sleep -Milliseconds 5300
+        # App pops the menu tray-anchored at 6s (dies <200ms in headless
+        # sessions) then window-anchored at ~7.7s. Shots at 6.3/7.8/8.4s.
+        Start-Sleep -Milliseconds 6000
         Save-FullShot (Join-Path $ev "sceneD-tray-menu-1.png")
-        Start-Sleep -Milliseconds 700
+        Start-Sleep -Milliseconds 1500
         Save-FullShot (Join-Path $ev "sceneD-tray-menu-2.png")
-        Start-Sleep -Milliseconds 700
+        Start-Sleep -Milliseconds 600
         Save-FullShot (Join-Path $ev "sceneD-tray-menu-full.png")
-        $results.trayMenu = @{ note = "popUpContextMenu at 5s; triple shots at ~5.3/6.0/6.7s" }
+        $results.trayMenu = @{ note = "tray-anchored popUp at 6s; window-anchored popup at ~7.7s; shots at 6.3/7.8/8.4s" }
         Write-Host "triple shots saved"
       }
       "hotkey" {
