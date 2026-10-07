@@ -315,7 +315,11 @@ def translate_group(cfg, group_text, context_prev="", context_next="",
     if code == "RATE_LIMITED" and ra is not None:
         # user story 9: the server's own wait time travels with the verdict
         message = "%s (server asked to retry after %gs)" % (message, ra)
-    return {"error": code, "message": message, "attempts": attempts}
+    result = {"error": code, "message": message, "attempts": attempts}
+    if status is not None:
+        # Preserve final HTTP status for fixed 402/429 user-facing mapping.
+        result["status"] = status
+    return result
 
 
 def slice_numbered_batch(raw, counts):
@@ -397,9 +401,11 @@ def translate_batch(cfg, items, sleep=time.sleep, now=time.time):
     """
     counts = [max(1, int(it.get("expected") or 1)) for it in items]
 
-    def _failed(code, message=None):
-        return [{"aligned": False, "text": "", "error": code, "message": message}
-                for _ in items]
+    def _failed(code, message=None, status=None):
+        result = {"aligned": False, "text": "", "error": code, "message": message}
+        if status is not None:
+            result["status"] = status
+        return [dict(result) for _ in items]
 
     if not items:
         return []
@@ -445,7 +451,7 @@ def translate_batch(cfg, items, sleep=time.sleep, now=time.time):
                 delay = BACKOFF_BASE_S * (2 ** attempt)
             sleep(min(delay, 30.0))
     code = getattr(last_err, "code", None) or "UNKNOWN"
-    return _failed(code, str(last_err) if last_err else None)
+    return _failed(code, str(last_err) if last_err else None, status)
 
 
 def list_models(cfg, timeout_s=MODELS_TIMEOUT_S):

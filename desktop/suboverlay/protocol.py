@@ -37,6 +37,7 @@ class SourceState:
     provider: str = "youtube"
     video_id: str = ""
     tab_title: str = ""
+    video_description: str = ""
     track_kind: str = ""
     track_lang: str = ""
     cues: list = field(default_factory=list)

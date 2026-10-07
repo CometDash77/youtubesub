@@ -1,7 +1,8 @@
 @echo off
 REM youtubesub desktop overlay - one-click start.
 REM Starts WS server + overlay on 127.0.0.1:9877 (port from setting.json).
-REM Right-click the overlay for Settings / Mode / Font / Opacity / Quit.
+REM Right-click the overlay for display mode / order / font size / background / click-through / quit.
+REM "settings" and "debug" in that menu open the SAME non-modal window (settings / tuning / diagnostics pages).
 setlocal
 cd /d "%~dp0"
 
@@ -13,11 +14,19 @@ if errorlevel 1 (
   exit /b 1
 )
 
-echo [youtubesub] starting desktop app...  ^(health: http://127.0.0.1:9877/health^)
-python "%~dp0desktop\app.py"
+where pythonw >nul 2>nul
 if errorlevel 1 (
-  echo [youtubesub] app exited with an error. Check that 127.0.0.1:9877 is free
-  echo [youtubesub] and that dependencies are installed:  pip install -r requirements.txt
+  echo [youtubesub] pythonw not found on PATH. Reinstall Python with the windowed executable.
   pause
+  exit /b 1
 )
+
+python -c "import PySide6, websockets" >nul 2>nul
+if errorlevel 1 (
+  echo [youtubesub] desktop dependencies are missing. Run: pip install -r requirements.txt
+  pause
+  exit /b 1
+)
+
+start "" pythonw "%~dp0desktop\app.py"
 endlocal

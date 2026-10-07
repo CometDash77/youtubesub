@@ -13,12 +13,13 @@
 ## L0 · 自动基线（不需要人，先跑这个）
 
 ```
-python -m pytest desktop/tests -q                       # 期望全绿：当前 215 passed（含 7 条真浏览器 E2E；无 Chrome 会 skip，不算通过）
-cd userscript; node --test "tests/*.test.mjs"           # 期望全绿：当前 46 pass / 0 fail（必须用 glob 形式）
+python -m pytest desktop/tests -q                       # 当前 366 passed + 1 条既有 E2E 时序失败（见下；无 Chrome 会 skip，不算通过）
+cd userscript; node --test "tests/*.test.mjs"           # 期望全绿：当前 48 pass / 0 fail（必须用 glob 形式）
 node --check userscript/youtubesub.user.js              # 语法检查
 ```
 
-通过标准：pytest **0 failed / 0 skipped**（当前 215 passed，数字随提交增长）；node 46 pass 0 fail；7 条 E2E 没有被 skip
+通过标准：pytest **0 failed / 0 skipped** 为目标（当前 366 passed，数字随提交增长）；node 48 pass 0 fail；10 条 E2E 没有被 skip。
+已知例外（2026-10-08 合并时记账）：`test_browser_waiting_and_capture_diagnostics_preempt_translation_waiting` 在 CSP 夹具页（script-src 'nonce-fixture'）上的注入失败上浮超时——**master 分支同样失败**（worktree 实证），属既有 E2E 时序问题，合并没有引入回归，留待 E2E 专项修复。
 （skip 说明 harness 没找到 Chrome，这时浏览器侧**等于没验**，要记下来）。
 
 E2E 用的测试特权（`--disable-web-security`、CDP `Page.setBypassCSP`）**只存在于测试 harness**，
@@ -51,11 +52,13 @@ python desktop/tests/browser_e2e.py --demo [--seconds 30]
 | 6 | `2.0x / 1.0x` | 字幕推进速度跟随（`/status` 的 `rate` 同步变） |
 | 7 | `SPA: switch video` | 出现新 source，旧 cue 不残留 |
 | 8 | 拖动 / 拖边缘 resize | 浮窗跟随；放大后还能缩小 |
-| 9 | 右键浮窗 | 菜单出现：Mode / Swap order / Font ± / Opacity ± / Click-through / Settings… / Quit |
-| 10 | 开 Click-through，再按 **Ctrl+Alt+U** | 窗口恢复接收鼠标（这是 click-through 的唯一回路，必须验） |
+| 9 | 右键浮窗 | 菜单出现且**全中文**：显示内容（原文 / 译文 / 双语）/ 上下顺序对调 / 字号 ± / 背景浓淡 / 鼠标穿透（Ctrl+Alt+U 解锁）/ 设置…… / 调试…… / 退出程序（后面两条开的是**同一个**窗口，只落不同页） |
+| 10 | 开「鼠标穿透」，再按 **Ctrl+Alt+U** | 窗口恢复接收鼠标（这是 click-through 的唯一回路，必须验） |
 
 随时可看机器可读状态（另开一个终端）：`Invoke-RestMethod http://127.0.0.1:<harness 打印的端口>/status`。
 harness 只 kill 自己启动的 Chrome；**不要 kill 你自己常驻的 chrome.exe**。
+
+自动验收补充：当前有 10 条真实 Chrome + userscript + desktop app 黑盒 E2E，其中保留原有 7 条；新增用例通过 `/status` 验证翻译状态、失败后 seek 恢复、hook/capture 诊断到达及原文-only 请求拦截。浮窗状态行优先级由 `desktop/tests/test_overlay_status.py` 单测覆盖。受控 provider 是本机测试服务，不代表真实 AI 服务或 Tampermonkey 已验证。
 
 **失败时记什么**：哪一步、`/status` 的 `state/orig/trans/playing/rate/hook_error` 原文、控制台里 `[youtubesub]` 开头的行。
 
@@ -71,7 +74,7 @@ start-desktop.cmd          # 默认设置，不填任何模型
 ```
 
 1. 打开任意带 CC 字幕的视频，等浮窗出原文；
-2. 右键浮窗 → **Mode: original/translation/bilingual** 切到 `translation`。
+2. 右键浮窗 → **显示内容：原文 / 译文 / 双语（点一下换下一种）** 连点两下切到 `译`。
 
 核对：
 
@@ -81,6 +84,34 @@ start-desktop.cmd          # 默认设置，不填任何模型
 - [ ] 有真实译文时（L4 配好 provider）：translation 模式仍只显示译文，行为与以前一致
 
 **失败时记什么**：`/status` 的 `state/orig/trans/trans_available/mode` 原文，以及浮窗截图。
+
+### L1c · 翻译状态可见化（map #61）
+
+**自动状态**：真实 Chrome E2E 已通过受控本机 provider 覆盖 `waiting`、`translating`、`ready`、`unconfigured`、`failed:<原因>`、已知 cue 间隙 `idle`、原文-only 拦截、失败句 seek 后保持并成功恢复，以及 hook/capture 错误抵达 `/status`；浮窗状态行优先级由独立单测覆盖。E2E 的 provider 不发送真实外网请求。
+
+**仍需真人眼验**：
+
+- [ ] 双语模式下【译】通道依次显示等待、翻译中、失败和未配置文案；成功后恢复正常译文。
+- [ ] 仅译文模式状态显示正确；原文-only 模式只显示原文，cue 间隙不留状态残影。
+- [ ] 翻译失败后 seek 离开再回来，失败提示仍属于该句；该句成功后失败提示消失。
+- [ ] hook/capture 出错时，浮窗状态行显示链路诊断，不显示“等待原字幕”。
+
+实际 AI 服务与真 Tampermonkey 仍按 L3/L4 单独验收；没有可用扩展或真实 Base URL / Key / Model 时，不得把受控 provider 结果记成它们已通过。
+
+### L1d · 设置与调试窗口（#164 / #170：一个窗口、三页、一个页脚）
+
+**自动状态**：`desktop/tests/test_debug_menu.py`（双入口同实例落不同页、整窗一次写盘、取消全回滚、关窗三分支、`Ctrl+S`、重开重取基线）、`desktop/tests/test_settings_page.py`（设置页文案与脏计数）、`desktop/tests/test_debug_tuning_page.py`（调参页范围与徽标）、`desktop/tests/test_app_lifecycle.py`（保存 / 取消 / × 关窗都不结束 App）已覆盖。
+
+**仍需真人眼验**：
+
+- [ ] 右键浮窗 →「设置……」与「调试……」分别打开窗口，**是同一个窗口**（先开一个、再开另一个：不出现两个窗口），分别停在 设置 页与 调参 页。
+- [ ] 设置页改「密钥」→ 切到调参页改「字幕字号」→ 切回设置页：**改动都还在**（切页不丢），页脚左侧显示「有 N 项改动没保存」，「保存」可点。
+- [ ] 点「保存」：**只落盘一次**，浮窗**当场**跟着变字号（不用等下一句字幕）。
+- [ ] 再改点东西 → 点「取消」：两页都回到上次保存的值，浮窗不变。
+- [ ] 改了不保存直接点 ×（或 `Esc`）：弹「有改动还没保存」，三个按钮都能走通 —— 「回去继续改」窗口留着且排障页仍在刷新；「保存并关闭」写盘后关掉；「不保存，直接关闭」盘上不变。
+- [ ] `Ctrl+S` 保存但**窗口不关**。
+- [ ] 整窗文案判据：不问人、不看文档，能从每项的标签 + 一句说明说出「改了这个会发生什么」；未见 `seek`、`预取窗口秒数`、`粗体范围` 这类内部黑话。
+- [ ] 排障页只读；「测试连接」只在设置页有一颗（测的是还没保存的输入）。
 
 ---
 
@@ -158,8 +189,8 @@ Protocol 先留 `auto`，**取消勾选** "Mock mode (no real API)" → OK（写
 
 核对：
 
-- [ ] 译文出现且语言合理；模式切 `original / translation / bilingual` 三态都正常（右键菜单 Mode）
-- [ ] `Swap bilingual order` 生效
+- [ ] 译文出现且语言合理；模式切 `原文 / 译文 / 双语` 三态都正常（右键菜单「显示内容」）
+- [ ] 「上下顺序：原文 ↔ 译文（点一下对调）」生效
 - [ ] 重复播放同一段：命中本地缓存（`data/translations.db`），不再发请求
 - [ ] 断网 / 填错 Key / 超时：**原字幕不受影响**，不崩、不空白
 - [ ] `auto` 与显式 `responses` / `chat-completions` 两种协议各验一次

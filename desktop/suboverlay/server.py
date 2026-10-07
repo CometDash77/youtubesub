@@ -49,10 +49,16 @@ class WSServer:
         self._frames_seen = 0
         self._on_frame_error = on_frame_error
         self._error = None
+        self._ready = threading.Event()
+        self._startup_error = None
 
     def start(self):
         self._thread = threading.Thread(target=self._run, daemon=True, name="ws-server")
         self._thread.start()
+        if not self._ready.wait(timeout=5):
+            raise TimeoutError("字幕服务启动超时")
+        if self._startup_error is not None:
+            raise self._startup_error
 
     def stop(self):
         if self._loop and self._server:
@@ -104,6 +110,7 @@ class WSServer:
                              process_request=process_request,
                              max_size=MAX_FRAME_BYTES) as srv:
                 self._server = srv
+                self._ready.set()
                 await srv.serve_forever()
 
         self._loop = asyncio.new_event_loop()
@@ -113,7 +120,10 @@ class WSServer:
         except asyncio.CancelledError:
             pass
         except Exception as e:
+            self._startup_error = e
             self._error = type(e).__name__ + ": " + str(e)
+        finally:
+            self._ready.set()
 
     def _status_payload(self):
         """Loopback diagnostics: transport stats + whatever the UI is showing.

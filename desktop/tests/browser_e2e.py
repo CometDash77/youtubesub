@@ -7,8 +7,8 @@ What is REAL in here:
     equivalent of Tampermonkey's @run-at document-start,
   * a fixture page with a real <video> playing a generated WAV, issuing its own
     timedtext fetch the way the YouTube player does (json3 + rotating pot),
-  * the real desktop app (desktop/app.py) as a child process: real WSServer,
-    real Engine, real overlay, mock translation,
+  * the real desktop App as a child process: real WSServer, Engine and overlay;
+    focused state scenarios may wrap it with a test-only mode/provider controller,
   * GET /status as the ONLY observation port - no test reaches into internals.
 
 Two ways to use it:
@@ -54,6 +54,9 @@ CHROME_CANDIDATES = [
 # ---- fixture content (the expected values are literals, not recomputed) ----
 VIDEO_A = "aaaaaaaaaaa"
 VIDEO_B = "bbbbbbbbbbb"
+VIDEO_NO_CUES = "ccccccccccc"
+VIDEO_CAPTURE_ERROR = "ddddddddddd"
+VIDEO_HOOK_ERROR = "eeeeeeeeeee"
 TRACK_PREFIX = {VIDEO_A: "FIXTURE ALPHA", VIDEO_B: "FIXTURE BETA"}
 CUE_STARTS_MS = (800, 3000, 6000)
 # Sentence-final periods: the segmentation criteria (#22/ADR-006) cut groups at
@@ -182,12 +185,21 @@ document-start; the desktop app is the only observer that matters (GET /status).
 </div>
 <video id="v" src="/media.wav" preload="auto" controls muted></video>
 <div id="readout" style="margin-top:6px"></div>
-<script>
+<script nonce="fixture">
 var VIDEOS = __VIDEOS__;
 var v = document.getElementById('v');
 function currentVideo() {
   var m = /[?&]v=([\w-]{6,})/.exec(location.search);
   return m ? m[1] : VIDEOS[0];
+}
+if (currentVideo() === 'eeeeeeeeeee') {
+  window.GM_addElement = function () { throw new Error('fixture injection blocked'); };
+  var nativeCreateElement = document.createElement.bind(document);
+  document.createElement = function (tag) {
+    if (String(tag).toLowerCase() === 'script') throw new Error('fixture script blocked');
+    return nativeCreateElement(tag);
+  };
+  window.Function = function () { throw new Error('fixture eval blocked'); };
 }
 function requestSubtitles(vid) {
   vid = vid || currentVideo();
@@ -282,11 +294,17 @@ class FixtureServer:
                     page = (PAGE_TEMPLATE
                             .replace("__VIDEOS__", json.dumps([VIDEO_A, VIDEO_B]))
                             .replace("__TITLE__", "Fixture page " + vid))
-                    self._send(200, page.encode("utf-8"), "text/html; charset=utf-8")
+                    extra = ({"Content-Security-Policy": "script-src 'nonce-fixture'"}
+                             if vid == VIDEO_HOOK_ERROR else None)
+                    self._send(200, page.encode("utf-8"), "text/html; charset=utf-8", extra)
                 elif url.path.endswith("/api/timedtext"):
                     vid = (query.get("v") or [VIDEO_A])[0]
                     server.timedtext_requests.append(self.path)
-                    body = json.dumps(track_payload(vid)).encode("utf-8")
+                    if vid == VIDEO_CAPTURE_ERROR:
+                        body = b"not-json"
+                    else:
+                        payload = {"events": []} if vid == VIDEO_NO_CUES else track_payload(vid)
+                        body = json.dumps(payload).encode("utf-8")
                     self._send(200, body, "application/json")
                 elif url.path == "/media.wav":
                     self._send_wav()
@@ -539,27 +557,32 @@ class Chrome:
 
 
 class DesktopApp:
-    """The real entry point: python desktop/app.py, with a private APPDATA.
+    """The real desktop App, with a private APPDATA.
 
     A private APPDATA means settings.load() sees provider.mock=true and a free
     port, so a run never touches the user's real settings (%APPDATA%/SubOverlay)
     and never talks to a real translation API.
     """
 
-    def __init__(self, port, offscreen=True):
+    def __init__(self, port, offscreen=True, mode="bilingual", provider=None,
+                 mode_control=False):
         self.port = port
         self.offscreen = offscreen
+        self.mode_control = mode_control
+        self.mode_port = free_port() if mode_control else None
         self.appdata = tempfile.mkdtemp(prefix="ytus-appdata-")
         self.log_path = os.path.join(self.appdata, "app.log")
         d = os.path.join(self.appdata, "SubOverlay")
         os.makedirs(d, exist_ok=True)
+        settings = {
+            "server": {"port": port},
+            "provider": provider or {"base_url": "", "api_key": "", "model": "",
+                                     "protocol": "auto", "mock": True},
+            "display": {"mode": mode},
+            "window": {"x": 220, "y": 150, "w": 780, "h": 130},
+        }
         with open(os.path.join(d, "setting.json"), "w", encoding="utf-8") as f:
-            json.dump({
-                "server": {"port": port},
-                "provider": {"base_url": "", "api_key": "", "model": "",
-                             "protocol": "auto", "mock": True},
-                "window": {"x": 220, "y": 150, "w": 780, "h": 130},
-            }, f, indent=2)
+            json.dump(settings, f, indent=2)
         self.proc = None
 
     def start(self):
@@ -567,10 +590,34 @@ class DesktopApp:
         env["APPDATA"] = self.appdata
         if self.offscreen:
             env["QT_QPA_PLATFORM"] = "offscreen"
+        app_path = os.path.join(DESKTOP_DIR, "app.py")
+        if self.mode_control:
+            env["YOUTUBESUB_E2E_MODE_PORT"] = str(self.mode_port)
+            app_path = os.path.join(HERE, "e2e_app.py")
         self._log = open(self.log_path, "wb")
-        self.proc = subprocess.Popen([sys.executable, os.path.join(DESKTOP_DIR, "app.py")],
+        self.proc = subprocess.Popen([sys.executable, app_path],
                                      cwd=DESKTOP_DIR, env=env,
                                      stdout=self._log, stderr=subprocess.STDOUT)
+
+    def set_mode(self, mode):
+        if not self.mode_control:
+            raise RuntimeError("mode control is available only in the test harness")
+        self._control("/mode", {"mode": mode})
+
+    def set_provider(self, provider):
+        if not self.mode_control:
+            raise RuntimeError("provider control is available only in the test harness")
+        self._control("/provider", {"provider": provider})
+
+    def _control(self, path, payload):
+        conn = http.client.HTTPConnection("127.0.0.1", self.mode_port, timeout=3)
+        conn.request("POST", path, json.dumps(payload),
+                     {"Content-Type": "application/json"})
+        response = conn.getresponse()
+        response.read()
+        conn.close()
+        if response.status != 202:
+            raise RuntimeError("E2E app rejected %s: HTTP %d" % (path, response.status))
 
     def wait_healthy(self, timeout=30.0):
         deadline = time.time() + timeout
@@ -613,7 +660,8 @@ class DesktopApp:
 class Harness:
     """One running scenario: fixture origin + real app + real Chrome + real script."""
 
-    def __init__(self, headed=False, proxy=None, bypass_csp=False):
+    def __init__(self, headed=False, proxy=None, bypass_csp=False,
+                 desktop_options=None):
         self.headed = headed
         self.proxy = proxy
         # Live mode only: a real GM_addElement injects from the extension context,
@@ -621,6 +669,7 @@ class Harness:
         # no such privilege, so the harness asks Chrome to drop CSP for the page -
         # otherwise a live run fails for a harness reason, not a product reason.
         self.bypass_csp = bypass_csp
+        self.desktop_options = desktop_options or {}
         self.fixture = None
         self.app = None
         self.chrome = None
@@ -632,7 +681,8 @@ class Harness:
     def start(self):
         self.fixture = FixtureServer()
         self.app_port = free_port()
-        self.app = DesktopApp(self.app_port, offscreen=not self.headed)
+        self.app = DesktopApp(self.app_port, offscreen=not self.headed,
+                              **self.desktop_options)
         self.app.start()
         self.app.wait_healthy()
         self.chrome = Chrome(headed=self.headed, proxy=self.proxy, log_dir=self._tmp)

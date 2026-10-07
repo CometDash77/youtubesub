@@ -82,7 +82,7 @@ function makeSandbox(opts = {}) {
 
   const doc = {
     readyState: opts.readyState || 'complete',
-    title: 'Test Video - YouTube',
+    title: opts.title || 'Test Video - YouTube',
     body: { appendChild(el) { bodyChildren.push(el); el.parent = 'body'; } },
     head: {
       appendChild(el) {
@@ -99,7 +99,13 @@ function makeSandbox(opts = {}) {
     },
     documentElement: { appendChild() {} },
     createElement: (tag) => makeEl(tag),
-    querySelector(sel) { return sel === 'video' ? box.video : null; },
+    querySelector(sel) {
+      if (sel === 'video') return box.video;
+      if (sel === 'meta[name="description"]' && opts.videoDescription !== undefined) {
+        return { content: opts.videoDescription };
+      }
+      return null;
+    },
     addEventListener(t, f) { (listeners[t] = listeners[t] || []).push(f); }
   };
 
@@ -706,6 +712,23 @@ test('bridge: healthy /health probe opens a socket to the documented URL', () =>
   assert.equal(lastFrame(sb, 'register').source_id, 'uuid-1');
   bridge(sb).bindVideo(fakeVideo({ currentTime: 2 }));
   assert.equal(lastFrame(sb, 'sync').video_time_ms, 2000);
+});
+
+test('bridge: register carries a cleaned title and optional video description', () => {
+  const sb = load({ title: 'A useful video - YouTube', videoDescription: '  Full description  ' });
+  goLive(sb);
+  const reg = lastFrame(sb, 'register');
+  assert.equal(reg.tab_title, 'A useful video');
+  assert.equal(reg.video_description, 'Full description');
+  assert.match(src, /^\/\/ ==UserScript==[\s\S]*?^\/\/ @version\s+0\.1\.1$/m);
+});
+
+test('bridge: missing video description stays absent from register', () => {
+  const sb = load({ title: 'A title - YouTube' });
+  goLive(sb);
+  const reg = lastFrame(sb, 'register');
+  assert.equal(reg.tab_title, 'A title');
+  assert.equal(Object.hasOwn(reg, 'video_description'), false);
 });
 
 test('bridge: failed /health probe schedules a reconnect and opens no socket', () => {

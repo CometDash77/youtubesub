@@ -66,6 +66,6 @@ def test_app_unlocks_click_through_when_the_hotkey_fires(tmp_path, monkeypatch):
         instance._check_unlock_hotkey()
         assert instance.overlay._click_through is False, "hotkey must unlock"
         assert instance._ct_action.isChecked() is False
-        assert "ON" not in instance._ct_action.text()
+        assert "已开启" not in instance._ct_action.text()
     finally:
         instance.engine._queue.shutdown()

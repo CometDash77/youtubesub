@@ -9,13 +9,15 @@ Deliberately Qt-free and network-client-free: the two transports
 (provider.translate_group, provider.list_models - the exact production
 functions) are injected, so the whole run mechanics (single flight, cancel by
 generation, progress ticks, snapshot semantics) are testable without a window
-server. The GUI is a thin adapter over this module: it renders report fields
-as they are and never re-maps machine codes to prose.
+server. The GUI is a thin adapter over this module: it renders this module's
+translated prose and formats its own labels and warning messages.
 
 Rules honoured here: never auto-triggered; never writes the cache, the queue
 or any config file; never puts the API key into the report; Mock is a third
 verdict (never "pass") with zero network traffic; cancel means "stop waiting"
 - the in-flight request finishes on its own and its quota is not refunded.
+Human-facing report prose is produced here in Chinese alongside unchanged
+machine codes. The GUI translates its own labels and warning codes only.
 """
 import threading, time
 
@@ -33,8 +35,7 @@ TEST_TIMEOUT_S = 20.0
 
 MOCK_MASKS_REAL_CONFIG = "MOCK_MASKS_REAL_CONFIG"
 
-ALIGNMENT_NOTE = ("Alignment (N|line) protocol not verified - the probe runs "
-                  "in whole-line mode only.")
+ALIGNMENT_NOTE = "尚未验证 Alignment（N|line）协议；本次探测仅使用整行模式。"
 
 # The closed error vocabulary shared by both steps (decision 13). Codes kept
 # in the engine's own vocabulary but unreachable here (SHAPE_MISS, WORKER)
@@ -45,26 +46,29 @@ KNOWN_CODES = frozenset({
 })
 
 _DEFAULT_MESSAGES = {
-    "BAD_CONFIG": "The configuration is not a valid absolute http(s) URL.",
-    "NO_MODEL": "The model name is empty.",
-    "TIMEOUT": "The endpoint did not answer in time (timeout).",
-    "NETWORK": "The endpoint could not be reached (network error).",
-    "AUTH": "401 unauthorized - the API key was rejected.",
-    "FORBIDDEN": "403 forbidden - the server refused access.",
-    "RATE_LIMITED": "The server rate limited the request.",
-    "SERVER": "The server reported an internal error.",
-    "BAD_REQUEST": "The server rejected the request.",
-    "INVALID_MODEL_OUTPUT": "The response carried no non-empty translation.",
-    "UNKNOWN": "Unknown error.",
+    "BAD_CONFIG": "配置不是有效的绝对 HTTP(S) URL。",
+    "NO_MODEL": "模型名称为空。",
+    "TIMEOUT": "请求超时，服务未在规定时间内响应。",
+    "NETWORK": "无法连接到服务（网络错误）。",
+    "AUTH": "401 未授权：API Key 被拒绝。",
+    "FORBIDDEN": "403 禁止访问：服务器拒绝了请求。",
+    "RATE_LIMITED": "请求被服务器限流。",
+    "SERVER": "服务器报告内部错误。",
+    "BAD_REQUEST": "服务器拒绝了请求。",
+    "INVALID_MODEL_OUTPUT": "响应中没有非空译文。",
+    "UNKNOWN": "未知错误。",
 }
 
-_LAYERS = (("L1", "endpoint reachable"), ("L2", "authentication"),
-           ("L3", "model exists"), ("L4", "translation works"))
+_WARNING_MESSAGES = {
+    MOCK_MASKS_REAL_CONFIG: "当前为 Mock 模式；已填写的真实配置本次不会被使用。",
+}
 
-_QUOTA_REAL = ("This click sends one real minimal translation request; "
-               "retries can multiply usage, and cancelling does not refund it.")
-_QUOTA_MOCK = "Mock mode: no network request was sent, no quota was consumed."
-_QUOTA_STATIC = "No request was sent: the local configuration is invalid."
+_LAYERS = (("L1", "端点可访问"), ("L2", "身份验证"),
+           ("L3", "模型存在"), ("L4", "翻译可用"))
+
+_QUOTA_REAL = "本次点击会发送一次真实的最小翻译请求；重试可能增加用量，取消不会退还已消耗额度。"
+_QUOTA_MOCK = "Mock 模式：未发送网络请求，也未消耗额度。"
+_QUOTA_STATIC = "未发送请求：本地配置无效。"
 
 _ID_LIST = "step1"
 _ID_TRANS = "step2"
@@ -102,6 +106,8 @@ def _report(verdict, layers, snap, attempts, translation, model_list,
         "sample": {"source": TEST_SENTENCE, "translation": translation},
         "model_list": model_list,
         "warnings": list(warnings),
+        "warning_messages": {code: _WARNING_MESSAGES[code]
+                             for code in warnings if code in _WARNING_MESSAGES},
         "skipped": list(skipped),
         "quota_notice": quota,
         "notes": [ALIGNMENT_NOTE],
@@ -121,7 +127,7 @@ def _static_problems(snap):
     try:
         provider_mod.coerce_endpoint(snap.get("base_url"), snap.get("protocol"))
     except provider_mod.ProviderError as e:
-        problems["L1"] = ("BAD_CONFIG", str(e))
+        problems["L1"] = ("BAD_CONFIG", _DEFAULT_MESSAGES["BAD_CONFIG"])
     if not (snap.get("model") or "").strip():
         problems["L3"] = ("NO_MODEL", _DEFAULT_MESSAGES["NO_MODEL"])
     return problems
@@ -132,51 +138,48 @@ def _layers_from_models(err, ids, model, elapsed_ms):
     probe, never a gate: only an explicit 401/403 fails L2, and L3 records an
     observation in all three of its states."""
     if err is None:
-        l1 = _layer("L1", True, None, "The endpoint answered (HTTP 2xx).",
+        l1 = _layer("L1", True, None, "端点已响应（HTTP 2xx）。",
                     elapsed_ms)
-        l2 = _layer("L2", True, None, "The API key was accepted (HTTP 2xx).",
+        l2 = _layer("L2", True, None, "API Key 已接受（HTTP 2xx）。",
                     elapsed_ms)
         if model in ids:
             l3 = _layer("L3", True, None,
-                        "The configured model is in the server's model list.",
+                        "服务端模型列表包含配置的模型。",
                         elapsed_ms)
         else:
             l3 = _layer("L3", None, None,
-                        "The model list answered, but the configured model is "
-                        "not in it.", elapsed_ms)
+                        "模型列表有响应，但其中未列出配置的模型。", elapsed_ms)
         return l1, l2, l3
 
     if isinstance(err, str) and err.startswith("HTTP_"):
         status = err[5:]
-        l1 = _layer("L1", True, None, "The endpoint answered (HTTP %s)."
+        l1 = _layer("L1", True, None, "端点已响应（HTTP %s）。"
                     % status, elapsed_ms)
         if status == "401":
             l2 = _layer("L2", False, "AUTH",
-                        "401 unauthorized - the API key was rejected.",
+                        _DEFAULT_MESSAGES["AUTH"],
                         elapsed_ms)
             l3 = _layer("L3", None, None,
-                        "The model list is unavailable (401 unauthorized).",
+                        "模型列表不可用（401 未授权）。",
                         elapsed_ms)
             return l1, l2, l3
         if status == "403":
             l2 = _layer("L2", False, "FORBIDDEN",
-                        "403 forbidden - the server refused access.",
+                        _DEFAULT_MESSAGES["FORBIDDEN"],
                         elapsed_ms)
             l3 = _layer("L3", None, None,
-                        "The model list is unavailable (403 forbidden).",
+                        "模型列表不可用（403 禁止访问）。",
                         elapsed_ms)
             return l1, l2, l3
         if status in ("402", "429"):
-            note = "Not observed - the endpoint was rate limited (HTTP %s)."                 % status
+            note = "未能确认：端点触发限流（HTTP %s）。" % status
         elif status.isdigit() and int(status) >= 500:
-            note = ("Not observed - the endpoint returned a server error "
-                    "(HTTP %s)." % status)
+            note = "未能确认：端点返回服务器错误（HTTP %s）。" % status
         else:
-            note = ("Not observed - the endpoint rejected the request "
-                    "(HTTP %s)." % status)
+            note = "未能确认：端点拒绝了请求（HTTP %s）。" % status
         l2 = _layer("L2", None, None, note, elapsed_ms)
         l3 = _layer("L3", None, None,
-                    "The model list is unavailable (HTTP %s)." % status,
+                    "模型列表不可用（HTTP %s）。" % status,
                     elapsed_ms)
         return l1, l2, l3
 
@@ -184,40 +187,39 @@ def _layers_from_models(err, ids, model, elapsed_ms):
         return (_layer("L1", False, "TIMEOUT", _DEFAULT_MESSAGES["TIMEOUT"],
                        elapsed_ms),
                 _layer("L2", None, None,
-                       "Not observed - the endpoint did not answer in time.",
+                        "未能确认：端点未及时响应。",
                        elapsed_ms),
                 _layer("L3", None, None,
-                       "The model list is unavailable (timeout).", elapsed_ms))
+                       "模型列表不可用（请求超时）。", elapsed_ms))
     if err == "NETWORK":
         return (_layer("L1", False, "NETWORK", _DEFAULT_MESSAGES["NETWORK"],
                        elapsed_ms),
                 _layer("L2", None, None,
-                       "Not observed - the endpoint was unreachable.",
+                        "未能确认：端点无法连接。",
                        elapsed_ms),
                 _layer("L3", None, None,
-                       "The model list is unavailable (network error).",
+                       "模型列表不可用（网络错误）。",
                        elapsed_ms))
     if err == "INVALID_MODEL_OUTPUT":
         return (_layer("L1", True, None,
-                       "The endpoint answered but the model list was not "
-                       "valid JSON.", elapsed_ms),
+                       "端点已响应，但模型列表不是有效 JSON。", elapsed_ms),
                 _layer("L2", True, None,
-                       "The API key was accepted (HTTP 2xx).", elapsed_ms),
+                       "API Key 已接受（HTTP 2xx）。", elapsed_ms),
                 _layer("L3", None, None,
-                       "The model list response was not valid JSON.",
+                       "模型列表响应不是有效 JSON。",
                        elapsed_ms))
     if err == "BAD_CONFIG":
         return (_layer("L1", False, "BAD_CONFIG",
                        _DEFAULT_MESSAGES["BAD_CONFIG"], elapsed_ms),
                 _layer("L2", None, None,
-                       "Skipped - the base URL is invalid.", elapsed_ms),
+                       "已跳过：Base URL 无效。", elapsed_ms),
                 _layer("L3", None, None,
-                       "Skipped - the base URL is invalid.", elapsed_ms))
+                       "已跳过：Base URL 无效。", elapsed_ms))
     return (_layer("L1", False, "UNKNOWN",
-                   "The model list probe failed: %s." % err, elapsed_ms),
+                   "模型列表探测失败：%s。" % err, elapsed_ms),
             _layer("L2", None, None,
-                   "Not observed - the step-1 probe failed.", elapsed_ms),
-            _layer("L3", None, None, "The model list is unavailable.",
+                   "未能确认：第 1 步探测失败。", elapsed_ms),
+            _layer("L3", None, None, "模型列表不可用。",
                    elapsed_ms))
 
 
@@ -230,14 +232,16 @@ def _layer4_from_result(res, elapsed_ms):
     if not err:
         if text.strip():
             return (_layer("L4", True, None,
-                           "Received a non-empty translation.", elapsed_ms),
+                           "已收到非空译文。", elapsed_ms),
                     text)
         return (_layer("L4", False, "INVALID_MODEL_OUTPUT",
                        _DEFAULT_MESSAGES["INVALID_MODEL_OUTPUT"], elapsed_ms),
                 None)
     code = err if err in KNOWN_CODES else "UNKNOWN"
-    message = res.get("message") or _DEFAULT_MESSAGES.get(
-        code, _DEFAULT_MESSAGES["UNKNOWN"])
+    detail = (res.get("message") or "").strip()
+    message = _DEFAULT_MESSAGES.get(code, _DEFAULT_MESSAGES["UNKNOWN"])
+    if detail:
+        message += "（原始详情：%s）" % detail
     return (_layer("L4", False, code, message, elapsed_ms), (text or None))
 
 def run_connection_test(snapshot, translate_fn, list_models_fn, on_step=None):
@@ -264,10 +268,9 @@ def run_connection_test(snapshot, translate_fn, list_models_fn, on_step=None):
     # "verify the in-app link" path (story 23), not a configuration failure -
     # Mock can be verdict "mock" with every field empty.
     if snap.get("mock"):
-        layers = _skip("Skipped - Mock mode sends no network request.")
+        layers = _skip("已跳过：Mock 模式未发送网络请求。")
         layers["L4"] = _layer("L4", None, None,
-                              "Skipped - Mock mode never claims a real "
-                              "translation.")
+                              "已跳过：Mock 模式不会声称完成真实翻译。")
         warnings = []
         if ((snap.get("base_url") or "").strip()
                 and (snap.get("model") or "").strip()):
@@ -278,8 +281,7 @@ def run_connection_test(snapshot, translate_fn, list_models_fn, on_step=None):
     # --- local static validation: the only short-circuit (decision 5) -----
     problems = _static_problems(snap)
     if problems:
-        layers = _skip("Skipped - local validation failed; no request was "
-                       "sent.")
+        layers = _skip("已跳过：本地校验未通过，未发送请求。")
         for lid, (code, message) in problems.items():
             layers[lid] = _layer(lid, False, code, message)
         return build("fail", layers, 0, None, _no_model_list(), [],
@@ -309,7 +311,7 @@ def run_connection_test(snapshot, translate_fn, list_models_fn, on_step=None):
         (time.monotonic() - t0) * 1000)
     if not isinstance(res, dict):
         res = {"error": "UNKNOWN",
-               "message": "The transport returned a non-dict result.",
+               "message": "传输层返回了非字典结果。",
                "attempts": 0}
     l4, translation = _layer4_from_result(res, trans_ms)
     attempts = int(res.get("attempts") or 0)
@@ -328,9 +330,9 @@ def _crash_report(snapshot, exc):
     """Last-resort report if an injected transport raises: the UI must always
     unblock and the failure must stay inside the closed vocabulary."""
     snap = dict(snapshot)
-    message = ("Internal error: %s: %s"
+    message = ("内部错误（%s）：%s"
                % (type(exc).__name__, str(exc)))[:300]
-    layers = _skip("Skipped - the run aborted before this step.")
+    layers = _skip("已跳过：运行在执行此步骤前中止。")
     layers["L4"] = _layer("L4", False, "UNKNOWN", message)
     return _report("fail", layers, snap, 0, None, _no_model_list(), [],
                    [_ID_LIST, _ID_TRANS], _QUOTA_STATIC, 0)
@@ -424,4 +426,3 @@ class ConnectionTester:
             if self._report is None:
                 return {}
             return {"connection_test": self._report}
-

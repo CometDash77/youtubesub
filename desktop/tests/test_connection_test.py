@@ -97,7 +97,7 @@ def test_model_not_in_list_is_an_observation_but_gate_still_passes():
     rep = run(snap(), lst=lambda cfg: (["other-model"], None))
     l3 = layer(rep, "L3")
     assert l3["passed"] is None, "not-in-list must not be judged a failure"
-    assert "other" in (l3["message"] or "") or "not" in l3["message"].lower()
+    assert l3["message"] == "模型列表有响应，但其中未列出配置的模型。"
     assert rep["model_list"]["contains_model"] is False
     assert rep["verdict"] == "pass", "step 2 is the only gate"
 
@@ -173,7 +173,8 @@ def test_non_json_response_is_a_shape_failure_with_provider_message():
         "attempts": 1})
     assert rep["verdict"] == "fail"
     assert layer(rep, "L4")["code"] == "INVALID_MODEL_OUTPUT"
-    assert layer(rep, "L4")["message"] == "response is not JSON"
+    assert layer(rep, "L4")["message"] == (
+        "响应中没有非空译文。（原始详情：response is not JSON）")
 
 
 def test_empty_text_without_error_is_still_a_failure():
@@ -193,7 +194,8 @@ def test_error_code_mapping_is_a_closed_set():
             "error": c, "message": "msg-" + c, "attempts": 1})
         assert rep["verdict"] == "fail"
         assert layer(rep, "L4")["code"] == code, code
-        assert layer(rep, "L4")["message"] == "msg-" + code
+        assert "msg-" + code in layer(rep, "L4")["message"]
+        assert "未知错误" not in layer(rep, "L4")["message"]
     # anything outside the closed set degrades to the unknown code
     rep = run(snap(), translate=lambda cfg, text, **kw: {
         "error": "SOMETHING_NEW", "message": "x", "attempts": 1})
@@ -228,12 +230,15 @@ def test_mock_is_the_third_verdict_with_zero_network():
 def test_mock_with_real_config_warns_it_masks_the_real_state():
     rep = run(snap(mock=True))
     assert CT.MOCK_MASKS_REAL_CONFIG in rep["warnings"]
+    assert rep["warning_messages"] == {
+        CT.MOCK_MASKS_REAL_CONFIG: "当前为 Mock 模式；已填写的真实配置本次不会被使用。"}
 
 
 def test_mock_without_real_config_has_no_mask_warning():
     rep = run(snap(mock=True, base_url="", model=""))
     assert rep["verdict"] == "mock"
     assert CT.MOCK_MASKS_REAL_CONFIG not in rep["warnings"]
+    assert CT.MOCK_MASKS_REAL_CONFIG not in rep["warning_messages"]
 
 
 # --- attempts / quota / snapshot -----------------------------------------
@@ -243,9 +248,9 @@ def test_attempts_zero_when_nothing_was_sent():
 
 
 def test_quota_notice_promises_a_real_request_only_for_real_runs():
-    assert "real" in run(snap())["quota_notice"].lower()
-    assert "no network request" in run(snap(mock=True))["quota_notice"].lower()
-    assert "no request" in run(snap(base_url=""))["quota_notice"].lower()
+    assert "一次真实的最小翻译请求" in run(snap())["quota_notice"]
+    assert "未发送网络请求" in run(snap(mock=True))["quota_notice"]
+    assert "未发送请求" in run(snap(base_url=""))["quota_notice"]
 
 
 def test_report_snapshot_is_the_click_time_input_and_never_the_key():
@@ -262,7 +267,7 @@ def test_report_snapshot_is_the_click_time_input_and_never_the_key():
 
 def test_alignment_protocol_is_declared_unverified():
     rep = run(snap())
-    assert any("Alignment" in n for n in rep["notes"])
+    assert any("尚未验证 Alignment（N|line）协议" in n for n in rep["notes"])
 
 
 # --- same-path invariant --------------------------------------------------

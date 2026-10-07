@@ -16,3 +16,21 @@
    其桌面 Rust 端无许可证, 不复制代码; 其 userscript 声明 MIT, 改写适配时将注明出处.
 
 Apache-2.0 全文见 licenses/Apache-2.0 (待补).
+
+## 运行时依赖（第三方 Python 包）
+
+以上为设计/代码复用来源；以下是随程序安装的第三方运行时依赖（完整清单见 `requirements.txt`）：
+
+6. PySide6-Fluent-Widgets (qfluentwidgets) 1.11.3 — Copyright (c) zhiyiYo — **GPLv3**（非商用；商用须购买商业许可）。
+   用途: 桌面「调试」窗口的全部控件。**许可证影响**: 与 GPLv3 代码链接后, 分发本程序整体时受 GPLv3 约束
+   （本仓库当前无 LICENSE、分发口径未定, 决定与代价见 docs/adr/ADR-012）。
+   GPLv3 全文: https://github.com/zhiyiYo/PyQt-Fluent-Widgets/blob/master/LICENSE （本地 licenses/GPL-3.0 待补）。
+7. PySideSix-Frameless-Window 0.8.2 — Copyright (c) zhiyiYo — LGPLv3.
+   用途: PySide6-Fluent-Widgets 的依赖（无边框窗口 / 亚克力），本项目不直接调用。
+8. pywin32 312 — Copyright Mark Hammond (et al) — PSF License.
+   用途: PySideSix-Frameless-Window 在 Windows 上的依赖。
+9. darkdetect 0.8.0 — Copyright (c) Alberto Sottile — BSD-3-Clause.
+   用途: PySide6-Fluent-Widgets 的依赖（系统明暗主题探测）。
+10. PySide6 / PySide6-Essentials / PySide6-Addons 6.11.2 — Copyright (c) The Qt Company — LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only.
+    用途: ADR-001 已采纳的 Qt 绑定；Addons 由 PySide6-Fluent-Widgets 的元数据传递拉入。
+

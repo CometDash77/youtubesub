@@ -5,3 +5,17 @@ __pycache__/
 
 # DSH config snapshots may contain account/endpoint data - never commit them
 harness/backups/
+
+# Local session artifacts (probes, handoff notes, draft bodies)
+.scratch/
+
+# Local toolchain and package dirs
+.local/
+.omo/
+node_modules/
+
+# DSH runtime data (skill bundles) - same rule as harness/backups/
+.dsh/
+# Root toolchain manifests (dsh-univer-office; map Out of scope)
+/package.json
+/pnpm-lock.yaml

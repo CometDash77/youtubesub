@@ -90,7 +90,7 @@ Out of scope（维持排除，出处 map #2）：
 
 ### 2.1 规则断句（#6 → ADR-006 + 规格 #22 及子项 #25–#30）
 
-判据整体替换为 kiss「规则断句」分支的行为等价实现（clean-room）；翻译单位 = 句子组与对齐协议**不动**（ADR-004 的该部分继续有效）；已知接受的行为变化（中文手动轨闸门触发时一行一组、非语音无译文、组变长致降级更频繁）与继承缺陷（语言前缀二分误伤混排、连词表仅英文）见 ADR-006。细节与表驱动用例：[#22](https://github.com/CometDash77/youtubesub/issues/22)，拆分子项 [#25](https://github.com/CometDash77/youtubesub/issues/25)–[#30](https://github.com/CometDash77/youtubesub/issues/30)。
+判据整体替换为 kiss「规则断句」分支的行为等价实现（clean-room）；翻译单位 = 句子组与对齐协议**不动**（ADR-004 的该部分继续有效）；已知接受的行为变化（中文手动轨闸门触发时一行一组、非语音无译文、组变长致降级更频繁）与继承缺陷（语言前缀二分误伤混排、连词表仅英文）见 ADR-006。细节与表驱动用例：[#22](https://github.com/CometDash77/youtubesub/issues/22)，拆分子项 [#25](https://github.com/CometDash77/youtubesub/issues/25)–[#30](https://github.com/CometDash77/youtubesub/issues/30)。2026-09-29 修订（[#149](https://github.com/CometDash77/youtubesub/issues/149)）：空格语系新增续句豁免——缓冲 ≥2 cue、末 cue 未句末、下一 cue 小写非弱边界词开头时，该边界不切（静音/时长/15 词均抑制；句末标点、弱边界、记号不变）；显示侧逐 cue 契约见 [#151](https://github.com/CometDash77/youtubesub/issues/151)；详见 [ADR-006](docs/adr/ADR-006-segmentation-aligned-with-kiss.md) 修订历史。
 
 ### 2.2 提前批翻译（#9 → ADR-007 + 规格 #24）
 
@@ -103,6 +103,10 @@ Out of scope（维持排除，出处 map #2）：
 ### 2.4 提示词管理（#8 → ADR-010 + 规格 #39）
 
 内置 3 条（`default` / `literal` / `natural`）锁代码不可删不落盘；自定义存 `prompt.presets`、`prompt.system` 迁移单向一次；UI = 下拉 + 复制/重命名/删除 + 内置只读 + 只读生效预览 + `context_groups` 复选框；预览/测试连接/生产共用同一组装函数；无占位符系统。细节：[#39](https://github.com/CometDash77/youtubesub/issues/39)。
+
+### 中文原文前置跳过（#128）
+
+每个句子组在提交层本地判断是否为中文原文，命中后不构造翻译任务，因此不进入单条或批量队列、不调用 provider、不读写翻译缓存、不记失败态。`track_lang` 有非空值时为权威信号：标签以 `zh` 开头则跳过，其他语言标签不触发正文兜底；缺少标签时，若 Han 统一/兼容表意字占字母字符至少 30% 则跳过，含假名或韩文字母的文本不由此兜底判为中文。该处理适用于翻译 provider 可用或不可用的情况，使用既有 `idle` 状态并原文直显；不新增配置、依赖、状态或 `/status` 字段。实现与边界用例见 [#142](https://github.com/CometDash77/youtubesub/issues/142)。
 
 ## 分阶段实现顺序
 

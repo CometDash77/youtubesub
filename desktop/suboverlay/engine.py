@@ -1,6 +1,6 @@
 """Engine: sources + clock + sentence groups + translation queue wiring.
 Pure logic (no Qt) so the whole pipeline is testable."""
-import threading, time
+import threading, time, unicodedata
 
 from .clock import SyncState, apply_sync, estimate_ms, find_cue_at
 from .protocol import coerce_cues, parse_json3, repair_cue_ends
@@ -12,11 +12,12 @@ from . import provider as provider_mod
 
 SEEK_JUMP_MS = 2500.0
 
-# Fallbacks for the read-only config defaults (spec #24 decision 15: values live
-# in settings but are deliberately not exposed in the UI - see
-# settings.default_settings). Calibration against a real Key is milestone M.
+# Fallbacks for the config defaults that now live in the debug window's tuning
+# page "experimental" group (spec #24 decision 15 -> settings.TUNING_FIELDS,
+# map #152 / spec #161). Calibration against a real Key is milestone M.
 DEFAULT_PREFETCH = {"lead_s": 90.0, "max_groups": 20, "seek_debounce_ms": 400}
 DEFAULT_BATCH = {"max_groups": 8, "max_chars": 8000}
+CJK_FALLBACK_THRESHOLD = 0.30
 
 
 def _as_float(v, default):
@@ -72,6 +73,42 @@ def _provider_usable(prov):
         return True
     return bool((p.get("base_url") or "").strip()) and bool((p.get("model") or "").strip())
 
+
+def _is_chinese_group(src, gi):
+    """Use track metadata first, then a small local heuristic if it is absent."""
+    if gi < 0 or gi >= len(src.groups):
+        return False
+    language = str(src.meta.get("track_lang") or "").strip().lower()
+    if language:
+        return language.startswith("zh")
+
+    text = src.groups[gi].text
+    letters = [ch for ch in text if ch.isalpha()]
+    if not letters:
+        return False
+    names = [unicodedata.name(ch, "") for ch in letters]
+    # Han-only text is ambiguous between Chinese and Japanese. Kana and Hangul
+    # are cheap local signals that keep this fallback from claiming those tracks.
+    if any(name.startswith(("HIRAGANA", "KATAKANA", "HANGUL",
+                           "HALFWIDTH KATAKANA", "HALFWIDTH HANGUL"))
+           for name in names):
+        return False
+    han_count = sum(name.startswith(("CJK UNIFIED IDEOGRAPH",
+                                     "CJK COMPATIBILITY IDEOGRAPH"))
+                    for name in names)
+    return han_count / len(letters) >= CJK_FALLBACK_THRESHOLD
+
+
+def _mark_original_only(src, gi):
+    """Discard any provider-derived state when this group is recognized as Chinese."""
+    src.group_trans.pop(gi, None)
+    src.group_failures.pop(gi, None)
+    src.group_states[gi] = "idle"
+    group = src.groups[gi]
+    for cue in src.cues[group.start_idx:group.end_idx + 1]:
+        cue.trans = ""
+
+
 class _Source:
     def __init__(self, source_id, meta=None):
         self.source_id = source_id
@@ -80,6 +117,10 @@ class _Source:
         self.groups = []
         self.cue_to_group = {}
         self.group_trans = {}   # group_idx -> whole-line translation
+        self.group_states = {}  # group_idx -> translating / ready
+        # Per-group terminal provider failures. Kept across seeks, and removed
+        # only when that group succeeds or provider-derived state is reset.
+        self.group_failures = {}  # group_idx -> failed:<fixed short reason>
         self.sync = SyncState()
         self.last_group_idx = None
         self.window_anchor = None        # group idx the prefetch window was last filled from
@@ -88,6 +129,8 @@ class _Source:
     def reset_translations(self):
         """Drop everything a provider produced; keep the cues and the live clock."""
         self.group_trans = {}
+        self.group_states = {}
+        self.group_failures = {}
         for c in self.cues:
             c.trans = ""
         self.last_group_idx = None
@@ -112,6 +155,7 @@ class Engine:
         self._queue = TranslationQueue(settings.get("provider", {}), self._cache,
                                        workers=self._workers, on_done=self._on_done,
                                        translate_fn=self._translate_fn)
+        self._translation_enabled = self._translation_mode_enabled()
         self.display_cb = None   # called on translation arrivals (UI refresh)
         self.last_display = None  # latest tick() result, for /status diagnostics
         self._provider_ns = None  # provider namespace the in-memory translations belong to
@@ -121,6 +165,11 @@ class Engine:
         src.meta.update({k: ev.get(k) for k in
             ("provider", "video_id", "tab_title", "track_kind",
              "hook_error", "capture_error")})
+        # Optional since protocol v1: an older cues/register frame must not
+        # erase description delivered by a newer register frame.
+        if "video_description" in ev:
+            value = ev.get("video_description")
+            src.meta["video_description"] = value if isinstance(value, str) else ""
         # track_lang (#25): segmentation reads the STORED track language, so a
         # frame that omits the key must not erase what an earlier register or
         # cues frame already carried. Absent everywhere => "" => the
@@ -213,6 +262,34 @@ class Engine:
         self.handle_event({"type": "cues", "source_id": source_id, **meta, "cues": cues})
 
     # ---- translation scheduling ----
+    def _translation_mode_enabled(self):
+        """Translation modes are bilingual and translation-only; original-only
+        deliberately leaves the provider pipeline dormant (#61)."""
+        return (self.settings.get("display", {}).get("mode") or "bilingual") != "orig"
+
+    def _sync_translation_mode(self):
+        """Apply a display-mode edge at the scheduling boundary.
+
+        Pending work is no longer useful when the user chooses original-only;
+        TranslationQueue.cancel_source drops pending jobs but preserves any HTTP
+        request already in flight. Re-enabling begins from the live playhead.
+        """
+        enabled = self._translation_mode_enabled()
+        if enabled == self._translation_enabled:
+            return enabled
+        sid = self.active_source
+        if not enabled and sid is not None:
+            self._queue.cancel_source(sid)
+        src = self.sources.get(sid) if sid is not None else None
+        if src is not None:
+            src.last_group_idx = None
+            src.window_anchor = None
+            # A mode switch starts its own current-window fill immediately; it
+            # must not inherit a seek debounce from an earlier mode.
+            src.prefetch_quiet_until = 0.0
+        self._translation_enabled = enabled
+        return enabled
+
     def _client_key(self, src, g):
         return "|".join([str(src.meta.get("video_id") or ""), str(src.meta.get("track_kind") or ""),
                          str(g.start_ms), str(g.end_ms), g.text[:400]])
@@ -262,6 +339,12 @@ class Engine:
         if gi < 0 or gi >= len(src.groups):
             return None
         g = src.groups[gi]
+        if _is_chinese_group(src, gi):
+            # Original-only is terminal for this group, not a queued translation
+            # or a provider failure. It also prevents /status defaulting to
+            # "translating" while the provider is otherwise usable.
+            _mark_original_only(src, gi)
+            return None
         if self._translated(src, gi):
             return None
         prov, instructions = self._provider_snapshot()
@@ -280,29 +363,29 @@ class Engine:
                               context=ProviderContext(prov, self._namespace_of(prov, instructions)))
 
     def _submit_group(self, src, gi, priority):
+        if not self._translation_mode_enabled():
+            return
         job = self._build_job(src, gi, priority)
         if job is not None:
-            self._queue.submit(job)
+            accepted = self._queue.submit(job)
+            if accepted and gi not in src.group_failures:
+                src.group_states[gi] = "translating"
 
-    def _fill_window(self, src, gi, t_ms):
-        """Window fill (spec #24 / ADR-007): prefetch every group from the
-        playhead within the lead window, measured in SECONDS (decoupled from
-        subtitle density) and bounded by the group hard cap - first of the two
-        to hit wins. The fill is the burst point: its pending groups are
-        chunked into batches (<= batch.max_groups / <= batch.max_chars) and
-        sent as batches; a lone pending group stays a single request. Steady
-        state crosses one group at a time, so this submits exactly one group -
-        one-request-per-group behaviour is unchanged there."""
+    def _window_group_indices(self, src, gi, t_ms):
+        """Return the ordered prefetch window, bounded by time and group count."""
         lead_ms = self._window_lead_ms()
         horizon = t_ms + lead_ms
+        end = min(len(src.groups), gi + self._window_max_groups())
         window = []
-        for idx in range(gi, min(len(src.groups), gi + self._window_max_groups())):
+        for idx in range(gi, end):
             if idx > gi and src.groups[idx].start_ms > horizon:
                 break
             window.append(idx)
-        todo = [idx for idx in window
-                if idx != gi and not self._translated(src, idx)]
-        if not todo:
+        return window
+
+    def _submit_prefetch_groups(self, src, todo):
+        """Submit a fill burst in contract-sized chunks, preserving group order."""
+        if not todo or not self._translation_mode_enabled():
             return
         if len(todo) == 1:
             self._submit_group(src, todo[0], NORMAL)
@@ -325,6 +408,18 @@ class Engine:
                 self._queue.submit(jobs[0])
             elif jobs:
                 self._queue.submit_batch(jobs)
+
+    def _fill_window(self, src, gi, t_ms):
+        """Fill the time-and-count bounded window around the playhead.
+
+        A fill is the only batch formation point. Steady-state crossings still
+        submit one group, while a burst is split by the configured group and
+        request-character budgets.
+        """
+        window = self._window_group_indices(src, gi, t_ms)
+        todo = [idx for idx in window
+                if idx != gi and not self._translated(src, idx)]
+        self._submit_prefetch_groups(src, todo)
 
     def _identity(self, prov, instructions, client_key, g, prompt_ctx):
         prompt = g.text
@@ -444,7 +539,7 @@ class Engine:
         return r
 
     def _on_done(self, job, result):
-        if result.get("error") or not job or job.cancelled:
+        if not job or job.cancelled:
             return
         with self._lock:
             if job.context is not None and job.context.namespace != self._provider_ns:
@@ -455,17 +550,53 @@ class Engine:
             src = self.sources.get(job.source_id)
             if src is None or job.group_idx >= len(src.groups):
                 return
+            if _is_chinese_group(src, job.group_idx):
+                # A request may have been in flight when the user switched tracks.
+                # Its old result or failure must not leak into the Chinese track.
+                _mark_original_only(src, job.group_idx)
+                return
+            if result.get("error"):
+                # Prefetch failures are deliberately invisible. A failed batch
+                # is voided and the urgent sentence request owns the verdict.
+                if job.priority == URGENT:
+                    reason = self._failure_reason(result)
+                    if reason is not None:
+                        verdict = "failed:" + reason
+                        src.group_failures[job.group_idx] = verdict
+                        src.group_states[job.group_idx] = verdict
+                        # 表示互斥 + 失败不显译（#151 方案 A 第 3/5 条）：失败的组
+                        # 不保留任何既有译文表示，否则旧译文会盖过 failed 状态。
+                        # SHAPE_MISS (reason None) 与预取失败在此之上原样保留。
+                        gf = src.groups[job.group_idx]
+                        src.group_trans.pop(job.group_idx, None)
+                        for ci in range(gf.start_idx, gf.end_idx + 1):
+                            src.cues[ci].trans = ""
+                elif (self.active_source == job.source_id
+                      and src.last_group_idx == job.group_idx):
+                    # A prefetched sentence may have become current while its
+                    # batch was in flight. Replace that void result with the
+                    # ordinary urgent single-sentence path.
+                    self._submit_group(src, job.group_idx, URGENT)
+                return
             g = src.groups[job.group_idx]
             if result.get("aligned") and result.get("values"):
                 vals = result["values"]
                 for k, ci in enumerate(range(g.start_idx, g.end_idx + 1)):
                     if k < len(vals):
                         src.cues[ci].trans = vals[k]
-                src.group_trans[job.group_idx] = " ".join(v for v in vals if v)
+                # 表示互斥（#151 方案 A 第 5 条）：aligned 结果逐 cue 活在
+                # cue.trans，清掉可能残留的旧整组文本 - 同组只有一种表示存活。
+                src.group_trans.pop(job.group_idx, None)
             elif result.get("text"):
+                # 表示互斥（#151 方案 A 第 5 条）：同组同时只有一种表示存活，
+                # 清掉可能残留的旧 aligned 逐 cue 值。
+                for ci in range(g.start_idx, g.end_idx + 1):
+                    src.cues[ci].trans = ""
                 src.group_trans[job.group_idx] = result["text"]
             else:
                 return
+            src.group_failures.pop(job.group_idx, None)
+            src.group_states[job.group_idx] = "ready"
         if self.display_cb:
             try:
                 self.display_cb()
@@ -492,9 +623,62 @@ class Engine:
             return {"sources": len(self.sources), "active_source": self.active_source,
                     "display": display}
 
+    @staticmethod
+    def _failure_reason(result):
+        """Map provider wire/worker errors to the fixed, user-safe vocabulary."""
+        code = result.get("error")
+        status = result.get("status")
+        if status == 402:
+            return "额度不足"
+        if status == 429:
+            return "请求受限"
+        if code == "RATE_LIMITED":
+            return "请求受限"
+        if code == "AUTH":
+            return "API Key 无效"
+        if code == "FORBIDDEN":
+            return "访问被拒绝"
+        if code in ("TIMEOUT", "NETWORK", "SERVER", "INVALID_MODEL_OUTPUT"):
+            return {"TIMEOUT": "翻译请求超时", "NETWORK": "无法连接翻译服务",
+                    "SERVER": "翻译服务异常", "INVALID_MODEL_OUTPUT": "译文格式异常"}[code]
+        if code == "BAD_REQUEST":
+            return "翻译请求无效"
+        if code in ("BAD_CONFIG", "NO_MODEL"):
+            return "翻译配置无效"
+        if code == "SHAPE_MISS":
+            return None
+        return "翻译内部错误"
+
+    @staticmethod
+    def _timeline_display(src, video_time_ms):
+        """Resolve one clock position through cue -> sentence group -> translation.
+
+        Cue selection owns timing; translations render cue-first (#151 方案 A):
+        an aligned result lives in cue.trans, a whole-line group text appears
+        only on the group's first cue. Keeping that join in one place makes
+        the display and urgent scheduler use the same alignment result.
+        """
+        cue = find_cue_at(src.cues, video_time_ms)
+        if cue is None:
+            return None, None, ""
+        cue_index = src.cues.index(cue)
+        group_index = src.cue_to_group.get(cue_index)
+        if group_index is None:
+            return cue, None, ""
+        # Contract (#151 方案 A): aligned 结果逐 cue 活在 cue.trans；
+        # unaligned 的整组文本只在组首 cue 出现一次。
+        if cue.trans:
+            translation = cue.trans
+        elif cue_index == src.groups[group_index].start_idx:
+            translation = src.group_trans.get(group_index, "")
+        else:
+            translation = ""
+        return cue, group_index, translation
+
     def _tick_locked(self):
         with self._lock:
             self._sync_namespace()
+            translation_enabled = self._sync_translation_mode()
             sid = self.active_source
             if sid is None:
                 return None
@@ -504,16 +688,23 @@ class Engine:
                 # that connected but cannot see captions must not look like a video that
                 # simply has none: hook_error = the page hook never installed;
                 # capture_error = the hook ran but the caption response was unusable.
-                return {"state": "no_cues", "title": src.meta.get("tab_title") if src else "",
-                        "hook_error": (src.meta.get("hook_error") or "") if src else "",
-                        "capture_error": (src.meta.get("capture_error") or "") if src else "",
-                        "trans_available": _provider_usable(self.settings.get("provider", {}))}
+                usable = _provider_usable(self.settings.get("provider", {}))
+                hook_error = (src.meta.get("hook_error") or "") if src else ""
+                capture_error = (src.meta.get("capture_error") or "") if src else ""
+                trans_state = ("idle" if not translation_enabled else
+                               "unconfigured" if not usable else
+                               "waiting" if not hook_error and not capture_error else "idle")
+                return {"state": "no_cues", "trans_state": trans_state,
+                        "title": src.meta.get("tab_title") if src else "",
+                        "video_description": src.meta.get("video_description", "") if src else "",
+                        "hook_error": hook_error, "capture_error": capture_error,
+                        "trans_available": usable}
             t = estimate_ms(src.sync)
-            cue = find_cue_at(src.cues, t)
-            gi = None
-            if cue is not None:
-                gi = src.cue_to_group.get(src.cues.index(cue))
-            if gi is not None and gi != src.last_group_idx:
+            cue, gi, trans = self._timeline_display(src, t)
+            if gi is not None and _is_chinese_group(src, gi):
+                _mark_original_only(src, gi)
+                trans = ""
+            if translation_enabled and gi is not None and gi != src.last_group_idx:
                 src.last_group_idx = gi
                 # The sentence on screen (URGENT): never debounced, never throttled
                 # (spec #24 decision 2).
@@ -532,27 +723,27 @@ class Engine:
             # recomputed when playback crosses into a new group (event-native
             # incremental advance), after a seek, and after backoff - not on a
             # coarse timer (spec #24 decision 2 / 3).
-            if (gi is not None and src.sync.playing
+            if (translation_enabled and gi is not None and src.sync.playing
                     and time.time() >= src.prefetch_quiet_until
                     and src.window_anchor != gi):
                 src.window_anchor = gi
                 self._fill_window(src, gi, t)
-            trans = ""
-            if cue is not None:
-                ci = src.cues.index(cue)
-                gi = src.cue_to_group.get(ci)
-                if gi is not None:
-                    trans = src.group_trans.get(gi, "")
-                    if not trans and cue.trans:
-                        trans = cue.trans
             title = src.meta.get("tab_title") or ""
+            usable = _provider_usable(self.settings.get("provider", {}))
+            trans_state = ("idle" if not translation_enabled or gi is None
+                           or src.group_states.get(gi) == "idle" else
+                           "unconfigured" if not usable else
+                           "ready" if trans else
+                           src.group_failures.get(gi, src.group_states.get(gi, "translating")))
             return {"state": "ok", "orig": cue.text if cue else "",
                     "trans": trans,
+                    "trans_state": trans_state,
                     # Issue #1: the one authority on whether this run can translate
                     # at all, so the overlay never reads provider config itself and
                     # never has to guess "no translation" from an empty string.
-                    "trans_available": _provider_usable(self.settings.get("provider", {})),
+                    "trans_available": usable,
                     "playing": src.sync.playing,
                     "rate": src.sync.playback_rate, "title": title,
+                    "video_description": src.meta.get("video_description", ""),
                     "hook_error": src.meta.get("hook_error") or "",
                     "capture_error": src.meta.get("capture_error") or ""}
