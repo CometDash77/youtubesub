@@ -1,0 +1,66 @@
+<!-- DSH-IDEMPOTENCY-KEY: deck-plan-wf-overlay-appearance-2026-10-06-map -->
+
+## Destination
+把「浮窗外观可调到多细」这件事**裁到底并写成规格**，不写实现码：新增外观键（字体族、原文/译文字色与描边色、内外填充语义）、把浮窗绘制与设置界面的实时预览接成**同一条绘制路径**（预览画在 PS 式透明棋盘格上、与真浮窗所见即所得）、定下预览窗放在哪里与用真实还是示例文本。到达终点的标志：六项取舍全部定案（各自一张决策票）、规格落盘到仓库（预计 `wayfinder/` 外观键表 + `docs/plans/` 实施规格）、以及一份给维护者肉眼复核的截图证据。**本图不含改码票**——落地等 `settings.py` schema 解冻后另起 effort（见 Notes 的阻塞项）。
+
+## Notes
+- 领域：youtubesub 桌面端（Python 3.12.10 + PySide6 6.11.2 + PySide6-Fluent-Widgets，代码在 `desktop/`）。本机 Windows 10。
+- **本图的 destination 类型是「砍决策、交规格」**（维护者 2026-10-06 选定 A），因此带内**只解决策**、不写实现码；执行落在后续 effort。
+- **已锁定的六项决策（grilling，2026-10-06，维护者逐条确认；备选与理由见各决策票）**：
+  ① destination = 只规划、交规格，不落地码。
+  ② 「外填充 / 内填充」= **文字描边色 / 文字字身色**（不是双层底板）；底板仍是既有 `bg_color` + `bg_opacity`。
+  ③ 作用域 = **字体族全局 1 键；颜色原文/译文分开**（字色 + 描边色共 4 键）。
+  ④ 预览机制 = **抽共用绘制器**，预览与真浮窗调同一函数；预览底为**透明棋盘格**。
+  ⑤ 预览位置与内容 = **「调参 → 显示」组顶部 + 当前 cue 的行**（2026-10-06 措辞勘误：原写「浮窗此刻真在显的上一句/当前句/下一句」；实测浮窗只显示当前 cue —— `desktop/suboverlay/overlay.py:161-190`，双语即译/原两行 + 分隔线。见 [透明实时预览定案](https://github.com/CometDash77/youtubesub/issues/176)），无数据回退示例文本（示例须同时覆盖双语两行）。
+  ⑥ 键表形态 = 新增 6 键、颜色不带 alpha、字号保持整数、**回退式兼容**（老配置不动，新键缺省回退到今天的硬编码值，不强制迁移）。
+- **落地前置（已在 2026-10-06 解除）**：现行地图 [设置调试合并 map：单一非模态窗口（设置 / 调参 / 排障）与整窗说人话文案](https://github.com/CometDash77/youtubesub/issues/164) 曾**冻结** `desktop/suboverlay/settings.py` 的 schema 键、默认值、`TUNING_FIELDS` 范围表与 `load()` 迁移语义，而该图的 frontier 落地票 [落地：合并窗口 + 整窗说人话文案](https://github.com/CometDash77/youtubesub/issues/170) 当时正在改同一批文件（工作区未提交）。本需求要新增 schema 键，与该冻结项直接冲突，故另起本图；规格产出不受该阻塞。**截至 2026-10-06 03:54，#170 已落地并关闭**（`python -m pytest desktop/tests -q` = 363 passed），随之解阻其验收票 [验收：手测清单 + 截图证据](https://github.com/CometDash77/youtubesub/issues/171)。本图的落地前置因此**已满足**；落地本身仍由后续 effort 承接（见 Out of scope）。⚠ `#170` 的工作区改动尚未提交，落地 effort 起手前需先确认其已入库。
+- 关联先例（可直接复用，不必重裁）：显示一族的页面归属已由 [字段归位：字号与「显示」类设置的页面归属](https://github.com/CometDash77/youtubesub/issues/167) 定为「调参 → 显示」组（8 项：`font_size` / `mode` / `order` / `history_lines` / `font_bold` / `stroke` / `bg_color` / `bg_opacity`），并定 `display.font_size` 为 int、6..40、step 1、默认 10。
+- **必须遵守的既有不变量**：提示词预览已经走「预览 == 生产，一个函数，不是两份常量」（`desktop/suboverlay/settings_page.py:307-311`，由 `desktop/tests/test_settings_page.py:248-282` 的 `test_preview_is_byte_identical_to_the_production_assembly` 钉死）——外观预览要接同一范式，不新开第二份实现。
+- 一手现状（起票前已核实，非推测）：字体族硬编码 `QtGui.QFont("Microsoft YaHei UI", int(size))`（`desktop/suboverlay/overlay.py:136`）；原文恒白（`:141`）、译文恒 `#FFE082`（`:145`）、译文失败态恒红（`:142-143`），描边恒黑（`:261`）；底板 `bg_color` + `bg_opacity`（`:115-120`）；文字用 `QPainterPath` 描边 + 填充两条命令画（`:261-272`）；失败态颜色已被测试钉成契约（`desktop/tests/test_overlay_labels.py:154-165`）。
+- 仓库约定：issue 操作走 deck_ 工具（后端 github：CometDash77/youtubesub，原生 sub-issue + 原生依赖边）；文案敲定当场写 `CONTEXT.md`（只做词汇表）；ADR 只在「难逆转 + 无背景会困惑 + 真实取舍」三条同时成立时才提议（已到 ADR-012）；验收沿用 `docs/MANUAL-ACCEPTANCE.md` 与 #159 的「手测清单 + 截图证据」范式；样式 token 走 `wayfinder/debug-window-style-tokens.md` + `desktop/suboverlay/debug_tokens.py`。
+
+## 计划
+- [x] [外观键定案：新增 6 个显示键（字体族 / 原文·译文字色与描边色 / 预览字号）与回退式兼容](https://github.com/CometDash77/youtubesub/issues/174)（frontier 起点）
+- [x] [共用绘制器定案：从浮窗 `paintEvent` 抽出无状态绘制函数，预览与真浮窗同路径](https://github.com/CometDash77/youtubesub/issues/175)（frontier 起点）
+- [x] [透明实时预览定案：棋盘格画布、预览窗形态、活邻居文本与实时性能](https://github.com/CometDash77/youtubesub/issues/176)（frontier 起点）
+- [ ] [取色与字体选择的交互定案：四色 + 描边色的控件形态、失败态红色语义、字体列表与缺失回退](https://github.com/CometDash77/youtubesub/issues/177)（frontier 起点）
+- [ ] [制作供维护者肉眼复核的截图证据：新版调参页「显示」组 + 透明棋盘格预览的观感](https://github.com/CometDash77/youtubesub/issues/178)（frontier 起点；为规格补视觉证据）
+- [ ] [规格落盘：外观键表 + 实时预览的实现规格，写进仓库](https://github.com/CometDash77/youtubesub/issues/179)（blocked by 上列五票 + [落地：合并窗口 + 整窗说人话文案](https://github.com/CometDash77/youtubesub/issues/170)）六票全部关闭 = 外观键表与实时预览规格定稿且落盘 = 本图到终点（随后由新 effort 承接改码）。
+
+## Decisions so far
+- [外观键定案：新增 6 个显示键（字体族 / 原文·译文字色与描边色 / 预览字号）与回退式兼容](https://github.com/CometDash77/youtubesub/issues/174) — 6 键全落 `display.*`（`font_family` / `orig_text_color` / `orig_stroke_color` / `trans_text_color` / `trans_stroke_color` / `preview_font_size`）；颜色存 RGB 三元素 int list（无 alpha）；字体名要新 `control` 种类 `font`（现码会把字符串整份丢掉、`stored_value` 返回 `None`）；六键全进 `TUNING_FIELDS`（插在 `bg_opacity` 之后，16→22 条）；不改 `default_settings()`（缺键即回退到今天硬编码值，老配置保存时不被顺手升级）。顺手勘误：译文默认色是 `#FFE082`，本图 Notes 与 [外观键定案](https://github.com/CometDash77/youtubesub/issues/174) 的前提原把它写作 `#FFE085`（均已于 2026-10-06 改正）。
+- [共用绘制器定案](https://github.com/CometDash77/youtubesub/issues/175) — 接缝 = 新模块 `desktop/suboverlay/overlay_paint.py`（纯 `QtGui`/`QtCore`，不 import `QtWidgets`、不 import `settings`）+ 4 个无状态函数（`rows_for` / `paint_subtitles` / `draw_wrapped` / `draw_divider`）外加导出的 `content_area`；`OverlayWindow.paintEvent` 收成「取 rows → `paint_subtitles` → 状态行」。实测结论：`_draw_wrapped` / `_draw_divider` 本来就不读 `self`；折行 100% 由传入 `rect` 决定，**不需要 `max_width` 形参**；状态行是预览与真浮窗唯一被允许的差异（差异 1064 像素全在底部 24px 带内）；两条 render hint 与 `content_area` 必须归绘制器；`rows` 第三槽 `failed` 只给绘制器选色，失败态红仍是既有 `#FF5A5A` 契约；live style（合并未保存的控件值）即取即画、不改 `settings`。交给 [透明实时预览定案](https://github.com/CometDash77/youtubesub/issues/176)：折行逐字节相同只在 rect 相同时成立（内容区宽 622 → 4 行 / 772 → 3 行）→ 画布取 1:1 或离屏按真浮窗 rect 渲染再缩放。
+- [透明实时预览定案：棋盘格画布、预览窗形态、活邻居文本与实时性能](https://github.com/CometDash77/youtubesub/issues/176) — 预览 = 「调参 → 显示」组顶部的一块画布 widget，调 #175 的 `paint_subtitles` 把**当前 cue 的行**按 live style 画进按 `(宽,高,DPR)` 缓存的 `QImage`，贴在一张**画布空间**的棋盘格 tile 上；不写 `settings`、不动浮窗、不画状态行。六条：①画布几何 = 1:1 优先、超宽才降级（`k = canvas_w / 图宽`，下限 0.5，触底退回 1:1 裁剪 + 拖动）；渲染范围 = 整窗 rect、不画状态行（画布高 = 浮窗高 − 24px 带，口径同 `desktop/tests/test_overlay_labels.py:217`）。②棋盘 = **固定贴图**（画布空间、逻辑像素定边长、物理边 `round(边长 × DPR)`，只在 DPR/画布尺寸变化时重建，**不随缩放重绘**）。③帧策略 = 每帧重跑 `rows_for` + `paint_subtitles` 写进按尺寸缓存的 `QImage`、**不限频**、不缓存布局；预览走带 path 的新信号（不触发页脚的 22 字段 `collect_edits()`）、只重绘画布块不整页重排。④浮窗本体**不跟变**（`desktop/suboverlay/debug_window.py:224-226` 不变，保存的原子写盘与取消的丢弃语义零冲突）。⑤只画**当前 cue** 的行（实测浮窗从来不显示上一句/下一句：`desktop/suboverlay/overlay.py:161-190` 只读当前 cue、`history` 只喂 `/status`（`desktop/app.py:180`）、`engine.tick()` 的 payload（`desktop/app.py:168-181`）无未来 cue）；回退示例文本须同时覆盖双语两行。⑥棋盘格 + 一个**默认关**、代码合成、**不进 `settings`** 的「垫一张示例画面」开关（#174 键表保持 6 键）。
+
+
+## Not yet specified
+- **改码落地枝（2026-10-06 部分毕业）**：键名 / 存储格式（RGB 三元素 int list）/ `TUNING_FIELDS` 区间值 / 迁移语义（不动 `default_settings()`、缺键回退）与既有颜色断言的改写方向已由 [外观键定案](https://github.com/CometDash77/youtubesub/issues/174) 定案 —— 内容只存在该票的 Answer 区；断言的具体改法与规格文本由既有 [规格落盘](https://github.com/CometDash77/youtubesub/issues/179) 承接，`_draw_wrapped` 的签名变化由 [共用绘制器定案](https://github.com/CometDash77/youtubesub/issues/175) 承接。本枝不再留未成形的问题。
+- 浮窗右键菜单是否补 `外观` 快捷项（跳外观设置 / 循环切字色之类）—— 挂在键表落地之后才看得清，暂作迷雾。
+- **解冻时点**：#170 已落地（2026-10-06 03:54），落地 effort 何时可起只取决于本图六票是否解完；此处只作记录，不构成本图的票。
+- 浮窗 `Font ±` / `Opacity ±` 两组既有关快捷方式在新键族下的定位（保留 / 改名 / 扩成子菜单）。
+- 字体族在三种显示模式（原文 / 译文 / 双语）与双语上下顺序下的观感一致性是否需要单列复核。
+
+## Out of scope
+- **任何改码**：本图 destination 是交规格，实现落到后续 effort（维护者 2026-10-06 选定 A）。
+- `desktop/suboverlay/settings.py` 的 schema / 持久化语义改动本身——已由 [落地：合并窗口 + 整窗说人话文案](https://github.com/CometDash77/youtubesub/issues/170) 解冻（2026-10-06 03:54 关闭），但改码仍不属本图；本图只产出「解冻后该改成什么」的规格。
+- 译文失败态红色的**是否存在**——它是既有契约（`desktop/tests/test_overlay_labels.py:154-165`），本次只裁「用户自定义字色与它如何共存」，不裁废立。
+- 提示词文本预览的改动（`desktop/suboverlay/settings_page.py:486-505`）——本图只动外观预览，除非 ⑤ 的活邻居裁定的连带影响被单列成票。
+- 调参页 `experimental` 组 5 个「未校准」参数的数值校准——属既有 milestone M，与本图无关。
+
+## 进度
+
+- charting（2026-10-06）：维护者先经六问澄清定下 destination 与五项取舍（六问备选与理由记在 Notes），随后建图并落 6 张子票 + 原生阻塞边。
+- 前置核对（2026-10-06）：`#170` 已落地并关闭（`python -m pytest desktop/tests -q` = 363 passed），`settings.py` 冻结随之解除；`#179` 的唯一剩余阻塞是四张决策票（`#174`–`#177`），其依赖字段读回已不再含 `#170`。本 session 按 wayfinder 工作流逐票解，六票未解完前不动改码。
+- 正文勘误（2026-10-06）：Notes 的「硬阻塞」段改写为「落地前置（已在 2026-10-06 解除）」并补上 #170 关闭与工作区改动未提交两条事实；Out of scope 里「冻结中」的措辞同步改为「已解冻」，Not yet specified 的「解冻时点」同步为「#170 已落地」；边界本身不变。
+
+- 正文结构修复（2026-10-06）：GitHub 侧正文曾被压平成单行（4720 字符，七节标题与各条计划挤在同一行）；已按结构重建、把标题与条目还原为独立行，并以行数 / 最长行两项做回读校验。
+
+- 解票（2026-10-06）：frontier 首位 [外观键定案](https://github.com/CometDash77/youtubesub/issues/174) 已解并 close（research + grilling，assignee CometDash77）—— 6 键定案（`display.*`、RGB 三元素 int list、新 control 种类 `font`、六键全进 `TUNING_FIELDS` 16→22、不动 `default_settings()`），探针 `.scratch/issue-174-keytable-probe.py` 33 PASS + 8 EVIDENCE-OK；译文默认色勘误为 `#FFE082`。同步本图：Decisions so far 追加指针、计划段 6 条链接由 `PLACEHOLDER_T1..T6` 修为本图六票并把 #174 那条打勾、Not yet specified 的「改码落地枝」毕业（右键菜单那条留作迷雾）、补上缺失的 178→179 原生依赖边（正文原写「blocked by 上列五票」但边只有四票）。`CONTEXT.md` 补「浮窗外观键」术语块。
+
+- 解票（2026-10-06）：frontier 第二位 [共用绘制器定案](https://github.com/CometDash77/youtubesub/issues/175) 已解并 close（research + grilling，assignee CometDash77）—— 接缝定为新模块 `desktop/suboverlay/overlay_paint.py` 的 4 个无状态函数 + `content_area`；探针 `.scratch/wayfinder/issue-175/probe-175-shared-painter.py`（输出 `.scratch/wayfinder/issue-175/probe-output.txt`）**14 PASS / 0 FAIL**：10 个场景与真浮窗离屏渲染逐字节相同、状态行 1064 像素全落在底部 24px 带内、hint 不归绘制器则差 2528 像素、live style 绿像素 2704 / 黄 0、`rows_for` 与 `_display_rows` 12 例矩阵 0 不一致；基线 `python -m pytest desktop/tests -q` = 367 passed。同步本图：计划段 #175 打勾、Decisions so far 追加指针；**本轮无迷雾毕业、无新增票、无 scope 变动** —— 「字体族在三种显示模式与双语顺序下的观感一致性」那条的机制部分已被本票证实（同一绘制器 + 逐行按角色选色，模式与顺序都不改变绘制路径），剩下的只是字体族本身的字形覆盖与缺失回退，归 [取色与字体选择的交互定案](https://github.com/CometDash77/youtubesub/issues/177) 的 ⑤⑥；右键菜单 `外观` 快捷项与 `Font ±` / `Opacity ±` 定位两条仍挂在键表落地之后，维持迷雾。#179 的剩余阻塞为 #176 / #177 / #178 三票。
+
+- 解票（2026-10-06）：frontier 第三位 [透明实时预览定案](https://github.com/CometDash77/youtubesub/issues/176) 已解并 close（grilling，assignee CometDash77）—— 六条全部定案（①画布几何 1:1 优先超宽降级；②棋盘固定贴图画布空间；③帧策略每帧重跑布局+缓存 QImage、不限频、新信号带 path；④浮窗本体不跟变；⑤只画当前 cue；⑥默认关的示例画面开关不进 settings），Answer 区在票内落盘；依据引自 #175 的探针（14 PASS / 0 FAIL），基线 `python -m pytest desktop/tests -q` = 367 passed。同步本图：计划段 #176 打勾、Decisions so far 追加指针、Notes 的 ⑤ 措辞勘误（「活邻居句子」→「当前 cue 的行」，事实依据在 #176 Answer 第 5 条）。**「活邻居」一词归提示词预览**（`desktop/suboverlay/settings_page.py:25-28` 的 `PREVIEW_PREV_EXAMPLE`/`PREVIEW_NEXT_EXAMPLE`、`:498-501`「携带上下文」），Out of scope 里那条「提示词预览的改动……除非 ⑤ 的活邻居裁定的连带影响被单列成票」随之落地：**不单列成票**，[设置调试合并 map](https://github.com/CometDash77/youtubesub/issues/164) 的那条 Out of scope 遗留已在 #164 上以 comment 收尾（不重开 #164）。#179 的剩余阻塞为 [取色与字体选择的交互定案](https://github.com/CometDash77/youtubesub/issues/177) / [制作供维护者肉眼复核的截图证据](https://github.com/CometDash77/youtubesub/issues/178) 两票。
+
+<!-- 做到哪一步了，在这里一行一行记 -->
+
+

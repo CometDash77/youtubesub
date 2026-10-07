@@ -1,0 +1,956 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>调试窗口原型 #157 — 抛弃式稿子</title>
+<!--
+  ===========================================================================
+  抛弃式原型（票 #157）— 不是实现，不是交付物，看完就扔。
+  ---------------------------------------------------------------------------
+  要回答的问题：调试窗口到底长什么样？
+    · 窗口骨架（标题区 / 两页切换 / 底部动作区）
+    · 调参页布局（分组、控件密度、校验提示）
+    · 排障页布局（状态块、错误块、只读信息密度）
+    · 磨砂两版观感对比（真磨砂 / 降级伪磨砂）
+    · 状态色示例（正常 / 进行中 / 错误 / 空）
+
+  三套变体，底部悬浮条切换（键盘 ← / → 也可以）：
+    A — 单列设置式      B — 开发者控制台      C — 仪表盘卡片流
+
+  运行：双击本文件即可，零依赖零构建。或：
+    start desktop\prototype\157-debug-window\debug-window-prototype.html
+
+  链接开关（也可以点底栏）：
+    ?variant=A|B|C    ?page=settings|diag    ?frost=real|pseudo
+    ?bg=busy|plain    ?legend=1    ?compare=1    ?bar=0
+
+  维护者裁定（2026-10-03）——
+  · 实施基准 = 变体 A「单列设置式」；B / C 留作被否决的对照，**不要再从它们出发实现**。
+  · A 的两页内容已换成决策票的真结论：调参页 = #155 的逐字段表（显示外观 / 网络与服务 /
+    实验·未校准），排障页 = #156 的 D1~D7（常驻状态条 + 四分区 + 事件留痕 + 刷新控件）。
+  · B / C 的内容**仍是密度占位**，没按 #155 / #156 更新（它们只用来比结构，不拿来比字段）。
+  · 「真磨砂」在浏览器里是 backdrop-filter 的【模拟】，不是 Windows 合成器。
+    真值以 #154 的实测截图为准 —— 按 ?compare=1 并排看。
+
+  出处与捕获：色板与磨砂配方来源 wayfinder/debug-window-style-tokens.md；
+  本目录（含本文件与渲染截图）已提交到抛弃式分支 prototype/157-debug-window。
+  ===========================================================================
+-->
+<style>
+:root{
+  --paper:#E6E3DA; --card:#E0DDD2;
+  --indigo:#343E68; --indigo-deep:#2D3662;
+  --pine:#38544D;  --pine-deep:#355044;
+  --terra:#B94D37;  --terra-deep:#8F3A29;
+  --mustard:#CCA13D;
+  --line:rgba(56,84,77,.20);
+  --line-strong:rgba(52,62,104,.28);
+  --font:"Microsoft YaHei UI","Segoe UI",system-ui,sans-serif;
+  --mono:"Cascadia Mono",Consolas,monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;min-height:100%}
+body{font-family:var(--font);color:var(--indigo-deep);-webkit-font-smoothing:antialiased}
+
+/* ---------- 背景（判磨砂必须有个忙背景） ---------- */
+.scene{position:fixed;inset:0;z-index:0}
+.scene.plain{background:linear-gradient(160deg,#DCD8CE 0%,#CFCBC1 60%,#C6C2B8 100%)}
+.scene.busy{background:linear-gradient(24deg,#B94D37 0%,#C2533C 45%,#8F3A29 100%)}
+.scene .art{position:absolute}
+.scene.plain .art{display:none}
+.art-taskbar{left:0;top:0;width:100%;height:26px;background:#1E2140}
+.art-taskbar i{position:absolute;top:6px;width:14px;height:14px;border-radius:3px;background:rgba(237,234,226,.78)}
+.art-dock{left:0;bottom:0;width:100%;height:46px;background:#1E2140}
+.art-dock i{position:absolute;bottom:16px;width:26px;height:26px;border-radius:7px;background:rgba(237,234,226,.32)}
+.art-circle{left:3%;bottom:12%;width:230px;height:230px;border-radius:50%;background:#fff}
+.art-teal{right:4%;bottom:9%;width:290px;height:290px;border-radius:50%;background:#2E9E82}
+.art-stripes{inset:0;background-image:repeating-linear-gradient(115deg,rgba(255,255,255,.15) 0 2px,rgba(255,255,255,0) 2px 26px)}
+
+.stage{position:relative;z-index:1;min-height:100vh;display:flex;align-items:flex-start;justify-content:center;padding:34px 24px 120px}
+
+/* ---------- 窗口外壳 + 两版磨砂 ---------- */
+.win{position:relative;display:none;flex-direction:column;border-radius:24px;overflow:hidden;
+     color:var(--indigo-deep);box-shadow:inset 0 0 0 1px rgba(255,255,255,.43),0 24px 48px rgba(45,54,98,.30)}
+.win.active{display:flex}
+/* 真磨砂（模拟）：重模糊 + 零调色，跟 #154 配方对位 */
+.win.frost-real{background:rgba(230,227,218,.45);backdrop-filter:blur(26px) saturate(1.05);-webkit-backdrop-filter:blur(26px) saturate(1.05)}
+/* 降级伪磨砂：rgba(246,243,235,205) + 大圆角 + 柔阴影 + 1px 内描边 */
+.win.frost-pseudo{background:rgba(246,243,235,.804);backdrop-filter:none;-webkit-backdrop-filter:none}
+.proto-badge{position:absolute;top:0;left:0;z-index:5;background:var(--terra);color:var(--paper);
+  font-size:9.5px;font-weight:700;letter-spacing:.6px;padding:3px 9px;border-bottom-right-radius:10px}
+
+.win-head{display:flex;align-items:flex-start;gap:10px;padding:16px 20px 10px}
+.win-title{font-size:15px;font-weight:700}
+.win-sub{font-size:10.5px;color:var(--pine-deep);margin-top:3px}
+.win-close{margin-left:auto;flex:none;width:24px;height:24px;border-radius:12px;border:1px solid var(--line);
+  background:transparent;color:var(--indigo);cursor:pointer;font-size:13px;line-height:1;font-family:inherit}
+.win-close:hover{background:rgba(52,62,104,.10)}
+.head-tools{display:flex;align-items:center;gap:8px;padding:0 20px 10px}
+
+.seg{display:inline-flex;padding:3px;border-radius:11px;background:rgba(52,62,104,.08);border:1px solid var(--line)}
+.seg button{border:0;background:transparent;font-family:inherit;font-size:12px;padding:6px 18px;border-radius:8px;
+  color:var(--pine-deep);cursor:pointer}
+.seg button[aria-selected="true"]{background:var(--indigo);color:var(--paper);font-weight:600}
+
+.pages{flex:1;overflow-y:auto;padding:0 20px}
+.page{display:none}
+.page.active{display:block}
+
+/* ---------- 控件 ---------- */
+.group{padding:13px 0;border-bottom:1px solid var(--line)}
+.group:last-child{border-bottom:0}
+.group-title{font-size:12px;font-weight:700;color:var(--indigo)}
+.group-note{font-size:10.5px;color:var(--pine-deep);margin:3px 0 9px;line-height:1.5}
+.row{display:flex;align-items:center;gap:12px;padding:5px 0}
+.row-label{width:96px;flex:none;font-size:12px;color:var(--pine-deep)}
+.row-ctl{flex:1;display:flex;align-items:center;gap:8px;min-width:0}
+.inp,.sel{flex:1;min-width:0;font-family:inherit;font-size:12px;padding:6px 9px;border-radius:8px;
+  border:1px solid var(--line-strong);background:rgba(255,255,255,.55);color:var(--indigo-deep)}
+.inp.mono{font-family:var(--mono);font-size:11px}
+.inp.invalid{border-color:var(--terra);background:rgba(185,77,55,.09)}
+.num{width:62px;flex:none;text-align:right;font-family:var(--mono);font-size:12px;padding:6px 8px;
+  border-radius:8px;border:1px solid var(--line-strong);background:rgba(255,255,255,.55);color:var(--indigo-deep)}
+.unit{font-size:10.5px;color:var(--pine-deep);flex:none}
+.sw{position:relative;flex:none;width:38px;height:21px;border-radius:11px;border:0;cursor:pointer;
+  background:var(--indigo);padding:0}
+.sw i{position:absolute;top:2px;left:19px;width:17px;height:17px;border-radius:50%;background:var(--paper)}
+.sw.off{background:rgba(52,62,104,.24)}
+.sw.off i{left:2px}
+.hint{display:flex;gap:6px;align-items:flex-start;font-size:10.5px;line-height:1.5;margin:3px 0 2px 120px}
+.hint .dot{width:7px;height:7px;border-radius:50%;margin-top:4px;flex:none;background:currentColor}
+.hint.err{color:var(--terra-deep)}
+.hint.warn{color:var(--pine-deep)}
+
+/* ---------- 状态 / 错误 / 只读信息 ---------- */
+.blocks{display:flex;flex-direction:column;gap:9px;padding:13px 0}
+.block{display:flex;gap:11px;align-items:center;padding:10px 13px;border-radius:12px;
+  background:rgba(224,221,210,.62);border:1px solid var(--line);border-left:4px solid var(--pine)}
+.block.busy{border-left-color:var(--mustard)}
+.block.err{border-left-color:var(--terra)}
+.block.idle{border-left-color:rgba(52,62,104,.25)}
+.block-main{font-size:14px;font-weight:700}
+.block-sub{font-size:10.5px;color:var(--pine-deep);margin-top:2px}
+.block-val{margin-left:auto;flex:none;font-family:var(--mono);font-size:11px;color:var(--pine-deep)}
+.pill{display:inline-flex;align-items:center;gap:5px;flex:none;font-size:10.5px;font-weight:600;
+  padding:3px 10px;border-radius:999px;border:1px solid transparent}
+.pill.ok{background:var(--pine);color:var(--paper)}
+.pill.busy{background:var(--mustard);color:var(--indigo-deep)}
+.pill.err{background:var(--terra);color:var(--paper)}
+.pill.idle{background:transparent;border-color:var(--line-strong);color:var(--pine-deep)}
+
+.errbox{border-radius:12px;border:1px solid rgba(185,77,55,.35);border-left:4px solid var(--terra);
+  background:rgba(185,77,55,.07);padding:10px 13px;margin:5px 0 12px}
+.errbox-title{font-size:12px;font-weight:700;color:var(--terra-deep);display:flex;align-items:center;gap:8px}
+.errbox-title .when{margin-left:auto;font-family:var(--mono);font-size:10px;font-weight:400;color:var(--pine-deep)}
+.errbox-body{font-size:10.5px;color:var(--pine-deep);margin-top:4px;line-height:1.6}
+.card pre{margin:9px 0 0;font-family:var(--mono);font-size:10px;background:rgba(255,255,255,.5);
+  border:1px solid var(--line);border-radius:8px;padding:8px;color:var(--indigo-deep);
+  white-space:pre-wrap;word-break:break-all}
+.errbox pre{margin:8px 0 0;font-family:var(--mono);font-size:10px;background:rgba(255,255,255,.5);
+  border:1px solid var(--line);border-radius:8px;padding:8px;color:var(--indigo-deep);overflow-x:auto}
+
+.kv{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;font-size:10.5px;padding:11px 0 14px;margin:0}
+.kv dt{color:var(--pine-deep)}
+.kv dd{margin:0;font-family:var(--mono);text-align:right;color:var(--indigo-deep);overflow-wrap:anywhere}
+.sec-title{font-size:11px;font-weight:700;color:var(--indigo);letter-spacing:.3px;padding:12px 0 2px;
+  border-top:1px solid var(--line);margin-top:6px}
+.sec-title:first-child{border-top:0;margin-top:0}
+
+/* ---------- 底部动作区 ---------- */
+.actions{display:flex;align-items:center;gap:9px;padding:11px 20px;border-top:1px solid var(--line);
+  background:rgba(224,221,210,.42)}
+.actions .spacer{flex:1}
+.actions .saved{font-size:10.5px;color:var(--pine-deep);font-family:var(--mono)}
+.btn{font-family:inherit;font-size:12px;padding:7px 16px;border-radius:9px;border:1px solid var(--line-strong);
+  background:transparent;color:var(--indigo);cursor:pointer}
+.btn:hover{background:rgba(52,62,104,.08)}
+.btn.primary{background:var(--indigo);border-color:var(--indigo);color:var(--paper);font-weight:600}
+.btn.primary:hover{background:var(--indigo-deep)}
+.btn.ghost{border-color:transparent}
+.btn.danger{color:var(--terra-deep);border-color:rgba(185,77,55,.4)}
+
+/* ---------- 变体 A：排障页状态条 / 刷新 / 事件留痕 / 折叠 ---------- */
+.sbar{display:flex;align-items:center;gap:9px;padding:9px 13px;border-radius:12px;
+  font-size:12px;font-weight:600;margin-bottom:9px}
+.sbar.ok{background:var(--pine);color:var(--paper)}
+.sbar.err{background:var(--terra);color:var(--paper)}
+.sbar .age{margin-left:auto;font-family:var(--mono);font-size:10px;font-weight:400}
+.toolrow{display:flex;align-items:center;gap:6px;margin:0 0 9px}
+.toolrow .lbl{font-size:10.5px;color:var(--pine-deep)}
+.chip{font-family:inherit;font-size:10.5px;padding:3px 9px;border-radius:999px;cursor:pointer;
+  border:1px solid var(--line-strong);background:transparent;color:var(--pine-deep)}
+.chip[aria-selected="true"]{background:var(--indigo);border-color:var(--indigo);color:var(--paper)}
+.chip.go{margin-left:auto;border-style:solid}
+.group-head{display:flex;align-items:center;gap:8px}
+.tag{font-size:9.5px;font-weight:700;padding:2px 7px;border-radius:999px;flex:none;
+  background:var(--mustard);color:var(--indigo-deep)}
+.tag.restart{background:rgba(52,62,104,.15);color:var(--indigo);font-weight:600}
+.swatch{width:26px;height:26px;flex:none;border-radius:8px;border:1px solid var(--line-strong)}
+.slider{flex:1;min-width:0;accent-color:var(--indigo)}
+.zone{padding:10px 0;border-bottom:1px solid var(--line)}
+.zone:last-child{border-bottom:0;padding-bottom:0}
+.zone-title{font-size:12px;font-weight:700;color:var(--indigo);display:flex;align-items:center;gap:8px;margin-bottom:2px}
+.zone .kv{padding:8px 0 6px}
+.zone .kv dt,.zone .kv dd{font-size:10.5px}
+.evlist{margin:4px 0 0;padding:0;list-style:none}
+.evlist li{display:flex;gap:8px;align-items:flex-start;padding:5px 0;border-bottom:1px solid var(--line);
+  font-size:10.5px;line-height:1.5}
+.evlist li:last-child{border-bottom:0}
+.evlist .t{flex:none;font-family:var(--mono);color:var(--pine-deep)}
+.evlist .ago{flex:none;font-family:var(--mono);color:var(--pine-deep);opacity:.72;min-width:30px;text-align:right}
+.evlist .what{flex:1}
+.evlist .mark{flex:none;width:8px;height:8px;border-radius:50%;margin-top:4px;background:rgba(52,62,104,.3)}
+.evlist .mark.ok{background:var(--pine)}
+.evlist .mark.busy{background:var(--mustard)}
+.evlist .mark.err{background:var(--terra)}
+.ev-note{font-size:10px;color:var(--pine-deep);opacity:.88;line-height:1.5;padding:1px 0 5px}
+.fold{display:flex;align-items:center;gap:7px;width:100%;text-align:left;font-family:inherit;
+  font-size:10.5px;color:var(--pine-deep);background:transparent;cursor:pointer;margin-top:7px;
+  border:1px dashed var(--line-strong);border-radius:10px;padding:8px 11px}
+.fold b{color:var(--indigo)}
+.hidden{display:none!important}
+.actions .a-set,.actions .a-diag{display:flex;align-items:center;gap:9px;flex:1}
+.actions .a-diag{border-top:0}
+.actions .btn{flex:none;white-space:nowrap}
+.actions .saved{flex:1;min-width:0}
+
+/* ---------- 变体 B：左栏 + 双栏 ---------- */
+.win.v2{flex-direction:row;width:900px;height:624px;padding:0}
+.v2-side{width:184px;flex:none;border-right:1px solid var(--line);background:rgba(224,221,210,.42);
+  padding:14px 11px;display:flex;flex-direction:column;overflow-y:auto}
+.v2-side .win-title{font-size:14px;padding:2px 8px}
+.v2-side .win-sub{padding:0 8px 6px}
+.navsec{font-size:9.5px;letter-spacing:1.2px;color:var(--pine-deep);opacity:.75;margin:13px 0 4px;padding-left:8px}
+.navitem{display:flex;align-items:center;gap:8px;font-size:12px;padding:6px 9px;border-radius:8px;
+  cursor:pointer;color:var(--pine-deep);border:0;background:transparent;font-family:inherit;text-align:left;width:100%}
+.navitem:hover{background:rgba(52,62,104,.08)}
+.navitem[aria-selected="true"]{background:var(--indigo);color:var(--paper);font-weight:600}
+.navitem .gdot{width:6px;height:6px;border-radius:50%;background:currentColor;opacity:.7;flex:none}
+.v2-body{flex:1;display:flex;flex-direction:column;min-width:0}
+.v2-toolbar{display:flex;align-items:center;gap:10px;padding:13px 18px 9px;border-bottom:1px solid var(--line)}
+.v2-toolbar .tt{font-size:13px;font-weight:700}
+.v2-toolbar .ts{font-size:10.5px;color:var(--pine-deep)}
+.v2-toolbar .spacer{flex:1}
+.vgroup{display:none}
+.vgroup.active{display:block}
+.dview{display:none}
+.dview.active{display:block}
+.compact .row{align-items:flex-start;flex-direction:column;gap:4px;padding:7px 0}
+.compact .row-label{width:auto;font-weight:600;color:var(--indigo)}
+.compact .row-ctl{width:100%}
+.compact .hint{margin-left:0}
+.caps{display:flex;gap:8px;flex-wrap:wrap;padding:12px 0 4px}
+.caps .cap{display:flex;align-items:center;gap:7px;font-size:10.5px;padding:6px 11px;border-radius:10px;
+  background:rgba(224,221,210,.55);border:1px solid var(--line)}
+.caps .cap b{font-weight:600}
+.panes{display:grid;grid-template-columns:1fr 1fr;gap:14px;padding:12px 0}
+.pane{border:1px solid var(--line);border-radius:12px;background:rgba(224,221,210,.38);padding:11px 12px;min-width:0}
+.pane h4{margin:0 0 8px;font-size:11px;color:var(--indigo);letter-spacing:.3px}
+.evt{display:flex;gap:9px;font-size:10.5px;padding:5px 0;border-bottom:1px dashed var(--line);line-height:1.5}
+.evt:last-child{border-bottom:0}
+.evt .t{font-family:var(--mono);color:var(--pine-deep);flex:none}
+.evt .lv{flex:none;font-weight:700;width:26px}
+.evt .lv.e{color:var(--terra-deep)}
+.evt .lv.w{color:var(--pine-deep)}
+.evt .lv.i{color:var(--indigo)}
+.evt .msg{flex:1;min-width:0}
+.v2-foot{display:flex;align-items:center;gap:9px;padding:9px 18px;border-top:1px solid var(--line);
+  background:rgba(224,221,210,.42)}
+.v2-foot .spacer{flex:1}
+.v2-foot .saved{font-family:var(--mono);font-size:10.5px;color:var(--pine-deep)}
+
+/* ---------- 变体 C：卡片流 ---------- */
+.win.v3{width:744px;height:600px}
+.v3-head{padding:18px 20px 4px;text-align:center}
+.v3-head .win-title{font-size:19px;letter-spacing:.5px}
+.v3-head .win-sub{margin-top:3px}
+.v3-tabs{display:flex;justify-content:center;gap:8px;padding:11px 0 4px}
+.pilltab{border:1px solid var(--line-strong);background:transparent;font-family:inherit;font-size:12px;
+  padding:7px 22px;border-radius:999px;color:var(--pine-deep);cursor:pointer}
+.pilltab[aria-selected="true"]{background:var(--indigo);border-color:var(--indigo);color:var(--paper);font-weight:600}
+.cards{display:grid;grid-template-columns:1fr 1fr;gap:11px;padding:9px 0 6px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:12px 13px;
+  box-shadow:0 2px 6px rgba(45,54,98,.07);min-width:0}
+.card.wide{grid-column:1 / -1}
+.card-title{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:700;margin-bottom:9px}
+.card-title .pill{margin-left:auto}
+.card .row{padding:4px 0}
+.card .row-label{width:78px;font-size:11px}
+.card .hint{margin-left:86px}
+.card.empty{border-style:dashed;background:transparent;min-height:112px;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:5px;color:var(--pine-deep);font-size:11px}
+.card.empty .ico{width:22px;height:22px;border-radius:50%;border:1.5px dashed var(--pine-deep);opacity:.6}
+.stateband{display:flex;align-items:center;gap:12px;border-radius:16px;padding:13px 16px;
+  background:var(--mustard);color:var(--indigo-deep)}
+.stateband .big{font-size:17px;font-weight:700}
+.stateband .sm{font-size:11px;opacity:.85}
+.stateband .spacer{flex:1}
+.stateband .spin{width:16px;height:16px;border-radius:50%;border:2.5px solid rgba(45,54,98,.25);
+  border-top-color:var(--indigo-deep);flex:none}
+.banner{display:flex;gap:8px;align-items:flex-start;font-size:10.5px;line-height:1.5;
+  background:var(--mustard);color:var(--indigo-deep);border-radius:10px;padding:8px 10px;margin:7px 0 3px}
+.banner b{font-weight:700}
+.card.err{border-left:4px solid var(--terra)}
+.big-num{font-family:var(--mono);font-size:22px;font-weight:700;line-height:1.1}
+.big-num small{font-size:11px;font-weight:400;color:var(--pine-deep);margin-left:3px}
+
+/* ---------- 底部悬浮切换条（明显不属于设计本身） ---------- */
+.bar{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);z-index:50;display:flex;align-items:center;
+  gap:5px;background:#1E2140;color:#EDEAE2;border-radius:999px;padding:7px 11px;
+  box-shadow:0 12px 34px rgba(0,0,0,.5),0 0 0 1px rgba(255,255,255,.22);font-family:var(--font);white-space:nowrap}
+.bar.hidden{display:none}
+.bar .tag{font-size:9.5px;letter-spacing:.6px;color:rgba(237,234,226,.55);padding:0 8px 0 4px;
+  border-right:1px solid rgba(255,255,255,.18);margin-right:4px}
+.bar button{font-family:inherit;font-size:11.5px;color:inherit;background:rgba(255,255,255,.10);border:0;
+  border-radius:999px;padding:5px 11px;cursor:pointer}
+.bar button:hover{background:rgba(255,255,255,.22)}
+.bar .arrow{font-size:14px;padding:5px 13px}
+.bar .label{font-size:12px;font-weight:600;padding:0 10px;min-width:168px;text-align:center}
+.bar .sep{width:1px;height:18px;background:rgba(255,255,255,.22);margin:0 4px}
+
+/* ---------- 覆盖层：图例 / 对照 ---------- */
+.ovl{position:fixed;inset:0;z-index:60;background:rgba(30,33,64,.55);display:none;
+  align-items:center;justify-content:center;padding:22px}
+.ovl.open{display:flex}
+.ovl-card{background:#F3F0E8;border-radius:18px;width:100%;max-width:880px;max-height:88vh;overflow:auto;
+  padding:20px 22px;box-shadow:0 30px 60px rgba(0,0,0,.4);position:relative}
+.ovl-card h2{margin:0 0 3px;font-size:15px}
+.ovl-card .lead{margin:0 0 14px;font-size:11px;color:var(--pine-deep);line-height:1.6}
+.ovl-close{position:absolute;top:12px;right:14px;width:26px;height:26px;border-radius:13px;border:1px solid var(--line);
+  background:transparent;color:var(--indigo);cursor:pointer;font-family:inherit;font-size:13px;line-height:1}
+.swatches{display:grid;grid-template-columns:repeat(auto-fill,minmax(146px,1fr));gap:9px}
+.sw-card{border:1px solid var(--line);border-radius:12px;overflow:hidden;background:#fff}
+.sw-chip{height:46px}
+.sw-meta{padding:6px 9px;font-size:10px;line-height:1.55;color:var(--pine-deep)}
+.sw-meta b{display:block;font-size:11.5px;color:var(--indigo-deep)}
+.sw-meta code{font-family:var(--mono);font-size:9.5px}
+.states{display:grid;grid-template-columns:repeat(4,1fr);gap:9px;margin-top:12px}
+.state-card{border:1px solid var(--line);border-radius:12px;background:#fff;padding:10px}
+.state-card .cap{font-size:10px;color:var(--pine-deep);margin-top:7px;line-height:1.5}
+.cmp{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.cmp figure{margin:0}
+.cmp img{width:100%;display:block;border-radius:10px;border:1px solid var(--line)}
+.cmp figcaption{font-size:10.5px;color:var(--pine-deep);margin-top:6px;line-height:1.55}
+.note{margin-top:14px;font-size:10.5px;line-height:1.65;color:var(--pine-deep);
+  border-top:1px solid var(--line);padding-top:11px}
+.note b{color:var(--indigo-deep)}
+</style>
+</head>
+<body>
+
+<div class="scene busy" id="scene">
+  <div class="art art-stripes"></div>
+  <div class="art art-teal"></div>
+  <div class="art art-circle"></div>
+  <div class="art art-taskbar"><i style="left:10px"></i><i style="left:32px"></i><i style="left:54px"></i></div>
+  <div class="art art-dock"><i style="left:34%"></i><i style="left:38%"></i><i style="left:42%"></i><i style="left:46%"></i></div>
+</div>
+
+<div class="stage">
+
+<!-- ==================== 变体 A — 单列设置式 ==================== -->
+<div class="win v1 active" data-variant="A" style="width:560px;height:672px">
+  <div class="proto-badge">稿子 · 非实现</div>
+  <div class="win-head">
+    <div>
+      <div class="win-title">调试</div>
+      <div class="win-sub">v0.4.2 · Windows 10 19045 · 磨砂：真</div>
+    </div>
+    <button class="win-close" title="关闭">×</button>
+  </div>
+  <div class="head-tools">
+    <div class="seg">
+      <button data-page-btn="settings" aria-selected="true">调参</button>
+      <button data-page-btn="diag" aria-selected="false">排障</button>
+    </div>
+  </div>
+
+  <div class="pages">
+    <div class="page active" data-page="settings">
+      <div class="group">
+        <div class="group-head"><div class="group-title">显示外观</div></div>
+        <div class="group-note">display.mode / order / history_lines / font_bold / stroke / bg_color / bg_opacity。点「确定」后本页会通知浮窗重读一次设置。</div>
+        <div class="row"><div class="row-label">双语模式</div><div class="row-ctl"><select class="sel"><option>双语（原文 + 译文）</option><option>只看译文</option><option>只看原文</option></select></div></div>
+        <div class="row"><div class="row-label">上下顺序</div><div class="row-ctl"><select class="sel"><option>译文在上</option><option>原文在上</option></select></div></div>
+        <div class="hint warn"><span class="dot"></span><span>模式不是「双语」时，上下顺序没有意义 —— 这一行会置灰并说明原因，不弹提示。</span></div>
+        <div class="row"><div class="row-label">历史行数</div><div class="row-ctl"><input class="num" value="2"><span class="unit">0–10 行；0 = 只留当前一条</span></div></div>
+        <div class="row"><div class="row-label">加粗范围</div><div class="row-ctl"><select class="sel"><option>都不加粗</option><option>只加粗译文</option><option>只加粗原文</option><option>原文译文都加粗</option></select></div></div>
+        <div class="row"><div class="row-label">描边宽度</div><div class="row-ctl"><input class="num" value="1.5"><span class="unit">0–10 px（步进 0.5）；0 = 不描边</span></div></div>
+        <div class="row"><div class="row-label">背景色</div><div class="row-ctl"><span class="swatch" style="background:#000"></span><input class="inp mono" value="#000000"></div></div>
+        <div class="row"><div class="row-label">背景不透明度</div><div class="row-ctl"><input class="slider" type="range" min="0" max="255" value="150"><input class="num" value="150"></div></div>
+      </div>
+      <div class="group">
+        <div class="group-head"><div class="group-title">网络与服务</div></div>
+        <div class="group-note">provider.timeout_s / max_concurrent、server.port。标了「重启后生效」的两项要重启 App；本页不会替你重启。</div>
+        <div class="row"><div class="row-label">请求超时</div><div class="row-ctl"><input class="num" value="60"><span class="unit">1–600 秒</span></div></div>
+        <div class="row"><div class="row-label">并发上限</div><div class="row-ctl"><input class="num" value="5"><span class="unit">1–16 路</span><span class="tag restart">重启后生效</span></div></div>
+        <div class="row"><div class="row-label">服务端口</div><div class="row-ctl"><input class="num" value="9877"><span class="unit">1–65535</span><span class="tag restart">重启后生效</span></div></div>
+      </div>
+      <div class="group">
+        <div class="group-head"><div class="group-title">实验 / 未校准</div><span class="tag">未校准</span></div>
+        <div class="group-note">prefetch.lead_s / max_groups / seek_debounce_ms、batch.max_groups / max_chars。护栏值只为「给足空间、挡住手滑」，没有实测依据；等真 Key 到位后按「译文就绪率」校准再回填。Seek 静默等待界面按秒，落盘仍写 _ms。</div>
+        <div class="row"><div class="row-label">预取提前量</div><div class="row-ctl"><input class="num" value="90"><span class="unit">0–600 秒</span></div></div>
+        <div class="row"><div class="row-label">预取组数上限</div><div class="row-ctl"><input class="num" value="20"><span class="unit">1–200</span></div></div>
+        <div class="row"><div class="row-label">Seek 静默等待</div><div class="row-ctl"><input class="num" value="0.4"><span class="unit">0–5 秒</span></div></div>
+        <div class="row"><div class="row-label">批量组数</div><div class="row-ctl"><input class="num" value="8"><span class="unit">1–64</span></div></div>
+        <div class="row"><div class="row-label">批量字符上限</div><div class="row-ctl"><input class="num" value="8000"><span class="unit">100–64000（步进 500）</span></div></div>
+      </div>
+    </div>
+
+    <div class="page" data-page="diag">
+      <div class="sbar ok">已连接 127.0.0.1:9877<span class="age">最近成功 12:04:11（1 秒前）</span></div>
+      <div class="toolrow">
+        <span class="lbl">刷新</span>
+        <button class="chip">0.5s</button><button class="chip" aria-selected="true">1s</button><button class="chip">2s</button>
+        <button class="chip go">立即刷新</button>
+      </div>
+
+      <div class="zone">
+        <div class="zone-title">① 连接与帧<span class="pill ok">正常</span></div>
+        <dl class="kv">
+          <dt>服务可达</dt><dd>成功 · 127.0.0.1:9877</dd>
+          <dt>累计收帧 / 坏帧</dt><dd>32 044 / 0</dd>
+          <dt>服务端启动错误</dt><dd>—</dd>
+          <dt>字幕来源数</dt><dd>1（活跃：youtube.com/watch?v=…）</dd>
+        </dl>
+        <div class="errbox">
+          <div class="errbox-title">页面钩子错误 · hook_error<span class="when">12:04:02</span></div>
+          <div class="errbox-body">钩子装上了但字幕响应是空的 —— 原文里已有标记，可直接选中复制。</div>
+          <pre>[NO CAPTION BODY]  response 200, body length 0</pre>
+        </div>
+      </div>
+
+      <div class="zone">
+        <div class="zone-title">② 播放与字幕<span class="pill busy">注意</span></div>
+        <dl class="kv">
+          <dt>字幕状态</dt><dd>no_cues</dd>
+          <dt>视频标题</dt><dd>【示例】三小时深度访谈 · 第 2 段</dd>
+          <dt>播放</dt><dd>在播 · 1.25×</dd>
+          <dt>显示模式 / 顺序</dt><dd>双语 · 译文在上</dd>
+          <dt>当前原文</dt><dd>…这一跳作者其实埋了一个反转。</dd>
+          <dt>当前译文</dt><dd>…（还没有译文）</dd>
+          <dt>点击穿透</dt><dd>开</dd>
+        </dl>
+      </div>
+
+      <div class="zone">
+        <div class="zone-title">③ 翻译队列<span class="pill ok">ready</span></div>
+        <dl class="kv">
+          <dt>可翻译</dt><dd>是（trans_available）</dd>
+          <dt>翻译态</dt><dd>ready</dd>
+          <dt>排队 / 在途</dt><dd>0 / 0</dd>
+          <dt>退避中</dt><dd>否</dd>
+        </dl>
+        <button class="fold">▸ <b>连通性测试报告</b> · 默认折叠，展开才占位置</button>
+      </div>
+
+      <div class="zone">
+        <div class="zone-title">④ 事件列表<button class="chip go">复制全部</button></div>
+        <div class="ev-note">本页打开于 12:04:10，此前事件未记录。</div>
+        <ul class="evlist">
+          <li><span class="mark err"></span><span class="t">12:04:02</span><span class="ago">9s</span><span class="what">页面钩子错误出现：无 →「[NO CAPTION BODY]」</span></li>
+          <li><span class="mark busy"></span><span class="t">12:03:57</span><span class="ago">14s</span><span class="what">帧计数停滞：收帧 32 044 连续 30 秒零增长（字幕状态 ok）</span></li>
+          <li><span class="mark ok"></span><span class="t">12:03:44</span><span class="ago">27s</span><span class="what">连接翻转：不通 → 通</span></li>
+          <li><span class="mark ok"></span><span class="t">12:03:12</span><span class="ago">59s</span><span class="what">翻译态翻转：translating → ready</span></li>
+          <li><span class="mark idle"></span><span class="t">12:02:58</span><span class="ago">1m13s</span><span class="what">字幕状态翻转：ok → no_cues</span></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="actions">
+    <div class="a-set">
+      <span class="saved">改完点「确定」才落盘一次；「取消」丢弃本页改动</span>
+      <div class="spacer"></div>
+      <button class="btn">取消</button>
+      <button class="btn primary">确定</button>
+    </div>
+    <div class="a-diag hidden">
+      <span class="saved">只读页 —— 不改任何设置</span>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== 变体 B — 开发者控制台 ==================== -->
+<div class="win v2" data-variant="B">
+  <div class="proto-badge">稿子 · 非实现</div>
+  <div class="v2-side">
+    <div class="win-title">调试</div>
+    <div class="win-sub">v0.4.2 · 19045</div>
+    <div class="navsec">调参</div>
+    <button class="navitem" data-nav-page="settings" data-goto-group="conn" aria-selected="true"
+      data-title="服务连接" data-note="改完要点右下「保存到配置」才落盘"><span class="gdot"></span>服务连接</button>
+    <button class="navitem" data-nav-page="settings" data-goto-group="behave" aria-selected="false"
+      data-title="翻译行为" data-note="影响字幕怎么切句、怎么送出去"><span class="gdot"></span>翻译行为</button>
+    <button class="navitem" data-nav-page="settings" data-goto-group="display" aria-selected="false"
+      data-title="显示" data-note="只影响本机浮窗，不影响翻译结果"><span class="gdot"></span>显示</button>
+    <button class="navitem" data-nav-page="settings" data-goto-group="adv" aria-selected="false"
+      data-title="高级" data-note="改错了容易坏，出问题先看这一组"><span class="gdot"></span>高级</button>
+    <div class="navsec">排障</div>
+    <button class="navitem" data-nav-page="diag" data-diag-view="overview" aria-selected="false"
+      data-title="排障 · 总览" data-note="四态一眼看完；要翻细节去事件流"><span class="gdot"></span>总览</button>
+    <button class="navitem" data-nav-page="diag" data-diag-view="events" aria-selected="false"
+      data-title="排障 · 事件流" data-note="引擎日志，倒序；只读"><span class="gdot"></span>事件流</button>
+    <button class="navitem" data-nav-page="diag" data-diag-view="env" aria-selected="false"
+      data-title="排障 · 环境信息" data-note="只读，出问题把这一页贴给维护者"><span class="gdot"></span>环境信息</button>
+  </div>
+  <div class="v2-body">
+    <div class="v2-toolbar">
+      <span class="tt">服务连接</span>
+      <span class="ts">改完要点右下「保存到配置」才落盘</span>
+      <div class="spacer"></div>
+      <button class="btn ghost">重新加载</button>
+    </div>
+    <div class="pages compact">
+      <div class="page active" data-page="settings">
+        <div class="vgroup active" data-group="conn">
+          <div class="row"><div class="row-label">Base URL</div><div class="row-ctl"><input class="inp mono" value="http://127.0.0.1:8899/v1"></div></div>
+          <div class="row"><div class="row-label">API Key</div><div class="row-ctl"><input class="inp mono" type="password" value="sk-localfake1234"></div></div>
+          <div class="row"><div class="row-label">模型</div><div class="row-ctl"><input class="inp mono" value="kiss-translator"></div></div>
+          <div class="row"><div class="row-label">协议</div><div class="row-ctl"><select class="sel"><option>chat-completions</option><option>responses</option><option>auto</option></select></div></div>
+          <div class="row"><div class="row-label">端口</div><div class="row-ctl"><input class="num invalid" value="80"><span class="unit">本机监听</span></div></div>
+          <div class="hint err"><span class="dot"></span><span>端口要在 1024–65535 之间；80 已被系统占用。</span></div>
+        </div>
+        <div class="vgroup" data-group="behave">
+          <div class="row"><div class="row-label">提示词预设</div><div class="row-ctl"><select class="sel"><option>default（内置）</option><option>逐行直译（内置）</option></select></div></div>
+          <div class="row"><div class="row-label">上下文分组</div><div class="row-ctl"><button class="sw"><i></i></button><span class="unit">带上前后分组</span></div></div>
+          <div class="row"><div class="row-label">目标语言</div><div class="row-ctl"><select class="sel"><option>中文（简体）</option></select></div></div>
+        </div>
+        <div class="vgroup" data-group="display">
+          <div class="row"><div class="row-label">字号</div><div class="row-ctl"><input class="num" value="10"><span class="unit">pt</span></div></div>
+          <div class="row"><div class="row-label">浮窗透明度</div><div class="row-ctl"><button class="sw"><i></i></button><span class="unit">92%</span></div></div>
+          <div class="row"><div class="row-label">浮窗置顶</div><div class="row-ctl"><button class="sw off"><i></i></button><span class="unit">关</span></div></div>
+        </div>
+        <div class="vgroup" data-group="adv">
+          <div class="row"><div class="row-label">Mock 模式</div><div class="row-ctl"><button class="sw off"><i></i></button><span class="unit">不调用真实 API</span></div></div>
+          <div class="row"><div class="row-label">请求超时</div><div class="row-ctl"><input class="num" value="8"><span class="unit">秒</span></div></div>
+          <div class="row"><div class="row-label">并发上限</div><div class="row-ctl"><input class="num" value="3"><span class="unit">路</span></div></div>
+        </div>
+      </div>
+      <div class="page" data-page="diag">
+        <div class="dview" data-diag-view="overview">
+        <div class="caps">
+          <div class="cap"><span class="pill ok">正常</span><b>连接</b><span>12:03:44</span></div>
+          <div class="cap"><span class="pill busy">进行中</span><b>帧</b><span>59.8 fps</span></div>
+          <div class="cap"><span class="pill idle">空</span><b>队列</b><span>0</span></div>
+          <div class="cap"><span class="pill err">错误</span><b>服务</b><span>401</span></div>
+        </div>
+        <div class="panes">
+          <div class="pane">
+            <h4>指标</h4>
+            <dl class="kv">
+              <dt>监听端口</dt><dd>8899</dd>
+              <dt>协议</dt><dd>chat-completions</dd>
+              <dt>帧率</dt><dd>59.8 fps</dd>
+              <dt>掉帧</dt><dd>0</dd>
+              <dt>队列长度</dt><dd>0</dd>
+              <dt>平均往返</dt><dd>128 ms</dd>
+              <dt>启动时间</dt><dd>11:58:07</dd>
+            </dl>
+          </div>
+          <div class="pane">
+            <h4>事件流</h4>
+            <div class="evt"><span class="t">12:04:02</span><span class="lv e">ERR</span><span class="msg">provider 返回 401 Unauthorized</span></div>
+            <div class="evt"><span class="t">12:03:59</span><span class="lv w">WRN</span><span class="msg">API Key 为空，已退回 Mock 模式</span></div>
+            <div class="evt"><span class="t">12:03:44</span><span class="lv i">INF</span><span class="msg">握手完成，握手用时 12 ms</span></div>
+            <div class="evt"><span class="t">12:03:41</span><span class="lv i">INF</span><span class="msg">真磨砂已启用（BLURBEHIND，零 tint）</span></div>
+            <div class="evt"><span class="t">11:58:07</span><span class="lv i">INF</span><span class="msg">引擎启动，配置来自 %APPDATA%\youtubesub\settings.json</span></div>
+          </div>
+        </div>
+        </div><!-- /overview -->
+
+        <div class="dview" data-diag-view="events">
+          <div class="pane" style="margin-top:12px">
+            <h4>事件流 · 最近 20 条（倒序）</h4>
+            <div class="evt"><span class="t">12:04:02</span><span class="lv e">ERR</span><span class="msg">provider 返回 401 Unauthorized（密钥被拒）</span></div>
+            <div class="evt"><span class="t">12:04:02</span><span class="lv w">WRN</span><span class="msg">重试 0/3 已放弃，错误向上抛给浮窗</span></div>
+            <div class="evt"><span class="t">12:03:59</span><span class="lv w">WRN</span><span class="msg">API Key 为空，已退回 Mock 模式</span></div>
+            <div class="evt"><span class="t">12:03:58</span><span class="lv i">INF</span><span class="msg">收到 cues 12 条，切句后 4 组</span></div>
+            <div class="evt"><span class="t">12:03:44</span><span class="lv i">INF</span><span class="msg">握手完成，用时 12 ms</span></div>
+            <div class="evt"><span class="t">12:03:41</span><span class="lv i">INF</span><span class="msg">真磨砂已启用（BLURBEHIND，零 tint）</span></div>
+            <div class="evt"><span class="t">11:58:08</span><span class="lv i">INF</span><span class="msg">浮窗窗口创建，位置 (820, 470) 尺寸 650×135</span></div>
+            <div class="evt"><span class="t">11:58:07</span><span class="lv i">INF</span><span class="msg">引擎启动，配置来自 %APPDATA%\youtubesub\settings.json</span></div>
+          </div>
+        </div><!-- /events -->
+
+        <div class="dview" data-diag-view="env">
+          <div class="pane" style="margin-top:12px">
+            <h4>环境信息（只读）</h4>
+            <dl class="kv">
+              <dt>引擎版本</dt><dd>0.4.2</dd>
+              <dt>Python</dt><dd>3.12.10</dd>
+              <dt>Qt / PySide6</dt><dd>6.11.2</dd>
+              <dt>平台</dt><dd>Windows 10 Pro 22H2 (19045)</dd>
+              <dt>QPA 平台</dt><dd>windows</dd>
+              <dt>磨砂状态</dt><dd>真磨砂（BLURBEHIND）</dd>
+              <dt>监听端口</dt><dd>8899</dd>
+              <dt>启动时间</dt><dd>2026-10-01 11:58:07</dd>
+              <dt>配置路径</dt><dd>%APPDATA%\youtubesub\settings.json</dd>
+              <dt>日志路径</dt><dd>%APPDATA%\youtubesub\logs\engine.log</dd>
+            </dl>
+          </div>
+        </div><!-- /env -->
+      </div>
+    </div>
+    <div class="v2-foot">
+      <span class="saved">上次保存 12:03:44 · 配置未改动</span>
+      <div class="spacer"></div>
+      <button class="btn ghost">恢复默认</button>
+      <button class="btn">重新加载</button>
+      <button class="btn primary">保存到配置</button>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== 变体 C — 仪表盘卡片流 ==================== -->
+<div class="win v3" data-variant="C">
+  <div class="proto-badge">稿子 · 非实现</div>
+  <div class="v3-head">
+    <div class="win-title">调试</div>
+    <div class="win-sub">v0.4.2 · Windows 10 19045 · 磨砂：真</div>
+  </div>
+  <div class="v3-tabs">
+    <button class="pilltab" data-page-btn="settings" aria-selected="true">调参</button>
+    <button class="pilltab" data-page-btn="diag" aria-selected="false">排障</button>
+  </div>
+  <div class="pages">
+    <div class="page active" data-page="settings">
+      <div class="cards">
+        <div class="card">
+          <div class="card-title">服务连接<span class="pill err">有问题</span></div>
+          <div class="row"><div class="row-label">Base URL</div><div class="row-ctl"><input class="inp mono" value="http://127.0.0.1:8899/v1"></div></div>
+          <div class="row"><div class="row-label">API Key</div><div class="row-ctl"><input class="inp mono" type="password" value="sk-localfake1234"></div></div>
+          <div class="row"><div class="row-label">模型</div><div class="row-ctl"><input class="inp mono" value="kiss-translator"></div></div>
+          <div class="row"><div class="row-label">端口</div><div class="row-ctl"><input class="num invalid" value="80"></div></div>
+          <div class="hint err"><span class="dot"></span><span>端口要在 1024–65535 之间。</span></div>
+        </div>
+        <div class="card">
+          <div class="card-title">翻译行为<span class="pill ok">就绪</span></div>
+          <div class="row"><div class="row-label">预设</div><div class="row-ctl"><select class="sel"><option>default（内置）</option><option>逐行直译（内置）</option></select></div></div>
+          <div class="row"><div class="row-label">目标语言</div><div class="row-ctl"><select class="sel"><option>中文（简体）</option></select></div></div>
+          <div class="row"><div class="row-label">上下文分组</div><div class="row-ctl"><button class="sw"><i></i></button></div></div>
+          <div class="banner"><span>!</span><span><b>改「预设」会丢掉当前未保存的编辑。</b>先点右下「应用」。</span></div>
+        </div>
+        <div class="card">
+          <div class="card-title">显示</div>
+          <div class="row"><div class="row-label">字号</div><div class="row-ctl"><input class="num" value="10"><span class="unit">pt</span></div></div>
+          <div class="row"><div class="row-label">透明度</div><div class="row-ctl"><button class="sw"><i></i></button><span class="unit">92%</span></div></div>
+          <div class="row"><div class="row-label">置顶</div><div class="row-ctl"><button class="sw off"><i></i></button><span class="unit">关</span></div></div>
+        </div>
+        <div class="card">
+          <div class="card-title">高级</div>
+          <div class="row"><div class="row-label">Mock</div><div class="row-ctl"><button class="sw off"><i></i></button></div></div>
+          <div class="row"><div class="row-label">超时</div><div class="row-ctl"><input class="num" value="8"><span class="unit">秒</span></div></div>
+          <div class="row"><div class="row-label">并发</div><div class="row-ctl"><input class="num" value="3"><span class="unit">路</span></div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="page" data-page="diag">
+      <div class="stateband">
+        <div>
+          <div class="big">进行中</div>
+          <div class="sm">正在等 provider 首次响应 · 已等 1.2s</div>
+        </div>
+        <div class="spacer"></div>
+        <div class="spin"></div>
+      </div>
+      <div class="cards">
+        <div class="card">
+          <div class="card-title">连接<span class="pill ok">正常</span></div>
+          <div class="big-num">12<small>ms 握手</small></div>
+          <dl class="kv">
+            <dt>地址</dt><dd>127.0.0.1:8899</dd>
+            <dt>协议</dt><dd>chat-completions</dd>
+            <dt>上次握手</dt><dd>12:03:44</dd>
+          </dl>
+        </div>
+        <div class="card">
+          <div class="card-title">帧统计<span class="pill busy">进行中</span></div>
+          <div class="big-num">59.8<small>fps</small></div>
+          <dl class="kv">
+            <dt>掉帧</dt><dd>0</dd>
+            <dt>队列</dt><dd>0</dd>
+            <dt>平均往返</dt><dd>128 ms</dd>
+          </dl>
+        </div>
+        <div class="card err">
+          <div class="card-title">最近错误<span class="pill err">错误</span></div>
+          <div class="errbox-title">401 Unauthorized<span class="when">12:04:02</span></div>
+          <div class="errbox-body">密钥被服务端拒绝；Mock 模式打开时不会出现这条。</div>
+<pre>{"error":"invalid api key"}</pre>
+        </div>
+        <div class="card empty">
+          <div class="ico"></div>
+          <div>暂无其他错误</div>
+          <div style="opacity:.7">最近 24 小时</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="actions">
+    <div class="spacer"></div>
+    <button class="btn ghost">恢复默认</button>
+    <button class="btn primary">应用</button>
+  </div>
+</div>
+
+</div><!-- /stage -->
+
+<!-- ==================== 悬浮切换条 ==================== -->
+<div class="bar" id="bar">
+  <span class="tag">#157 稿子</span>
+  <button class="arrow" id="prev" title="上一个变体（←）">‹</button>
+  <span class="label" id="barLabel">A — 单列设置式</span>
+  <button class="arrow" id="next" title="下一个变体（→）">›</button>
+  <span class="sep"></span>
+  <button id="frostBtn">磨砂：真</button>
+  <button id="bgBtn">背景：高对比</button>
+  <button id="pageBtn">页：调参</button>
+  <span class="sep"></span>
+  <button id="legendBtn">色板/状态色</button>
+  <button id="compareBtn">磨砂实测对照</button>
+</div>
+
+<!-- ==================== 图例 ==================== -->
+<div class="ovl" id="legend">
+  <div class="ovl-card">
+    <button class="ovl-close" data-close="legend">×</button>
+    <h2>色板与状态色</h2>
+    <p class="lead">取自 wayfinder/debug-window-style-tokens.md（色块从你给的风格图直接采样）。<b>芥末黄不上字</b> —— 对比度只有 1.87:1，只能做填充、色带、进度条，上面的字必须是靛蓝或深松绿。</p>
+    <div class="swatches">
+      <div class="sw-card"><div class="sw-chip" style="background:#E6E3DA"></div><div class="sw-meta"><b>窗口底 Paper</b><code>#E6E3DA</code><br>半透明，配合磨砂</div></div>
+      <div class="sw-card"><div class="sw-chip" style="background:#E0DDD2"></div><div class="sw-meta"><b>卡片 / 分区</b><code>#E0DDD2</code><br>靠 1px 描边分层</div></div>
+      <div class="sw-card"><div class="sw-chip" style="background:#343E68"></div><div class="sw-meta"><b>靛蓝 · 主调</b><code>#343E68</code><br>8.04:1，可承字</div></div>
+      <div class="sw-card"><div class="sw-chip" style="background:#38544D"></div><div class="sw-meta"><b>松绿 · 次调</b><code>#38544D</code><br>6.43:1，可承字</div></div>
+      <div class="sw-card"><div class="sw-chip" style="background:#B94D37"></div><div class="sw-meta"><b>赭红 · 危险</b><code>#B94D37</code><br>3.92:1，只做图标/边/大字</div></div>
+      <div class="sw-card"><div class="sw-chip" style="background:#CCA13D"></div><div class="sw-meta"><b>芥末黄 · 高亮</b><code>#CCA13D</code><br>1.87:1，禁止承字</div></div>
+      <div class="sw-card"><div class="sw-chip" style="background:#2D3662"></div><div class="sw-meta"><b>主文字</b><code>#2D3662</code><br>正文</div></div>
+      <div class="sw-card"><div class="sw-chip" style="background:#355044"></div><div class="sw-meta"><b>次文字</b><code>#355044</code><br>说明 / 辅助</div></div>
+    </div>
+    <h2 style="margin-top:18px">四态</h2>
+    <p class="lead">同一套语义，在 A / B / C 里各用各的形态表达（状态块 / 状态胶囊 / 横贯状态带）。</p>
+    <div class="states">
+      <div class="state-card"><span class="pill ok">正常</span><div class="cap">松绿填充 + 奶油字。用于「已连上、指标健康」。</div></div>
+      <div class="state-card"><span class="pill busy">进行中</span><div class="cap">芥末黄填充 + 靛蓝字。用于「正在跑、还没结论」。</div></div>
+      <div class="state-card"><span class="pill err">错误</span><div class="cap">赭红填充 + 奶油字；正文级错误文字改用加深档 #8F3A29。</div></div>
+      <div class="state-card"><span class="pill idle">空</span><div class="cap">只有描边。用于「没有待办、没有记录」，不是错误。</div></div>
+    </div>
+    <div class="note">
+      <b>磨砂两版配方</b><br>
+      真 —— SetWindowCompositionAttribute(hwnd, ACCENT_ENABLE_BLURBEHIND=3, AccentFlags=2, GradientColor=0x00000000)：纯模糊、零 tint。浏览器里用 backdrop-filter 模拟。<br>
+      伪 —— rgba(246,243,235,205) + 圆角 24 + 1px 内描边 rgba(255,255,255,110) + 48px 柔阴影，零系统 API 风险。
+    </div>
+  </div>
+</div>
+
+<!-- ==================== 磨砂实测对照 ==================== -->
+<div class="ovl" id="compare">
+  <div class="ovl-card">
+    <button class="ovl-close" data-close="compare">×</button>
+    <h2>磨砂两版观感对照（实测真值）</h2>
+    <p class="lead">这两张是「Win10 磨砂实现取证」票在本机实拍的原图，不是我画的 —— 左边是真磨砂（合成 API），右边是降级伪磨砂，同一张忙背景。</p>
+    <div class="cmp">
+      <figure>
+        <img src="ref-real-frost.png" alt="真磨砂实测">
+        <figcaption>真磨砂 · <code>round-round_blur_grad0.png</code><br>背景透过来并被打散，窗口很透；底色几乎不上色。</figcaption>
+      </figure>
+      <figure>
+        <img src="ref-pseudo-frost.png" alt="伪磨砂实测">
+        <figcaption>降级伪磨砂 · <code>v2-looks-pseudo-context.png</code><br>奶油底不透明度高得多，背景只剩一点柔影；圆角看得出来。</figcaption>
+      </figure>
+    </div>
+    <div class="note">
+      <b>要看差别，背景必须忙。</b>点底栏「背景：高对比 / 平淡」来回切就能看出来 —— 平淡背景上两版几乎一样，这也是取证票里的对照组结论。<br>
+      <b>浏览器里那版「真磨砂」是模拟</b>，不是 Windows 合成器；真值只看这两张。
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var V = ['A', 'B', 'C'];
+  var NAMES = { A: '单列设置式', B: '开发者控制台', C: '仪表盘卡片流' };
+  var q = new URLSearchParams(location.search);
+  var S = {
+    variant: (q.get('variant') || 'A').toUpperCase(),
+    page: q.get('page') === 'diag' ? 'diag' : 'settings',
+    dview: q.get('dview') || 'overview',
+    frost: q.get('frost') === 'pseudo' ? 'pseudo' : 'real',
+    bg: q.get('bg') === 'plain' ? 'plain' : 'busy',
+    legend: q.get('legend') === '1',
+    compare: q.get('compare') === '1',
+    bar: q.get('bar') !== '0'
+  };
+  if (V.indexOf(S.variant) < 0) { S.variant = 'A'; }
+
+  var el = {
+    wins: document.querySelectorAll('.win'),
+    scene: document.getElementById('scene'),
+    bar: document.getElementById('bar'),
+    label: document.getElementById('barLabel'),
+    frostBtn: document.getElementById('frostBtn'),
+    bgBtn: document.getElementById('bgBtn'),
+    pageBtn: document.getElementById('pageBtn'),
+    legend: document.getElementById('legend'),
+    compare: document.getElementById('compare')
+  };
+
+  function pageName() { return S.page === 'diag' ? '排障' : '调参'; }
+
+  function sync() {
+    var i, j;
+    for (i = 0; i < el.wins.length; i++) {
+      var w = el.wins[i];
+      var on = w.getAttribute('data-variant') === S.variant;
+      w.classList.toggle('active', on);
+      w.classList.toggle('frost-real', S.frost === 'real');
+      w.classList.toggle('frost-pseudo', S.frost === 'pseudo');
+      if (!on) { continue; }
+      var ps = w.querySelectorAll('.page');
+      for (j = 0; j < ps.length; j++) {
+        ps[j].classList.toggle('active', ps[j].getAttribute('data-page') === S.page);
+      }
+      var tabs = w.querySelectorAll('[data-page-btn]');
+      for (j = 0; j < tabs.length; j++) {
+        var sel = tabs[j].getAttribute('data-page-btn') === S.page;
+        tabs[j].setAttribute('aria-selected', sel ? 'true' : 'false');
+      }
+      if (w.classList.contains('v2')) {
+        var dvs = w.querySelectorAll('.dview');
+        for (j = 0; j < dvs.length; j++) {
+          dvs[j].classList.toggle('active', dvs[j].getAttribute('data-diag-view') === S.dview);
+        }
+        var navs = w.querySelectorAll('.navitem');
+        var selNav = null;
+        for (j = 0; j < navs.length; j++) {
+          var on2;
+          if (navs[j].getAttribute('data-nav-page') !== S.page) {
+            on2 = false;
+          } else if (S.page === 'settings') {
+            on2 = navs[j].getAttribute('data-goto-group') === currentGroup(w);
+          } else {
+            on2 = navs[j].getAttribute('data-diag-view') === currentDiagView(w);
+          }
+          navs[j].setAttribute('aria-selected', on2 ? 'true' : 'false');
+          if (on2) { selNav = navs[j]; }
+        }
+        if (selNav) {
+          w.querySelector('.v2-toolbar .tt').textContent = selNav.getAttribute('data-title') || '';
+          w.querySelector('.v2-toolbar .ts').textContent = selNav.getAttribute('data-note') || '';
+        }
+      }
+    }
+    var v1 = document.querySelector('.win.v1');
+    if (v1) {
+      v1.querySelector('.a-set').classList.toggle('hidden', S.page === 'diag');
+      v1.querySelector('.a-diag').classList.toggle('hidden', S.page !== 'diag');
+    }
+    el.scene.classList.toggle('busy', S.bg === 'busy');
+    el.scene.classList.toggle('plain', S.bg === 'plain');
+    el.label.textContent = S.variant + ' — ' + NAMES[S.variant];
+    el.bar.classList.toggle('hidden', !S.bar);
+    el.frostBtn.textContent = '磨砂：' + (S.frost === 'real' ? '真' : '伪');
+    el.bgBtn.textContent = '背景：' + (S.bg === 'busy' ? '高对比' : '平淡');
+    el.pageBtn.textContent = '页：' + pageName();
+    el.legend.classList.toggle('open', S.legend);
+    el.compare.classList.toggle('open', S.compare);
+
+    var url = location.pathname + '?variant=' + S.variant + '&page=' + S.page + '&dview=' + S.dview +
+      '&frost=' + S.frost + '&bg=' + S.bg +
+      (S.legend ? '&legend=1' : '') + (S.compare ? '&compare=1' : '') + (S.bar ? '' : '&bar=0');
+    history.replaceState(null, '', url);
+  }
+
+  function activeWin() {
+    for (var i = 0; i < el.wins.length; i++) {
+      if (el.wins[i].getAttribute('data-variant') === S.variant) { return el.wins[i]; }
+    }
+    return null;
+  }
+  function currentGroup(w) {
+    var g = w.querySelector('.vgroup.active');
+    return g ? g.getAttribute('data-group') : null;
+  }
+  function currentDiagView(w) {
+    var v = w.querySelector('.dview.active');
+    if (!v) {
+      v = w.querySelector('.dview');
+      if (v) { v.classList.add('active'); }
+    }
+    return v ? v.getAttribute('data-diag-view') : null;
+  }
+  function cycle(d) {
+    var i = V.indexOf(S.variant);
+    S.variant = V[(i + d + V.length) % V.length];
+    sync();
+  }
+
+  document.getElementById('prev').addEventListener('click', function () { cycle(-1); });
+  document.getElementById('next').addEventListener('click', function () { cycle(1); });
+  el.frostBtn.addEventListener('click', function () {
+    S.frost = S.frost === 'real' ? 'pseudo' : 'real'; sync();
+  });
+  el.bgBtn.addEventListener('click', function () {
+    S.bg = S.bg === 'busy' ? 'plain' : 'busy'; sync();
+  });
+  el.pageBtn.addEventListener('click', function () {
+    S.page = S.page === 'settings' ? 'diag' : 'settings'; sync();
+  });
+  document.getElementById('legendBtn').addEventListener('click', function () {
+    S.legend = !S.legend; sync();
+  });
+  document.getElementById('compareBtn').addEventListener('click', function () {
+    S.compare = !S.compare; sync();
+  });
+
+  document.addEventListener('click', function (e) {
+    var t = e.target;
+    if (!t || !t.closest) { return; }
+    var close = t.closest('[data-close]');
+    if (close) {
+      var which = close.getAttribute('data-close');
+      if (which === 'legend') { S.legend = false; }
+      if (which === 'compare') { S.compare = false; }
+      sync();
+      return;
+    }
+    if (t.closest('.ovl') && !t.closest('.ovl-card')) {
+      S.legend = false; S.compare = false; sync(); return;
+    }
+    var pbtn = t.closest('[data-page-btn]');
+    if (pbtn) { S.page = pbtn.getAttribute('data-page-btn'); sync(); return; }
+    var nav = t.closest('.navitem');
+    if (nav) {
+      var p = nav.getAttribute('data-nav-page');
+      if (p) { S.page = p; }
+      var w = nav.closest('.win');
+      var g = nav.getAttribute('data-goto-group');
+      var k;
+      if (g && w) {
+        var gs = w.querySelectorAll('.vgroup');
+        for (k = 0; k < gs.length; k++) {
+          gs[k].classList.toggle('active', gs[k].getAttribute('data-group') === g);
+        }
+      }
+      var dv = nav.getAttribute('data-diag-view');
+      if (dv) { S.dview = dv; }
+      sync();
+    }
+  });
+
+  document.addEventListener('keydown', function (e) {
+    var a = document.activeElement;
+    var tag = a ? a.tagName : '';
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (a && a.isContentEditable)) { return; }
+    if (e.key === 'ArrowLeft') { cycle(-1); }
+    else if (e.key === 'ArrowRight') { cycle(1); }
+    else if (e.key === 'Escape') { S.legend = false; S.compare = false; sync(); }
+  });
+
+  sync();
+})();
+</script>
+</body>
+</html>
