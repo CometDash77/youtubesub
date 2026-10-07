@@ -1,0 +1,48 @@
+name: capcheck-electron-five-caps
+
+on:
+  push:
+    branches: [capcheck-ci-evidence]
+    paths:
+      - '.scratch/electron-cap-check/**'
+      - '.github/workflows/capcheck-electron-caps.yml'
+  workflow_dispatch:
+
+jobs:
+  verify:
+    # Isolated Windows VM desktop session: SetCursorPos/keybd_event/GDI
+    # capture run against the runner's own GUI, never a human machine.
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install deps (electron postinstall fetches binary)
+        working-directory: .scratch/electron-cap-check
+        shell: cmd
+        run: npm install --no-audit --no-fund
+
+      - name: Verify electron binary
+        working-directory: .scratch/electron-cap-check
+        shell: powershell
+        run: |
+          $v = & .\node_modules\electron\dist\electron.exe --version
+          Write-Host "electron $v"
+          if (-not $v) { throw "electron binary missing" }
+
+      - name: Run five-cap verification (all scenes)
+        working-directory: .scratch/electron-cap-check
+        shell: powershell
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\run-verification.ps1 -Scene all
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: capcheck-evidence
+          path: .scratch/electron-cap-check/evidence/
+          if-no-files-found: error
