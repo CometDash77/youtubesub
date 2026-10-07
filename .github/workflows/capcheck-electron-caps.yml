@@ -37,11 +37,12 @@ jobs:
 
       - name: Verify electron binary
         working-directory: .scratch/electron-cap-check
-        shell: powershell
+        shell: cmd
+        # electron.exe is a GUI-subsystem binary; PS 5.1 cannot capture its
+        # stdout through a pipeline, cmd redirection can. Diagnostic only:
+        # the six scenes are the real verdict.
         run: |
-          $v = & .\node_modules\electron\dist\electron.exe --version
-          Write-Host "electron $v"
-          if (-not $v) { throw "electron binary missing" }
+          node_modules\electron\dist\electron.exe --version || exit /b 1
 
       - name: Run five-cap verification (all scenes)
         working-directory: .scratch/electron-cap-check
