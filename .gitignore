@@ -13,3 +13,9 @@ harness/backups/
 .local/
 .omo/
 node_modules/
+
+# DSH runtime data (skill bundles) - same rule as harness/backups/
+.dsh/
+# Root toolchain manifests (dsh-univer-office; map Out of scope)
+/package.json
+/pnpm-lock.yaml
