@@ -21,7 +21,9 @@ document.addEventListener("mousemove", (e) => {
     window.capcheck.rendererLog("hot=" + hot + " at " + Math.round(e.clientX) + "," + Math.round(e.clientY));
   }
   window.capcheck.setIgnore(!hot);   // 热区内可点，热区外穿透
-  document.body.classList.toggle("hot", hot);
+  // body 的状态类不能与热区标记 .hot 同名：closest(".hot") 会命中 body
+  // 自身，热区判定从此恒真。状态类改名 hot-bg。
+  document.body.classList.toggle("hot-bg", hot);
 });
 
 document.getElementById("unlock").addEventListener("click", () => {
