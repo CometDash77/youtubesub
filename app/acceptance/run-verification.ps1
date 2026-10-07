@@ -130,7 +130,8 @@ function Compare-A13($h, $refPath, $winPath, $r) {
   $win = New-Object System.Drawing.Bitmap($winPath)
   $w = $r.R - $r.L; $ht = $r.B - $r.T
   $cornerOk = $true
-  foreach ($c in @(@(6,6), @($w-7,6), @(6,$ht-7), @($w-7,$ht-7))) {
+  $corners = @(@(6, 6), @(($w - 7), 6), @(6, ($ht - 7)), @(($w - 7), ($ht - 7)))
+  foreach ($c in $corners) {
     $p1 = $ref.GetPixel($r.L + $c[0], $r.T + $c[1])
     $p2 = $win.GetPixel($c[0], $c[1])
     $d = [Math]::Abs($p1.R-$p2.R) + [Math]::Abs($p1.G-$p2.G) + [Math]::Abs($p1.B-$p2.B)
