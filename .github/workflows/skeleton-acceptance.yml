@@ -1,0 +1,58 @@
+name: skeleton-acceptance
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'app/**'
+      - '.github/workflows/skeleton-acceptance.yml'
+  workflow_dispatch:
+
+jobs:
+  verify:
+    # Isolated Windows VM desktop session: GDI capture / keybd_event run
+    # against the runner's own GUI, never a human machine (A2.4 / A3.2 real
+    # mouse + tray visuals stay manual per docs/ELECTRON-SKELETON-ACCEPTANCE.md).
+    runs-on: windows-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install deps
+        shell: cmd
+        run: |
+          npm ci --no-audit --no-fund || npm install --no-audit --no-fund
+
+      - name: Ensure electron binary (explicit postinstall fallback)
+        shell: cmd
+        run: |
+          if not exist node_modules\electron\dist\electron.exe node node_modules\electron\install.js
+          dir node_modules\electron\dist\electron.exe
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests (settings + WS A5 assertions)
+        run: npm test
+
+      - name: Build skeleton
+        run: npm run build
+
+      - name: GUI acceptance (six scenes, [CI] assertions)
+        shell: powershell
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\acceptance\run-verification.ps1 -Scene all
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: skeleton-evidence
+          path: app/acceptance/evidence/
+          if-no-files-found: error

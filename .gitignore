@@ -19,3 +19,7 @@ node_modules/
 # Root toolchain manifests (dsh-univer-office; map Out of scope)
 /package.json
 /pnpm-lock.yaml
+# Electron skeleton build output + local run artifacts
+app/dist/
+app/skeleton.log
+app/acceptance/evidence/
