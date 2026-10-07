@@ -105,7 +105,7 @@ function Start-Skeleton($scene) {
   Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
   $exe = Join-Path $appRoot "node_modules\electron\dist\electron.exe"
   $env:SKELETON_SCENE = $scene
-  cmd /c ("start \"skeleton\" /D \"" + $appRoot + "\" \"" + $exe + "\" \"" + $appRoot + "\"")
+  cmd /c ('start "skeleton" /D "' + $appRoot + '" "' + $exe + '" "' + $appRoot + '"')
 }
 function Get-OverlayPid($h) {
   $procId = 0
