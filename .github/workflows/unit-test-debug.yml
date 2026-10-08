@@ -1,0 +1,121 @@
+name: unit-test-debug
+
+# Forensic matrix for the #203 CI hang (run 37730730854): every test
+# completed on engine-scheduling but the node process never exited, and ten
+# files never reported a single result. One dispatch answers, per scenario:
+#   - which file hangs ALONE (per-file steps, 2 min cap each)
+#   - does the exact CI command hang again (npm test repro)
+#   - does --test-force-exit + per-test timeout make the full suite finish
+#   - do concurrency=1 / isolation=none change the picture
+# Every scenario continues-on-error so one hang never eats the rest.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  debug:
+    runs-on: windows-latest
+    timeout-minutes: 55
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Env facts
+        run: |
+          node -p "process.version + '  availableParallelism=' + require('node:os').availableParallelism()"
+
+      - name: Install deps
+        shell: cmd
+        run: |
+          npm ci --no-audit --no-fund || npm install --no-audit --no-fund
+
+      - name: file 01 clock
+        continue-on-error: true
+        timeout-minutes: 2
+        run: node --test --test-timeout=30000 tests/clock.test.ts
+
+      - name: file 02 connection-test
+        continue-on-error: true
+        timeout-minutes: 2
+        run: node --test --test-timeout=30000 tests/connection-test.test.ts
+
+      - name: file 03 engine
+        continue-on-error: true
+        timeout-minutes: 2
+        run: node --test --test-timeout=30000 tests/engine.test.ts
+
+      - name: file 04 engine-scheduling
+        continue-on-error: true
+        timeout-minutes: 2
+        run: node --test --test-timeout=30000 tests/engine-scheduling.test.ts
+
+      - name: file 05 parse-parity
+        continue-on-error: true
+        timeout-minutes: 2
+        run: node --test --test-timeout=30000 tests/parse-parity.test.ts
+
+      - name: file 06 prompt-presets
+        continue-on-error: true
+        timeout-minutes: 2
+        run: node --test --test-timeout=30000 tests/prompt-presets.test.ts
+
+      - name: file 07 protocol
+        continue-on-error: true
+        timeout-minutes: 2
+        run: node --test --test-timeout=30000 tests/protocol.test.ts
+
+      - name: file 08 provider
+        continue-on-error: true
+        timeout-minutes: 2
+        run: node --test --test-timeout=30000 tests/provider.test.ts
+
+      - name: file 09 queue-cache
+        continue-on-error: true
+        timeout-minutes: 2
+        run: node --test --test-timeout=30000 tests/queue-cache.test.ts
+
+      - name: file 10 sentences
+        continue-on-error: true
+        timeout-minutes: 2
+        run: node --test --test-timeout=30000 tests/sentences.test.ts
+
+      - name: file 11 settings-storage
+        continue-on-error: true
+        timeout-minutes: 2
+        run: node --test --test-timeout=30000 tests/settings-storage.test.ts
+
+      - name: file 12 settings-tuning
+        continue-on-error: true
+        timeout-minutes: 2
+        run: node --test --test-timeout=30000 tests/settings-tuning.test.ts
+
+      - name: file 13 ws-server
+        continue-on-error: true
+        timeout-minutes: 2
+        run: node --test --test-timeout=30000 tests/ws-server.test.ts
+
+      - name: FULL npm test (exact CI repro)
+        continue-on-error: true
+        timeout-minutes: 6
+        run: npm test
+
+      - name: FULL force-exit + per-test timeout (candidate fix)
+        continue-on-error: true
+        timeout-minutes: 6
+        run: node --test --test-force-exit --test-timeout=60000 "tests/*.test.ts"
+
+      - name: FULL concurrency=1
+        continue-on-error: true
+        timeout-minutes: 8
+        run: node --test --test-concurrency=1 "tests/*.test.ts"
+
+      - name: FULL isolation=none
+        continue-on-error: true
+        timeout-minutes: 5
+        run: node --test --test-isolation=none "tests/*.test.ts"
