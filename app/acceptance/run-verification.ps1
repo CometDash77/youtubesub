@@ -27,6 +27,7 @@ public class W {
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
   [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
   [DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr h, uint flags);
+  [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
   public delegate bool EnumProc(IntPtr h, IntPtr l);
   [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc cb, IntPtr l);
   public static IntPtr FoundHwnd = IntPtr.Zero;
@@ -259,9 +260,17 @@ function Run-Scene($s) {
 }
 
 if ($Scene -eq "all") {
-  foreach ($s in @("base", "clickthrough", "hover-unlock", "tray-menu", "hotkey", "ws")) { Run-Scene $s }
+  foreach ($s in @("base", "clickthrough", "hover-unlock", "tray-menu", "hotkey", "ws")) {
+    try { Run-Scene $s } catch {
+      Write-Host ("SCENE-ERROR " + $s + " : " + $_.Exception.Message)
+      $results["error_" + $s] = $_.Exception.Message
+    }
+  }
 } else {
-  Run-Scene $Scene
+  try { Run-Scene $Scene } catch {
+    Write-Host ("SCENE-ERROR " + $Scene + " : " + $_.Exception.Message)
+    $results["error_" + $Scene] = $_.Exception.Message
+  }
 }
 
 $results | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $ev "report.json") -Encoding UTF8

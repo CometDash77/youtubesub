@@ -54,6 +54,21 @@ function createWindow(): void {
     },
   });
   win.setMenuBarVisibility(false);
+  // Diagnostics: a sandboxed preload that fails to load leaves the page with
+  // no bridge at all, which shows up only as silence in the renderer logs.
+  win.webContents.on("preload-error", (_e, preloadPath, error) => {
+    logLine("[main] preload-error " + preloadPath + " : " + error.message);
+  });
+  win.webContents.on("did-fail-load", (_e, code, desc) => {
+    logLine("[main] did-fail-load " + code + " " + desc);
+  });
+  win.webContents.once("did-finish-load", () => {
+    logLine("[main] did-finish-load");
+    void win?.webContents.executeJavaScript(
+      "typeof window.youtubesub === 'object' ? Object.keys(window.youtubesub).join(',') : ('MISSING:' + typeof window.youtubesub)",
+    ).then((r: unknown) => logLine("[main] bridge probe => " + String(r)))
+      .catch((e: unknown) => logLine("[main] bridge probe failed: " + String(e)));
+  });
   void win.loadFile(path.join(APP_ROOT, "dist", "renderer", "index.html"));
 }
 

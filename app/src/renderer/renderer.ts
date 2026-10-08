@@ -19,6 +19,10 @@ interface WireFrameView {
 }
 
 const bridge = (window as unknown as { youtubesub: SkeletonBridge }).youtubesub;
+// Boot proof line: its absence (with main's bridge probe) separates "preload
+// bridge missing" from "script ran but the hotspot logic never fired".
+bridge.rendererLog("renderer booted (bridge present)");
+window.addEventListener("error", (e) => bridge.rendererLog("renderer error: " + e.message));
 
 let clickThrough = false;
 const statusEl = document.getElementById("status") as HTMLElement;
