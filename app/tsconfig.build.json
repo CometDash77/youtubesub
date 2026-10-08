@@ -3,6 +3,17 @@
   "compilerOptions": {
     "noEmit": false,
     "allowImportingTsExtensions": false,
+    // The renderer is loaded by index.html as a classic <script> (module
+    // scripts are blocked over file:// in Chromium). With the default
+    // moduleDetection "auto" plus package.json "type": "module", tsc treats
+    // every file in the package as an ESM module and appends "export {};" to
+    // the renderer bundle - which is a SyntaxError in a classic script and
+    // silently killed the whole renderer at load. "legacy" keeps files
+    // without import/export as plain scripts; isolatedModules (which requires
+    // module files) is relaxed here only, the base config still typechecks
+    // everything with it on.
+    "moduleDetection": "legacy",
+    "isolatedModules": false,
     "outDir": "dist",
     "rootDir": "src"
   },
