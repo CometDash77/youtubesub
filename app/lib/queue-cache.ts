@@ -355,6 +355,8 @@ export class TranslationQueue {
   // Provider config snapshot handed in by the engine; stored like the
   // Python _cfg (parity), read by no queue path.
   readonly provider_cfg: Record<string, unknown> | null;
+  // Worker pool size actually built (Python tests read len(_queue._threads)).
+  readonly worker_count: number;
   private readonly cache: TranslationCache;
   private readonly onDone: OnDoneFn | null;
   private readonly translateFn: TranslateFn | undefined;
@@ -376,6 +378,7 @@ export class TranslationQueue {
     this.translateFn = translateFn;
     this.maxPending = maxPending;
     const n = Math.max(1, workers);
+    this.worker_count = n;
     for (let i = 0; i < n; i++) this.worker_loops.push(this.worker(i));
   }
 
