@@ -8,7 +8,8 @@
     #box {
       margin: 4px; box-sizing: border-box;
       height: calc(100vh - 8px);
-      background: rgba(0, 0, 0, 0.59);   /* mirrors current bg_opacity 150/255 */
+      /* background overridden per-plan (display.bg_color + bg_opacity) */
+      background: rgba(0, 0, 0, 0.59);
       border-radius: 10px;
       border: 1px solid rgba(255, 255, 255, 0.31);
       padding: 10px 14px;
@@ -16,9 +17,20 @@
       color: #fff;
       user-select: none;
       position: relative;
+      overflow: hidden;
     }
-    #trans { color: #ffe082; font-size: 19px; font-weight: bold; min-height: 24px; }
-    #orig  { color: #ffffff; font-size: 15px; min-height: 20px; margin-top: 4px; }
+    /* Rows are plan-driven: one div per text event, divider element between
+       the two rows of a bilingual plan. Qt point sizes arrive as integers and
+       are mapped to px (* 4/3) by the renderer. */
+    #rows { position: absolute; left: 14px; right: 14px; top: 14px; bottom: 26px;
+      overflow: hidden;
+      /* CSS takes over _draw_wrapped: spaces break, long unspaced runs break
+         per character (overflow-wrap: anywhere), like the Python algorithm. */
+      overflow-wrap: anywhere;
+      text-wrap: pretty;
+    }
+    .row { margin: 0 0 4px; line-height: 1.2; }
+    .divider { height: 1px; background: rgba(255, 255, 255, 0.3137); margin: 2px 0; }
     #status { position: absolute; left: 16px; bottom: 8px; right: 64px; color: #a0a0a0;
       font-size: 12px; font-family: Consolas, monospace; }
     /* Unlock icon: 40x40 hotspot larger than the visual so a pass-through
@@ -31,15 +43,26 @@
     }
     body.ct #unlock { display: flex; background: rgba(255, 255, 255, 0.12); }
     body.ct.hot-bg #unlock { background: rgba(255, 255, 255, 0.4); }
+    /* Overlay context menu (#172 copy, shared model via main). */
+    #ctxmenu {
+      position: fixed; min-width: 200px; z-index: 1000;
+      background: rgba(28, 28, 30, 0.97); border: 1px solid rgba(255,255,255,0.25);
+      border-radius: 6px; padding: 4px 0; font-size: 13px; color: #eee;
+    }
+    #ctxmenu[hidden] { display: none; }
+    .cm-item { padding: 5px 14px; cursor: default; white-space: nowrap; }
+    .cm-item:hover { background: rgba(255, 255, 255, 0.15); }
+    .cm-item[data-checked="1"]::before { content: "\2713\00a0"; }
+    .cm-sep { height: 1px; background: rgba(255,255,255,0.2); margin: 4px 8px; }
   </style>
 </head>
 <body>
   <div id="box">
-    <div id="trans">【译】骨架：逐像素半透明</div>
-    <div id="orig">【原】frameless + alwaysOnTop + translucent</div>
+    <div id="rows"></div>
     <div id="status"></div>
     <div id="unlock" class="hot">🔓</div>
   </div>
+  <div id="ctxmenu" hidden></div>
   <script src="renderer.js"></script>
 </body>
 </html>

@@ -12,4 +12,12 @@ contextBridge.exposeInMainWorld("youtubesub", {
   setIgnore: (on: boolean) => ipcRenderer.invoke("set-ignore", on),
   unlockThrough: () => ipcRenderer.send("unlock-through"),
   rendererLog: (m: string) => ipcRenderer.send("renderer-log", m),
+  // #204 display layer: main owns the headless overlay state machine and
+  // pushes ready-to-render paint plans + the shared menu model; the renderer
+  // stays a dumb applier plus DOM-only hotspot/menu/mouse plumbing.
+  onDisplayPlan: (cb: (plan: unknown) => void) => ipcRenderer.on("display-plan", (_e, p) => cb(p)),
+  onMenuModel: (cb: (model: unknown) => void) => ipcRenderer.on("menu-model", (_e, m) => cb(m)),
+  menuAction: (id: string) => ipcRenderer.send("menu-action", id),
+  overlayMouse: (ev: unknown) => ipcRenderer.send("overlay-mouse", ev),
+  onOverlayCursor: (cb: (cursor: string) => void) => ipcRenderer.on("overlay-cursor", (_e, c) => cb(c)),
 });

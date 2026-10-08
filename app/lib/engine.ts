@@ -40,7 +40,7 @@ import * as proto from "./protocol.ts";
 import type { Cue } from "./protocol.ts";
 import * as Q from "./queue-cache.ts";
 import type { TranslationCache, TranslationJob, TranslateResult } from "./queue-cache.ts";
-import * as S from "./settings.ts";
+import * as S from "../src/main/settings.ts";
 import * as S2 from "./sentences.ts";
 import type { SentenceGroup } from "./sentences.ts";
 
