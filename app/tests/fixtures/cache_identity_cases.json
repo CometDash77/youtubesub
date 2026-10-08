@@ -1,0 +1,252 @@
+[
+  {
+    "name": "api-key-a",
+    "provider_cfg": {
+      "base_url": "u",
+      "model": "m",
+      "api_key": "SECRET-A"
+    },
+    "client_key": "k",
+    "instructions": "i",
+    "prompt": "p",
+    "expected": "f40774f765eda47d33d056812bd4b4a9073b1d7189fdc25e330b051e2c02c571"
+  },
+  {
+    "name": "api-key-b",
+    "provider_cfg": {
+      "base_url": "u",
+      "model": "m",
+      "api_key": "SECRET-B"
+    },
+    "client_key": "k",
+    "instructions": "i",
+    "prompt": "p",
+    "expected": "f40774f765eda47d33d056812bd4b4a9073b1d7189fdc25e330b051e2c02c571"
+  },
+  {
+    "name": "model-m2",
+    "provider_cfg": {
+      "base_url": "u",
+      "model": "m2",
+      "api_key": "SECRET-A"
+    },
+    "client_key": "k",
+    "instructions": "i",
+    "prompt": "p",
+    "expected": "97c3fd605a8e6f6ae184b5caacb7c8cdf6678830f031d84bb66bb6a53f3a88b3"
+  },
+  {
+    "name": "order-1",
+    "provider_cfg": {
+      "base_url": "u",
+      "model": "m",
+      "protocol": "auto"
+    },
+    "client_key": "k",
+    "instructions": "i",
+    "prompt": "p",
+    "expected": "f40774f765eda47d33d056812bd4b4a9073b1d7189fdc25e330b051e2c02c571"
+  },
+  {
+    "name": "order-2",
+    "provider_cfg": {
+      "model": "m",
+      "protocol": "auto",
+      "base_url": "u"
+    },
+    "client_key": "k",
+    "instructions": "i",
+    "prompt": "p",
+    "expected": "f40774f765eda47d33d056812bd4b4a9073b1d7189fdc25e330b051e2c02c571"
+  },
+  {
+    "name": "mock-off",
+    "provider_cfg": {
+      "base_url": "u",
+      "model": "m",
+      "mock": false
+    },
+    "client_key": "k",
+    "instructions": "i",
+    "prompt": "p",
+    "expected": "f40774f765eda47d33d056812bd4b4a9073b1d7189fdc25e330b051e2c02c571"
+  },
+  {
+    "name": "mock-absent",
+    "provider_cfg": {
+      "base_url": "u",
+      "model": "m"
+    },
+    "client_key": "k",
+    "instructions": "i",
+    "prompt": "p",
+    "expected": "f40774f765eda47d33d056812bd4b4a9073b1d7189fdc25e330b051e2c02c571"
+  },
+  {
+    "name": "mock-on-key-a",
+    "provider_cfg": {
+      "base_url": "u",
+      "model": "m",
+      "mock": true,
+      "api_key": "SECRET-A"
+    },
+    "client_key": "k",
+    "instructions": "i",
+    "prompt": "p",
+    "expected": "1e0b47a2e77249cfa5d733aeafb57f15776d37a4eff1822840683f3b2e3d1131"
+  },
+  {
+    "name": "mock-on-key-b",
+    "provider_cfg": {
+      "base_url": "u",
+      "model": "m",
+      "mock": true,
+      "api_key": "SECRET-B"
+    },
+    "client_key": "k",
+    "instructions": "i",
+    "prompt": "p",
+    "expected": "1e0b47a2e77249cfa5d733aeafb57f15776d37a4eff1822840683f3b2e3d1131"
+  },
+  {
+    "name": "protocol-responses",
+    "provider_cfg": {
+      "base_url": "u",
+      "model": "m",
+      "protocol": "responses"
+    },
+    "client_key": "k",
+    "instructions": "i",
+    "prompt": "p",
+    "expected": "e513a8e671e9d50df03f9960397cf4d392cebcc58d5caa42171adeaf54a65b22"
+  },
+  {
+    "name": "extra-keys",
+    "provider_cfg": {
+      "base_url": "u",
+      "model": "m",
+      "api_key": "SECRET",
+      "timeout_s": 30,
+      "extra_ignored": true
+    },
+    "client_key": "k",
+    "instructions": "i",
+    "prompt": "p",
+    "expected": "f40774f765eda47d33d056812bd4b4a9073b1d7189fdc25e330b051e2c02c571"
+  },
+  {
+    "name": "bare-for-extra",
+    "provider_cfg": {
+      "base_url": "u",
+      "model": "m"
+    },
+    "client_key": "k",
+    "instructions": "i",
+    "prompt": "p",
+    "expected": "f40774f765eda47d33d056812bd4b4a9073b1d7189fdc25e330b051e2c02c571"
+  },
+  {
+    "name": "realistic",
+    "provider_cfg": {
+      "base_url": "https://api.example.test/v1",
+      "model": "deepseek-chat"
+    },
+    "client_key": "yt-captions",
+    "instructions": "你是字幕翻译器",
+    "prompt": "你好，世界！字幕【译】测试",
+    "expected": "ef07d9a0c034a064d54ea4b7fa90b6ce7cf091c3f9a5a56dfd248ca0477a1c2f"
+  },
+  {
+    "name": "emoji",
+    "provider_cfg": {
+      "base_url": "u",
+      "model": "m"
+    },
+    "client_key": "k",
+    "instructions": "i",
+    "prompt": "emoji 🎬🎬 test",
+    "expected": "b6482f47858cf828f4c0a1e4ee655ab981a99c4c2c1d3ae7a57d7acb0f6a19a7"
+  },
+  {
+    "name": "control-chars",
+    "provider_cfg": {
+      "base_url": "u",
+      "model": "m"
+    },
+    "client_key": "k",
+    "instructions": "i",
+    "prompt": "line1\nline2\tTabbed\rCR\bBS\fFF",
+    "expected": "8f523b813f39a314ae48bdbaaa2f2852d437de8fb60aeee2ddbd4f9cfb936c90"
+  },
+  {
+    "name": "quote-backslash",
+    "provider_cfg": {
+      "base_url": "u",
+      "model": "m"
+    },
+    "client_key": "k",
+    "instructions": "i",
+    "prompt": "quote\" and \\ backslash",
+    "expected": "da4741108c45bc9201f3140816141c9bd15fb7b429616c6e8dca2e3901be6946"
+  },
+  {
+    "name": "u2028-u2029",
+    "provider_cfg": {
+      "base_url": "u",
+      "model": "m"
+    },
+    "client_key": "k",
+    "instructions": "i",
+    "prompt": "sep line end",
+    "expected": "29fba79bd3d8295e7cf25b9d9aa13cd555828891449fd31cc2b545df7ade7c62"
+  },
+  {
+    "name": "vtab-del-c1-nbsp",
+    "provider_cfg": {
+      "base_url": "u",
+      "model": "m"
+    },
+    "client_key": "k",
+    "instructions": "i",
+    "prompt": "\u000bvtab\u001f  end",
+    "expected": "f91fa6c1e793d1db36d7266f784845a38022c274869b77c43c5a0d58c1f4d17b"
+  },
+  {
+    "name": "numeric-model",
+    "provider_cfg": {
+      "base_url": "u",
+      "model": "123"
+    },
+    "client_key": "k",
+    "instructions": "i",
+    "prompt": "p",
+    "expected": "aa4d1a3ae92e2c80ab74f661dd861c35360fc7092fa609cb8494b4ef77060c1a"
+  },
+  {
+    "name": "empty-provider-dict",
+    "provider_cfg": {},
+    "client_key": "k",
+    "instructions": "i",
+    "prompt": "p",
+    "expected": "95ee6463fa97f109cc720a82c2d61573c73f4e9d0d5f341a5f1e6cb6f346ad06"
+  },
+  {
+    "name": "none-provider",
+    "provider_cfg": null,
+    "client_key": "k",
+    "instructions": "i",
+    "prompt": "p",
+    "expected": "95ee6463fa97f109cc720a82c2d61573c73f4e9d0d5f341a5f1e6cb6f346ad06"
+  },
+  {
+    "name": "empty-strings",
+    "provider_cfg": {
+      "base_url": "",
+      "model": ""
+    },
+    "client_key": "",
+    "instructions": "",
+    "prompt": "",
+    "expected": "6b7cd0ec7ea37a64e6b38b25cc45f70a4d4eff7ceb5c08e9a32f682ff573e3db"
+  }
+]
