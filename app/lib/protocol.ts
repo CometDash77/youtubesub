@@ -154,3 +154,45 @@ export function parse_json3(data: unknown): Cue[] {
   }
   return cues;
 }
+
+// ---- Wire constants + SourceState (ticket #198: the remaining protocol.py
+// surface; the parse/coerce/repair half above landed with #200/#203). ----
+
+export const PROTOCOL_VERSION = 1;
+export const WS_PATH = "/ws";
+export const HEALTH_PATH = "/health";
+export const STATUS_PATH = "/status";
+export const DEFAULT_PORT = 9877;
+
+// Python module-level set constant.
+export const VALID_TYPES: ReadonlySet<string> =
+  new Set(["register", "cues", "sync", "deactivate", "play_pause"]);
+
+export interface SourceState {
+  source_id: string;
+  provider: string;
+  video_id: string;
+  tab_title: string;
+  video_description: string;
+  track_kind: string;
+  track_lang: string;
+  cues: unknown[];
+  active: boolean;
+}
+
+// Python dataclass with defaults. Zero uses on the Python side (grep proof:
+// defined in protocol.py, referenced nowhere else); ported under the
+// no-deletion criterion with a make_ factory replaying the defaults.
+export function make_source_state(source_id: string): SourceState {
+  return {
+    source_id,
+    provider: "youtube",
+    video_id: "",
+    tab_title: "",
+    video_description: "",
+    track_kind: "",
+    track_lang: "",
+    cues: [],
+    active: true,
+  };
+}
