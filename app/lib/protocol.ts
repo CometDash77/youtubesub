@@ -1,0 +1,84 @@
+// Partial port of desktop/suboverlay/protocol.py (ticket #200): the Cue wire
+// model + parse_json3, exactly what the parse-parity acceptance needs. The
+// remaining protocol surface (coerce_cue / coerce_cues / repair_cue_ends /
+// PROTOCOL_* constants / SourceState / frame validation) lands with ticket
+// #198 and extends this module. Original parse_json3 adapted ideas from
+// yt-dual-subs inject.js (MIT, (c) 2026 Gythiro).
+//
+// Semantic fidelity notes (registered in ticket #200):
+// - Dataclass __post_init__ (last_off_ms falsy -> start_ms) becomes make_cue():
+//   0 and -0 both fall back like Python `not x`; NaN is kept (Python truthy),
+//   though the shared JSON fixture can never carry NaN (JSON.parse would
+//   reject the whole file).
+// - Python isinstance(x, (int, float)) on wire fields accepts JSON booleans
+//   (bool is an int subclass) and coerces via float(); the TS check therefore
+//   accepts number | boolean and Number()-coerces. Strings are rejected on
+//   both sides.
+// - re.sub(r"\s+", " ") + strip -> replace(/\s+/g, " ") + trim.
+
+export interface Cue {
+  start_ms: number;
+  end_ms: number;
+  text: string;
+  // Wire-only since ADR-006: kept for protocol compatibility (userscript,
+  // fixtures and docs all still carry it), never used for segmentation.
+  last_off_ms: number;
+  trans: string;
+}
+
+export function make_cue(start_ms: number, end_ms: number, text: string,
+                         last_off_ms = 0, trans = ""): Cue {
+  return {
+    start_ms,
+    end_ms,
+    text,
+    last_off_ms: last_off_ms !== 0 ? last_off_ms : start_ms,
+    trans,
+  };
+}
+
+export function parse_json3(data: unknown): Cue[] {
+  // Parse YouTube timedtext json3 payload into Cue list (event order kept).
+  // Read only segs utf8 + tOffsetMs, collapse whitespace, strip ASR >> marks,
+  // skip style/blank events, last_off tracks last NON-BLANK seg. Seg
+  // separator aligned to the reference (#26): join with a space so a seg
+  // without a trailing space cannot glue the next word onto it (word and
+  // char counts would drift); the whitespace collapse folds the doubled
+  // spaces a trailing space plus separator produces.
+  const cues: Cue[] = [];
+  const events = data !== null && typeof data === "object" && !Array.isArray(data)
+    ? (data as { events?: unknown }).events
+    : undefined;
+  if (!Array.isArray(events)) return cues;
+  for (const ev of events) {
+    if (ev === null || typeof ev !== "object" || Array.isArray(ev)) continue;
+    const segs = (ev as { segs?: unknown }).segs;
+    if (!Array.isArray(segs)) continue;
+    const parts: string[] = [];
+    let off = 0;
+    let has_off = false;
+    for (const s of segs) {
+      if (s === null || typeof s !== "object" || Array.isArray(s)) continue;
+      const u = (s as { utf8?: unknown }).utf8;
+      if (typeof u !== "string") continue;
+      parts.push(u);
+      const to = (s as { tOffsetMs?: unknown }).tOffsetMs;
+      if (u.trim() && (typeof to === "number" || typeof to === "boolean")) {
+        off = Number(to);
+        has_off = true;
+      }
+    }
+    let text = parts.join(" ").replace(/\s+/g, " ").trim();
+    text = text.replace(/(^|\s)>{2,}\s*/g, "$1").trim();
+    if (!text) continue;
+    const tStart = (ev as { tStartMs?: unknown }).tStartMs;
+    const start = typeof tStart === "number" || typeof tStart === "boolean"
+      ? Number(tStart) : 0.0;
+    const dDur = (ev as { dDurationMs?: unknown }).dDurationMs;
+    const dur = typeof dDur === "number" || typeof dDur === "boolean"
+      ? Number(dDur) : 0.0;
+    if (dur <= 0) continue;
+    cues.push(make_cue(start, start + dur, text, has_off ? start + off : start));
+  }
+  return cues;
+}
