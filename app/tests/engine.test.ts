@@ -18,6 +18,13 @@
 //   - sqlite3.connect(db) row count -> node:sqlite DatabaseSync.
 //   - GC-closed sqlite connections -> explicit cache.close() before the
 //     tmpdir removal (Windows rmSync needs handles released, per #201).
+//   - CI hang run 37730730854 adaptations: withTmp cleanup rethrows the
+//     body's error after best-effort rmSync (EBUSY retried) so cleanup
+//     never masks the real failure; wait budgets 5s -> 15s. Runner level
+//     (package.json): --test-concurrency=1 (4-way concurrent spawns left
+//     whole files unexecuted on that run), --test-force-exit and
+//     --test-timeout=60000 (a leaked worker timer / stalled test can no
+//     longer hang the step).
 //   - lambda jobs: ... -> sync arrow functions (the queue accepts both).
 //   - time.time() in sync events -> Date.now(); wall-clock assertions keep
 //     the Python margins (< 0.4s urgent, > 0.45s debounce).
@@ -41,11 +48,22 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 function withTmp(name: string, fn: (dir: string) => void | Promise<void>): void {
   test(name, async () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), "engine-ts-test-"));
+    // Cleanup must never mask the body's real error (CI run 37730730854: a
+    // wait timeout surfaced as a misleading EBUSY from this rmSync) and must
+    // ride out Windows locks on a handle not yet released (per #201).
+    let failure: unknown;
     try {
       await fn(dir);
+    } catch (e) {
+      failure = e;
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      try {
+        rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+      } catch {
+        // The dir is per-test throwaway; a stubborn lock is not a verdict.
+      }
     }
+    if (failure !== undefined) throw failure;
   });
 }
 
@@ -81,7 +99,9 @@ function mk_engine(dir: string, o: MkOpts = {}): Engine {
 }
 
 async function wait_trans(e: Engine, want?: (d: Record<string, unknown>) => boolean,
-                          timeout = 5000): Promise<Record<string, unknown>> {
+                          // 15s: cold CI disks ran these polls 9s+; 5s fired
+                          // once (run 37730730854) and manufactured a failure.
+                          timeout = 15000): Promise<Record<string, unknown>> {
   // Tick until the display satisfies want (default: any translation arrives).
   const ok = want ?? ((d: Record<string, unknown>) => Boolean(d["trans"]));
   const deadline = Date.now() + timeout;

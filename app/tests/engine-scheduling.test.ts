@@ -1,6 +1,9 @@
 // Continuation of the desktop/tests/test_engine.py port (ticket #203,
 // map #181) - see engine.test.ts for the shared conversion notes; the split
 // across two files is purely mechanical (node --test discovers both).
+// The CI hang run 37730730854 adaptations (withTmp error-preserving cleanup
+// with rmSync EBUSY retries, wait budgets 5s -> 15s, runner flags in
+// package.json) are registered in the engine.test.ts header too.
 // This file: issue #31 identity/namespace, /status authority, segmentation
 // inputs, identity forks, prefetch scheduling (spec #24) and the display
 // contract (#151 方案 A).
@@ -23,11 +26,22 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 function withTmp(name: string, fn: (dir: string) => void | Promise<void>): void {
   test(name, async () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), "engine-ts-test-"));
+    // Cleanup must never mask the body's real error (CI run 37730730854: a
+    // wait timeout surfaced as a misleading EBUSY from this rmSync) and must
+    // ride out Windows locks on a handle not yet released (per #201).
+    let failure: unknown;
     try {
       await fn(dir);
+    } catch (e) {
+      failure = e;
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      try {
+        rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+      } catch {
+        // The dir is per-test throwaway; a stubborn lock is not a verdict.
+      }
     }
+    if (failure !== undefined) throw failure;
   });
 }
 
@@ -59,7 +73,9 @@ function mk_engine(dir: string, o: MkOpts = {}): Engine {
 }
 
 async function wait_trans(e: Engine, want?: (d: Record<string, unknown>) => boolean,
-                          timeout = 5000): Promise<Record<string, unknown>> {
+                          // 15s: cold CI disks ran these polls 9s+; 5s fired
+                          // once (run 37730730854) and manufactured a failure.
+                          timeout = 15000): Promise<Record<string, unknown>> {
   const ok = want ?? ((d: Record<string, unknown>) => Boolean(d["trans"]));
   const deadline = Date.now() + timeout;
   let d = e.tick() as Record<string, unknown>;
@@ -130,7 +146,7 @@ function flat_groups(src: EngineSource): Array<[number, number]> {
   return src.groups.map(g => [g.start_idx, g.end_idx]);
 }
 
-async function wait_for(pred: () => boolean, timeout = 5000,
+async function wait_for(pred: () => boolean, timeout = 15000,
                         tick?: () => void): Promise<boolean> {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
