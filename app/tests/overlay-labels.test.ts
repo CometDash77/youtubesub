@@ -260,3 +260,51 @@ test("long translation renders inside bounds in trans and bilingual modes", () =
     }
   }
 });
+
+// ---- #174 appearance keys (scope-driven, no pytest source: Python never
+// landed the keys; these pin the fallback-compatible consumption contract) ----
+
+test("#174 keys fall back to today's hardcoded values when absent", () => {
+  const log = paint("trans", "Original", "\u4f60\u597d", { trans_available: true });
+  assert.deepEqual(colors(log), ["#ffe082"]);               // trans fallback 255,224,130
+  const bilingual = paint("bilingual", "Hello", "\u4f60\u597d", { trans_available: true });
+  assert.deepEqual(colors(bilingual), ["#ffe082", "#ffffff"]); // orig fallback 255,255,255
+  const rows = bilingual.events.filter((e) => e.kind === "text") as Array<{ stroke_width: number; stroke_color: string; font_family: string }>;
+  // display.stroke default 1.5 passes through (Python paint reads the key, not the 2.0 paint fallback)
+  assert.ok(rows.every((r) => r.stroke_width === 1.5), JSON.stringify(rows.map((r) => r.stroke_width)));
+  assert.ok(rows.every((r) => r.stroke_color === "#000000"));
+  assert.ok(rows.every((r) => r.font_family === "Microsoft YaHei UI"));
+});
+
+test("#174 explicit values are consumed and stroke 0 disables the pen", () => {
+  const cfg = default_settings() as { [k: string]: unknown };
+  const disp = cfg["display"] as { [k: string]: unknown };
+  disp["orig_text_color"] = [255, 0, 0];
+  disp["trans_stroke_color"] = [10, 20, 30];
+  disp["stroke"] = 0;
+  const w = new OverlayDisplay(cfg);
+  w.mode = "bilingual";
+  w.orig_text = "Hi";
+  w.trans_text = "\u4f60\u597d";
+  w.trans_available = true;
+  const rows = w.paint_plan().events.filter((e) => e.kind === "text") as Array<{ role: string; color: string; stroke_width: number; stroke_color: string }>;
+  assert.equal(rows.length, 2);
+  assert.equal(rows[1]!.color, "#ff0000");        // orig row (trans_first)
+  assert.equal(rows[1]!.stroke_color, "#000000"); // orig stroke unchanged
+  assert.equal(rows[0]!.stroke_color, "#0a141e"); // trans stroke 10,20,30
+  assert.equal(rows[0]!.stroke_width, 0);
+});
+
+test("failure red stays fixed regardless of trans_text_color", () => {
+  const cfg = default_settings() as { [k: string]: unknown };
+  (cfg["display"] as { [k: string]: unknown })["trans_text_color"] = [0, 255, 0];
+  const w = new OverlayDisplay(cfg);
+  w.mode = "trans";
+  w.trans_available = true;
+  w.trans_state = "failed:\u8bf7\u6c42\u53d7\u9650";
+  w.orig_text = "Original";
+  w.trans_text = "";
+  const rows = w.paint_plan().events.filter((e) => e.kind === "text") as Array<{ color: string }>;
+  assert.deepEqual(rows.map((r) => r.color), ["#ff5a5a"]);
+});
+

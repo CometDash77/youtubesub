@@ -102,6 +102,36 @@ function num(v: unknown, fallback: number): number {
 }
 
 // ---------------------------------------------------------------------------
+// #174 appearance keys, read with fallback-compatible semantics
+// (decision #174: the six display.* keys may be absent from any settings
+// file - the overlay then falls back to the values overlay.py hardcodes
+// today. Python has not landed these keys yet, so the display layer only
+// CONSUMES them defensively; adding them to the authority table is the
+// settings-window ticket's business. Failure red stays hardcoded.)
+// ---------------------------------------------------------------------------
+
+// QColor(.name()) shape: lowercase #rrggbb, channels clamped to 0-255.
+function rgb_to_hex(c: [number, number, number]): string {
+  const h = (v: number) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, "0");
+  return "#" + h(c[0]) + h(c[1]) + h(c[2]);
+}
+
+// _clamp_channels-equivalent shape check: exactly three numbers, else null.
+function rgb_list(v: unknown, fallback: [number, number, number]): [number, number, number] {
+  if (Array.isArray(v) && v.length === 3
+    && typeof v[0] === "number" && typeof v[1] === "number" && typeof v[2] === "number") {
+    return [v[0], v[1], v[2]];
+  }
+  return fallback;
+}
+
+const FALLBACK_FONT_FAMILY = "Microsoft YaHei UI";
+const FALLBACK_ORIG_TEXT: [number, number, number] = [255, 255, 255];
+const FALLBACK_ORIG_STROKE: [number, number, number] = [0, 0, 0];
+const FALLBACK_TRANS_TEXT: [number, number, number] = [255, 224, 130];
+const FALLBACK_TRANS_STROKE: [number, number, number] = [0, 0, 0];
+
+// ---------------------------------------------------------------------------
 // Display state machine (OverlayWindow minus windowing)
 // ---------------------------------------------------------------------------
 
@@ -112,6 +142,12 @@ export interface PlanTextEvent {
   color: string;
   bold: boolean;
   font_size: number;
+  // _draw_wrapped's stroke pen (display.stroke, paint fallback 2.0); 0 = none.
+  stroke_width: number;
+  // Per-role stroke color (display.orig_stroke_color / display.trans_stroke_color).
+  stroke_color: string;
+  // Global font family (display.font_family, fallback "Microsoft YaHei UI").
+  font_family: string;
 }
 
 export interface PlanDividerEvent {
@@ -268,6 +304,18 @@ export class OverlayDisplay {
     const rows = this.display_rows();
     const has_status = this.translation_status_text() !== "";
     const events: PlanEvent[] = [];
+    // Stroke pen: one width for every row (paintEvent's float(disp.get("stroke", 2.0))),
+    // per-role stroke colors (#174). 0 means no stroke path in Python.
+    const stroke_width = num(disp["stroke"], 2.0);
+    const strokeColors: Record<RowRole, string> = {
+      orig: rgb_to_hex(rgb_list(disp["orig_stroke_color"], FALLBACK_ORIG_STROKE)),
+      trans: rgb_to_hex(rgb_list(disp["trans_stroke_color"], FALLBACK_TRANS_STROKE)),
+    };
+    const textColors: Record<RowRole, string> = {
+      orig: rgb_to_hex(rgb_list(disp["orig_text_color"], FALLBACK_ORIG_TEXT)),
+      trans: rgb_to_hex(rgb_list(disp["trans_text_color"], FALLBACK_TRANS_TEXT)),
+    };
+    const font_family = asText(disp["font_family"]) || FALLBACK_FONT_FAMILY;
     // Divider y values mirror the PaintLog stub geometry (rows 20 units tall);
     // no assertion depends on the value, only on placement/shape.
     rows.forEach((row, i) => {
@@ -280,13 +328,15 @@ export class OverlayDisplay {
         (row.role === "orig" && boldSetting === "sub_only");
       let color: string;
       if (row.role === "orig") {
-        color = "#ffffff";
+        color = textColors.orig;
       } else if (has_status && this.trans_state.startsWith("failed:")) {
+        // Failure red is a fixed contract (#174): it never reads trans_text_color.
         color = "#ff5a5a";
       } else {
-        color = "#ffe082";
+        color = textColors.trans;
       }
-      events.push({ kind: "text", role: row.role, text: row.text, color, bold, font_size });
+      events.push({ kind: "text", role: row.role, text: row.text, color, bold, font_size,
+        stroke_width, stroke_color: strokeColors[row.role], font_family });
       // Issue #1 Q2a: two rows (bilingual) always get the divider between
       // them, even while one of them is still empty.
       if (i === 0 && rows.length === 2) events.push({ kind: "divider", y: 20 * i + 2 });

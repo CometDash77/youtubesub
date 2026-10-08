@@ -44,7 +44,10 @@ const ctxMenuEl = document.getElementById("ctxmenu") as HTMLElement;
 // Paint plan application (rows / divider / status / bg box)
 // ---------------------------------------------------------------------------
 
-interface PlanTextView { kind: "text"; role: string; text: string; color: string; bold: boolean; font_size: number }
+interface PlanTextView {
+  kind: "text"; role: string; text: string; color: string; bold: boolean; font_size: number;
+  stroke_width: number; stroke_color: string; font_family: string;
+}
 interface PlanDividerView { kind: "divider"; y: number }
 type PlanEventView = PlanTextView | PlanDividerView;
 interface PlanView { events: PlanEventView[]; status_text: string; bg: { r: number; g: number; b: number; a: number } }
@@ -66,6 +69,16 @@ bridge.onDisplayPlan((raw) => {
       div.style.fontSize = (ev.font_size * 4) / 3 + "px";
       div.style.color = ev.color;
       div.style.fontWeight = ev.bold ? "700" : "400";
+      // _draw_wrapped's QPainterPath stroke -> -webkit-text-stroke; stroke
+      // under fill (paint-order) mirrors strokePath + fillPath.
+      if (typeof ev.stroke_width === "number" && ev.stroke_width > 0) {
+        div.style.webkitTextStrokeWidth = ev.stroke_width + "px";
+        div.style.webkitTextStrokeColor = typeof ev.stroke_color === "string" ? ev.stroke_color : "#000000";
+        div.style.paintOrder = "stroke fill";
+      }
+      if (typeof ev.font_family === "string" && ev.font_family) {
+        div.style.fontFamily = '"' + ev.font_family + '", sans-serif';
+      }
       div.textContent = ev.text;
       rowsEl.appendChild(div);
     } else {
