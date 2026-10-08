@@ -23,6 +23,10 @@ const bridge = (window as unknown as { youtubesub: SkeletonBridge }).youtubesub;
 // bridge missing" from "script ran but the hotspot logic never fired".
 bridge.rendererLog("renderer booted (bridge present)");
 window.addEventListener("error", (e) => bridge.rendererLog("renderer error: " + e.message));
+// First-paint anchor: the acceptance harness waits for this line instead of
+// sleeping, so a translucent window is captured only after it actually painted
+// (pit 1: a fixed sleep captured the desktop before the first frame).
+requestAnimationFrame(() => requestAnimationFrame(() => bridge.rendererLog("renderer painted")));
 
 let clickThrough = false;
 const statusEl = document.getElementById("status") as HTMLElement;

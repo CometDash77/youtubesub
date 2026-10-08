@@ -27,6 +27,7 @@ public class W {
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
   [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
   [DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr h, uint flags);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
   [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
   public delegate bool EnumProc(IntPtr h, IntPtr l);
   [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc cb, IntPtr l);
@@ -85,22 +86,25 @@ function Test-PointHit($h, $x, $y) {
   [void][W]::GetWindowTextW($hit, $sb, 256)
   return [pscustomobject]@{ hitTitle = $sb.ToString(); isOverlay = ($rootHit -eq $h) }
 }
-function Save-WindowShot($h, $path) {
-  $r = Get-Rect $h
-  $w = $r.R - $r.L; $ht = $r.B - $r.T
+function Save-RectShot($x, $y, $w, $ht, $path) {
   $bmp = New-Object System.Drawing.Bitmap($w, $ht)
   $g = [System.Drawing.Graphics]::FromImage($bmp)
-  $g.CopyFromScreen($r.L, $r.T, 0, 0, $bmp.Size)
+  $g.CopyFromScreen([int]$x, [int]$y, 0, 0, $bmp.Size)
   $bmp.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
   $g.Dispose(); $bmp.Dispose()
 }
-function Save-FullShot($path) {
-  $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-  $bmp = New-Object System.Drawing.Bitmap($b.Width, $b.Height)
-  $g = [System.Drawing.Graphics]::FromImage($bmp)
-  $g.CopyFromScreen(0, 0, 0, 0, $bmp.Size)
-  $bmp.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
-  $g.Dispose(); $bmp.Dispose()
+function Save-WindowShot($h, $path) {
+  $r = Get-Rect $h
+  Save-RectShot $r.L $r.T ($r.R - $r.L) ($r.B - $r.T) $path
+}
+# Application-state anchor (pit 1): wait for a log marker instead of a sleep.
+function Wait-LogMarker($marker, $timeoutMs) {
+  $sw = [System.Diagnostics.Stopwatch]::StartNew()
+  while ($sw.ElapsedMilliseconds -lt $timeoutMs) {
+    if ((Test-Path $log) -and (Select-String -Path $log -Pattern ([regex]::Escape($marker)) -Quiet)) { return $true }
+    Start-Sleep -Milliseconds 200
+  }
+  return $false
 }
 function Start-Skeleton($scene) {
   Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
@@ -124,37 +128,45 @@ function Wait-Overlay {
   }
   throw "overlay window never appeared"
 }
-# A1.3: transparent corners of the window rect must equal the reference
-# frame (desktop shows through), the interior must differ (panel + text).
-function Compare-A13($h, $refPath, $winPath, $r) {
+# A1.3, same-scene reference: hide the window, capture the desktop behind it,
+# show it again, capture the window. Pixels in the 4px transparent band must
+# still match the desktop (background shows through); interior pixels must
+# differ (panel + text composited). Band comparison tolerates a couple of
+# drifted pixels because the runner desktop carries a live log console.
+function Compare-A13($refPath, $winPath, $w, $ht) {
   $ref = New-Object System.Drawing.Bitmap($refPath)
   $win = New-Object System.Drawing.Bitmap($winPath)
-  $w = $r.R - $r.L; $ht = $r.B - $r.T
-  $cornerOk = $true
-  $corners = @(@(6, 6), @(($w - 7), 6), @(6, ($ht - 7)), @(($w - 7), ($ht - 7)))
-  foreach ($c in $corners) {
-    $p1 = $ref.GetPixel($r.L + $c[0], $r.T + $c[1])
-    $p2 = $win.GetPixel($c[0], $c[1])
+  $band = @(@(2,30), @(2,67), @(2,105), @(($w-3),30), @(($w-3),67), @(($w-3),105),
+            @(30,2), @(325,2), @(($w-30),2), @(30,($ht-3)), @(325,($ht-3)), @(($w-30),($ht-3)))
+  $bandEqual = 0
+  foreach ($p in $band) {
+    $p1 = $ref.GetPixel([int]$p[0], [int]$p[1])
+    $p2 = $win.GetPixel([int]$p[0], [int]$p[1])
     $d = [Math]::Abs($p1.R-$p2.R) + [Math]::Abs($p1.G-$p2.G) + [Math]::Abs($p1.B-$p2.B)
-    if ($d -gt 12) { $cornerOk = $false }
+    if ($d -le 12) { $bandEqual++ }
   }
   $diffCount = 0; $samples = 0
   for ($x = 40; $x -lt $w - 60; $x += 24) {
     for ($y = 16; $y -lt $ht - 30; $y += 14) {
       $samples++
-      $p1 = $ref.GetPixel($r.L + $x, $r.T + $y)
+      $p1 = $ref.GetPixel($x, $y)
       $p2 = $win.GetPixel($x, $y)
       $d = [Math]::Abs($p1.R-$p2.R) + [Math]::Abs($p1.G-$p2.G) + [Math]::Abs($p1.B-$p2.B)
       if ($d -gt 24) { $diffCount++ }
     }
   }
   $ref.Dispose(); $win.Dispose()
-  return [pscustomobject]@{ cornerOk = $cornerOk; interiorDiff = ($diffCount -gt 0); diffCount = $diffCount; samples = $samples }
+  return [pscustomobject]@{
+    bandEqual = $bandEqual
+    bandTotal = $band.Count
+    cornersOk = ($bandEqual -ge ($band.Count - 2))
+    interiorDiff = ($diffCount -ge 10)
+    diffCount = $diffCount
+    samples = $samples
+  }
 }
 
 $results = @{}
-$refPath = Join-Path $ev "ref-full.png"
-if (-not (Test-Path $refPath)) { Save-FullShot $refPath }
 
 function Run-Scene($s) {
   Write-Host "=== scene $s ==="
@@ -166,15 +178,23 @@ function Run-Scene($s) {
     Write-Host "hwnd=$h pid=$procId"
     $r = Get-RectStable $h
     $cx = [int](($r.L + $r.R) / 2); $cy = [int](($r.T + $r.B) / 2)
+    $w = $r.R - $r.L; $ht = $r.B - $r.T
 
     switch ($s) {
       "base" {
-        Start-Sleep -Seconds 2
+        $painted = Wait-LogMarker "renderer painted" 25000
+        Start-Sleep -Milliseconds 900
         $bits = Test-StyleBits $h
+        [void][W]::ShowWindow($h, 0)
+        Start-Sleep -Milliseconds 700
+        Save-RectShot $r.L $r.T $w $ht (Join-Path $ev "ref-window-rect.png")
+        [void][W]::ShowWindow($h, 5)
+        Start-Sleep -Milliseconds 1200
         Save-WindowShot $h (Join-Path $ev "sceneA-base-window.png")
-        $a13 = Compare-A13 $h $refPath (Join-Path $ev "sceneA-base-window.png") $r
-        $results.base = @{ bits = $bits; a13 = $a13; rect = "$($r.L),$($r.T),$($r.R),$($r.B)" }
+        $a13 = Compare-A13 (Join-Path $ev "ref-window-rect.png") (Join-Path $ev "sceneA-base-window.png") $w $ht
+        $results.base = @{ bits = $bits; a13 = $a13; painted = $painted; rect = "$($r.L),$($r.T),$($r.R),$($r.B)" }
         Write-Host ($bits | Format-List | Out-String)
+        Write-Host ("painted-anchor=" + $painted)
         Write-Host ("a13: " + ($a13 | ConvertTo-Json -Compress))
       }
       "clickthrough" {
@@ -190,16 +210,14 @@ function Run-Scene($s) {
         Write-Host "bits:          $($bits | ConvertTo-Json -Compress)"
       }
       "hover-unlock" {
-        # Timeline is driven by the app: CT on at did-finish-load+0.5s,
-        # synthetic mousemove to the hotspot at CT+2.5s, to the center at
-        # CT+8s. Samples follow the same clock (proven by #193 CI run).
+        # Timeline is app-driven: CT on at did-finish-load+0.5s, synthetic
+        # mousemove to the hotspot at CT+2.5s, to the center at CT+8s.
         Start-Sleep -Milliseconds 2500
         $before = Test-PointHit $h $cx $cy
         Start-Sleep -Seconds 3
         $hotspot = Test-PointHit $h ($r.R - 33) ($r.B - 33)
         Start-Sleep -Seconds 4
         $mid = Test-PointHit $h $cx $cy
-        $bits = Test-StyleBits $h
         Save-WindowShot $h (Join-Path $ev "sceneC-hover-unlock.png")
         $results.hoverUnlock = @{ before = $before; hotspot = $hotspot; mid = $mid }
         Write-Host "before:  $($before | ConvertTo-Json -Compress)"
@@ -208,11 +226,11 @@ function Run-Scene($s) {
       }
       "tray-menu" {
         Start-Sleep -Milliseconds 6000
-        Save-FullShot (Join-Path $ev "sceneD-tray-menu-1.png")
+        Save-RectShot 0 0 ([System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Width) ([System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Height) (Join-Path $ev "sceneD-tray-menu-1.png")
         Start-Sleep -Milliseconds 1500
-        Save-FullShot (Join-Path $ev "sceneD-tray-menu-2.png")
+        Save-RectShot 0 0 ([System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Width) ([System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Height) (Join-Path $ev "sceneD-tray-menu-2.png")
         Start-Sleep -Milliseconds 600
-        Save-FullShot (Join-Path $ev "sceneD-tray-menu-full.png")
+        Save-RectShot 0 0 ([System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Width) ([System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Height) (Join-Path $ev "sceneD-tray-menu-full.png")
         $results.trayMenu = @{ note = "tray-anchored popUp at 6s; window-anchored popup at ~7.5s; shots at 6.0/7.5/8.1s" }
         Write-Host "triple shots saved"
       }
@@ -228,7 +246,6 @@ function Run-Scene($s) {
         [void][W]::keybd_event(0x11, 0, 2, [UIntPtr]::Zero)
         Start-Sleep -Seconds 1
         $after = Test-PointHit $h $cx $cy
-        $bits = Test-StyleBits $h
         Save-WindowShot $h (Join-Path $ev "sceneE-hotkey.png")
         $results.hotkey = @{ before = $before; after = $after }
         Write-Host "before(ct):    $($before | ConvertTo-Json -Compress)"
@@ -275,7 +292,7 @@ if ($Scene -eq "all") {
 
 $results | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $ev "report.json") -Encoding UTF8
 
-# ---- verdict stage: evaluate every assertion of the acceptance doc ----
+# ---- verdict stage ----
 $logText = if (Test-Path $log) { Get-Content $log -Raw } else { "" }
 $rows = New-Object System.Collections.Generic.List[object]
 function Add-Row($id, $channel, $ok, $detail) {
@@ -285,7 +302,7 @@ $b = $results.base; $ct = $results.clickthrough; $hv = $results.hoverUnlock; $hk
 
 Add-Row "A1.1" "CI" ($b -and $b.bits.topmost) "WS_EX_TOPMOST bit on base scene ($($b.bits.rawExStyle))"
 Add-Row "A1.2" "CI" ($b -and (-not $b.bits.caption) -and (Test-Path (Join-Path $ev "sceneA-base-window.png"))) "WS_CAPTION bit off + window shot saved ($($b.bits.rawStyle))"
-Add-Row "A1.3" "CI" ($b -and $b.a13.cornerOk -and $b.a13.interiorDiff) "transparent corners equal ref, interior differs (diff $($b.a13.diffCount)/$($b.a13.samples))"
+Add-Row "A1.3" "CI" ($b -and $b.painted -and $b.a13.cornersOk -and $b.a13.interiorDiff) "transparent band equal to hidden-window reference ($($b.a13.bandEqual)/$($b.a13.bandTotal)), interior composited (diff $($b.a13.diffCount)/$($b.a13.samples))"
 Add-Row "A1.4" "CI" ($ct -and $ct.bits.layered -and $ct.bits.transparent) "WS_EX_LAYERED|TRANSPARENT during click-through ($($ct.bits.rawExStyle); evidence-only by pit 3)"
 Add-Row "A2.1" "CI" ($ct -and ($ct.postHit.isOverlay -eq $false)) "click-through baseline: WindowFromPoint misses the overlay (log anchor set_click_through true)"
 Add-Row "A2.2" "CI" ($hv -and ($hv.hotspot.isOverlay -eq $true) -and $logText.Contains("hot=true") -and $logText.Contains("set-ignore false")) "hotspot clickable: synthetic move -> closest(.hot) -> set-ignore false"
@@ -299,7 +316,7 @@ Add-Row "A4.2" "CI" ($hk -and ($hk.after.isOverlay -eq $true) -and $logText.Cont
 Add-Row "A5.1" "CI" ($wsr -and $wsr.health.ok -and $wsr.health.version -eq 1) "GET /health 200 ok version 1"
 Add-Row "A5.2" "CI" ($wsr -and $wsr.evilClient -match "WS-REJECTED status=403") "non-whitelisted Origin rejected 403; ok client passed (whitelist positive)"
 Add-Row "A5.3" "CI" ($wsr -and $wsr.status.stats.bad_frames -ge 2 -and $wsr.status.stats.error -eq 0 -and $wsr.status.stats.frames -ge 6) "bad frames counted, connection kept, later frames processed"
-Add-Row "A5.4" "CI" ($wsr -and $wsr.status.state -eq "ok" -and $wsr.status.orig -eq "second cue line" -and $wsr.status.sources -ge 1 -and $wsr.status.title -and ($wsr.okClient -match "MIDSTATUS playing=True" -or $wsr.okClient -match "MIDSTATUS playing=true") -and ($wsr.status.playing -eq $false)) "register/cues/sync flow reported; playing flipped true then false"
+Add-Row "A5.4" "CI" ($wsr -and $wsr.status.state -eq "ok" -and $wsr.status.orig -eq "second cue line" -and $wsr.status.sources -ge 1 -and $wsr.status.title -and ($wsr.okClient -match "MIDSTATUS playing=True") -and ($wsr.status.playing -eq $false)) "register/cues/sync flow reported; playing flipped true then false"
 Add-Row "A5.5" "CI" ($logText -match "\[ws\] listening on 127\.0\.0\.1:9877") "loopback bind (unit test asserts the address() value as well)"
 
 $ciRows = @($rows | Where-Object { $_.channel -eq "CI" })
