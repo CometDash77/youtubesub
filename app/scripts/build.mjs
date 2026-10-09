@@ -8,4 +8,8 @@ cpSync(
   new URL("../src/renderer/index.html", import.meta.url),
   new URL("../dist/renderer/index.html", import.meta.url),
 );
-console.log("copied dist/renderer/index.html");
+cpSync(
+  new URL("../src/renderer/debug.html", import.meta.url),
+  new URL("../dist/renderer/debug.html", import.meta.url),
+);
+console.log("copied dist/renderer/{index,debug}.html");

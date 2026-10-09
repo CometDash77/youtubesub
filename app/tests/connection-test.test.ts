@@ -451,7 +451,8 @@ test("a run writes no cache no queue and no config", async () => {
   // settings.save cannot be monkeypatched on an ESM module export; the
   // equivalent guarantee is that the runner module never imports the
   // settings module (source scan; cache/queue covered by the patch above).
-  const src = fs.readFileSync(new URL("../lib/connection-test.ts", import.meta.url), "utf8");
+  // File relocated to src/main with #205 (lib path is a re-export shim now).
+  const src = fs.readFileSync(new URL("../src/main/connection-test.ts", import.meta.url), "utf8");
   assert.ok(!/^import[^\n]*settings/m.test(src),
             "the runner must not import the settings module");
 });

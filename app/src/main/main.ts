@@ -20,13 +20,14 @@ import type { MenuItemConstructorOptions } from "electron";
 import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
-import { startSkeletonServer, type WireEvent } from "./ws-server.js";
-import * as S from "./settings.js";
+import { startSkeletonServer, type WireEvent } from "./ws-server.ts";
+import * as S from "./settings.ts";
 import {
   OverlayDisplay, apply_resize, edge_at,
   type Rect, type Pt, type ResizeEdge, type JsonRecord,
-} from "./overlay.js";
-import { overlay_menu_model, type OverlayMenuAction, type OverlayMenuEntry } from "./overlay-menu.js";
+} from "./overlay.ts";
+import { overlay_menu_model, type OverlayMenuAction, type OverlayMenuEntry } from "./overlay-menu.ts";
+import { createDebugWindowHost } from "./debug-window-host.ts";
 
 const SCENE = process.env.SKELETON_SCENE || "base";
 // Product mode = no SKELETON_SCENE in the environment (npm start / packaged
@@ -61,6 +62,16 @@ let win: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let ctxMenu: Menu | null = null;
 let clickThrough = false;
+
+// #205: the settings/debug window host owns the headless DebugWindow model
+// plus its single permanently-reused BrowserWindow. The menu entries land on
+// different pages of the same instance (settings page / tuning page).
+const debugHost = createDebugWindowHost({
+  settings,
+  overlay: display,
+  appRoot: APP_ROOT,
+  log: logLine,
+});
 
 function pushPlan(): void {
   win?.webContents.send("display-plan", display.paint_plan());
@@ -118,11 +129,14 @@ function handleMenuAction(idRaw: string): void {
     case "bg-lighter": display.nudge_opacity(-25); pushPlan(); break;
     case "click-through": setClickThrough(!clickThrough); break;
     case "open-settings":
+      // One window, two entries (settings page vs tuning page); the Python
+      // unlock-before-open guard ships with the window host (#205).
+      logLine("[menu] open-settings -> debug window (settings page)");
+      debugHost.open("settings");
+      break;
     case "open-debug":
-      // One window, two entries (settings page vs tuning page) - the window
-      // body ships with #205; Python's unlock-before-open guard rides along
-      // there. Log the entry so the path is visible in the log meanwhile.
-      logLine("[menu] " + idRaw + " -> the settings/debug window arrives with #205");
+      logLine("[menu] open-debug -> debug window (tuning page)");
+      debugHost.open("tuning");
       break;
     case "quit": app.quit(); break;
   }
@@ -256,6 +270,8 @@ ipcMain.on("overlay-mouse", (_e, raw: unknown) => {
 ipcMain.on("menu-action", (_e, id: unknown) => {
   if (typeof id === "string" && MENU_IDS.has(id)) handleMenuAction(id);
 });
+// #205 debug window: renderer intents (edits / page switch / save / close...).
+ipcMain.on("debug-intent", (_e, raw: unknown) => debugHost.handleIntent(raw));
 
 function createWindow(geo: { width: number; height: number; x?: number; y?: number }): void {
   win = new BrowserWindow({
@@ -412,4 +428,8 @@ ipcMain.on("unlock-through", () => { logLine("[renderer] unlock-through"); setCl
 ipcMain.on("renderer-log", (_e, m: unknown) => logLine("[renderer] " + String(m)));
 
 app.on("window-all-closed", () => app.quit());
-app.on("before-quit", () => globalShortcut.unregisterAll());
+app.on("before-quit", () => {
+  globalShortcut.unregisterAll();
+  // A pending debug-window close prompt must never block quitting (#205).
+  debugHost.markQuitting();
+});

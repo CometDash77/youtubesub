@@ -2,7 +2,12 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": false,
-    "allowImportingTsExtensions": false,
+    // Source files keep .ts relative imports so node --test can run them
+    // directly (type stripping resolves exact files); on emit tsc rewrites
+    // them to .js for dist (#205 debug modules are both a runtime main-process
+    // dependency and a direct test entry).
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
     // The renderer is loaded by index.html as a classic <script> (module
     // scripts are blocked over file:// in Chromium). With the default
     // moduleDetection "auto" plus package.json "type": "module", tsc treats

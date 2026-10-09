@@ -20,4 +20,10 @@ contextBridge.exposeInMainWorld("youtubesub", {
   menuAction: (id: string) => ipcRenderer.send("menu-action", id),
   overlayMouse: (ev: unknown) => ipcRenderer.send("overlay-mouse", ev),
   onOverlayCursor: (cb: (cursor: string) => void) => ipcRenderer.on("overlay-cursor", (_e, c) => cb(c)),
+  // #205 settings/debug window: the headless model pushes ready-to-render
+  // state; the renderer forwards user intents back. Same applier contract as
+  // the overlay's paint-plan bridge.
+  onDebugState: (cb: (s: unknown) => void) => ipcRenderer.on("debug-state", (_e, s) => cb(s)),
+  debugIntent: (intent: unknown) => ipcRenderer.send("debug-intent", intent),
+  onDebugCopyText: (cb: (t: string) => void) => ipcRenderer.on("debug-copy-text", (_e, t) => cb(t)),
 });

@@ -225,7 +225,8 @@ test("production goes through the single assembly function", async () => {
   assert.equal(preview_out, wire_sys,
                "preview path and production must emit byte-identical systems");
   assert.equal(wire_user, "the current sentence");
-  const src = fs.readFileSync(new URL("../lib/provider.ts", import.meta.url), "utf8");
+  // File relocated to src/main with #205 (lib path is a re-export shim now).
+  const src = fs.readFileSync(new URL("../src/main/provider.ts", import.meta.url), "utf8");
   assert.ok(/translate_group\([\s\S]*?build_instructions/.test(src.replace(/\r\n/g, "\n")) ||
             src.includes("build_instructions(cfg.system"),
             "translate_group must assemble through build_instructions");

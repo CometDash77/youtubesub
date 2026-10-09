@@ -1,0 +1,116 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>设置与调试</title>
+  <style>
+    /* Window chrome tokens (src/main/debug/tokens.ts is the one source; the
+       values here mirror it for the static shell - cards / text roles /
+       badges are applied from the pushed state via the same class names). */
+    html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }
+    body { /* SHADOW_MARGIN: the soft shadow needs transparent margin around the panel */
+      padding: 24px; box-sizing: border-box; height: 100vh;
+      font-family: "Microsoft YaHei UI", sans-serif; user-select: none;
+    }
+    #debugWindow {
+      height: 100%; box-sizing: border-box; display: flex; flex-direction: column;
+      padding: 14px 18px 16px; gap: 10px;
+      box-shadow: 0 8px 48px rgba(0, 0, 0, 0.27);
+    }
+    #debugHeader { display: flex; align-items: flex-start; gap: 18px; }
+    #debugTitle { margin: 0; }
+    #debugHint { font-size: 12px; }
+    #pageswitch { display: flex; gap: 4px; background: #DAD6C8; border-radius: 8px; padding: 3px; }
+    #pageswitch button {
+      border: none; background: transparent; padding: 5px 16px; border-radius: 6px;
+      cursor: pointer; font-size: 13px; color: #2D3662; font-family: inherit;
+    }
+    #pageswitch button.active { background: #343E68; color: #E6E3DA; }
+    #closeBtn {
+      margin-left: auto; border: none; background: transparent; cursor: pointer;
+      font-size: 15px; color: #355044; padding: 2px 8px; border-radius: 6px;
+      font-family: inherit;
+    }
+    #closeBtn:hover { background: rgba(0, 0, 0, 0.08); }
+    #debugScroll { flex: 1; overflow-y: auto; min-height: 0; }
+    .page { display: none; flex-direction: column; gap: 10px; padding-bottom: 4px; }
+    .page.active { display: flex; }
+    .debugCard { padding: 12px 14px; }
+    .debugSection { margin: 0 0 8px; font-size: 13px; }
+    .grid { display: grid; grid-template-columns: 150px 1fr auto; gap: 6px 10px; align-items: center; }
+    .grid .hint { grid-column: 3; font-size: 12px; }
+    .grid .span-hint { grid-column: 2 / 4; font-size: 12px; }
+    .rowspan { grid-column: 2 / 4; }
+    label.cap { font-size: 13px; }
+    input[type=text], input[type=password], select, textarea {
+      font-family: inherit; font-size: 13px; color: #2D3662;
+      background: #EFEDE4; border: 1px solid #C9C4B6; border-radius: 6px;
+      padding: 5px 8px; box-sizing: border-box;
+    }
+    input[type=text] { width: 100%; }
+    select { min-width: 160px; }
+    textarea { width: 100%; resize: none; user-select: text; }
+    textarea[readonly] { background: #E7E4D9; color: #355044; }
+    .btnrow { display: flex; gap: 8px; align-items: center; }
+    button.push {
+      font-family: inherit; font-size: 13px; cursor: pointer;
+      color: #2D3662; background: #EFEDE4; border: 1px solid #C9C4B6;
+      border-radius: 6px; padding: 6px 18px;
+    }
+    button.push:disabled { color: #355044; background: #C9C4B6; border-color: #C9C4B6; cursor: default; }
+    input[type=checkbox] { accent-color: #343E68; }
+    #debugFooter { display: flex; align-items: center; gap: 10px; }
+    #footerStatus { font-size: 12px; }
+    #footerButtons { margin-left: auto; display: flex; gap: 10px; }
+    /* diag page */
+    #diagBar { display: flex; gap: 14px; align-items: center; font-size: 13px; }
+    #diagBar .debugBadgeOk, #diagBar .debugBadgeWarn, #diagBar .debugBadgeError
+      { border-radius: 7px; padding: 1px 8px; font-size: 12px; }
+    .zone { margin: 0 0 10px; }
+    .zonehead { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+    .zonerows { display: grid; grid-template-columns: 130px 1fr; gap: 4px 10px; }
+    .zonerows .zval { user-select: text; }
+    #diagFooter { display: flex; gap: 10px; align-items: center; margin-top: 10px; }
+    #eventsView {
+      width: 100%; height: 120px; overflow: auto; white-space: pre;
+      font-size: 12px; user-select: text;
+    }
+    /* tuning controls */
+    .sliderrow { display: flex; gap: 8px; align-items: center; }
+    .sliderrow input[type=range] { flex: 1; accent-color: #343E68; }
+    .sliderrow input[type=number] { width: 76px; }
+    input[type=number] {
+      font-family: inherit; font-size: 13px; color: #2D3662;
+      background: #EFEDE4; border: 1px solid #C9C4B6; border-radius: 6px;
+      padding: 5px 6px; width: 96px; box-sizing: border-box;
+    }
+    input:disabled, select:disabled { opacity: 0.45; }
+  </style>
+</head>
+<body>
+  <div id="debugWindow">
+    <div id="debugHeader">
+      <div>
+        <h1 id="debugTitle" class="debugValue">设置与调试</h1>
+        <div id="debugHint" class="debugHint"></div>
+      </div>
+      <div id="pageswitch"></div>
+      <button id="closeBtn" title="关闭（Esc）">✕</button>
+    </div>
+    <div id="debugScroll">
+      <div class="page" id="page-settings"></div>
+      <div class="page" id="page-tuning"></div>
+      <div class="page" id="page-diag"></div>
+    </div>
+    <div id="debugFooter">
+      <span id="footerStatus" class="debugHint"></span>
+      <div id="footerButtons">
+        <button id="cancelBtn" class="push">取消</button>
+        <button id="saveBtn" class="push debugPrimary">保存</button>
+      </div>
+    </div>
+  </div>
+  <input type="color" id="colorInput" style="position:absolute; left:-100px; top:-100px; width:1px; height:1px; opacity:0;">
+  <script src="./debug-renderer.js"></script>
+</body>
+</html>
