@@ -23,3 +23,5 @@ node_modules/
 app/dist/
 app/skeleton.log
 app/acceptance/evidence/
+# TS-stack translation cache (created on first app run; E2E isolates its own)
+app/data/

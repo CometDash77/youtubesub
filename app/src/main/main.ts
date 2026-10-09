@@ -13,9 +13,13 @@
 // shared by tray and overlay) to the renderer. Window geometry comes from
 // settings in product mode; the six-scene acceptance keeps its 650x135
 // stage whenever SKELETON_SCENE is set. Wire-frame to display-payload
-// mapping is a skeleton transition shim: the Engine tick loop takes it over
-// with the App shell ticket (#206).
-import { app, BrowserWindow, Tray, Menu, globalShortcut, ipcMain, nativeImage } from "electron";
+// mapping is a skeleton transition shim kept ONLY for the acceptance
+// scenes; product mode (no SKELETON_SCENE) runs the full stack since #206:
+// the real protocol-v1 WSServer feeds an EventQueue, the Engine consumes it
+// on the 50ms pump and drives the display layer on the 33ms tick, and
+// /status projects engine + overlay + connection-tester state (the app.py
+// App._status payload, 1:1).
+import { app, BrowserWindow, Tray, Menu, dialog, globalShortcut, ipcMain, nativeImage } from "electron";
 import type { MenuItemConstructorOptions } from "electron";
 import path from "node:path";
 import fs from "node:fs";
@@ -28,6 +32,11 @@ import {
 } from "./overlay.ts";
 import { overlay_menu_model, type OverlayMenuAction, type OverlayMenuEntry } from "./overlay-menu.ts";
 import { createDebugWindowHost } from "./debug-window-host.ts";
+import { EventQueue, WSServer } from "./ws-server.ts";
+import { Engine } from "./engine.ts";
+import { TranslationCache } from "./queue-cache.ts";
+import { ConnectionTester } from "./connection-test.ts";
+import { startE2EControl } from "./e2e-control.ts";
 
 const SCENE = process.env.SKELETON_SCENE || "base";
 // Product mode = no SKELETON_SCENE in the environment (npm start / packaged
@@ -276,6 +285,10 @@ ipcMain.on("debug-intent", (_e, raw: unknown) => debugHost.handleIntent(raw));
 function createWindow(geo: { width: number; height: number; x?: number; y?: number }): void {
   win = new BrowserWindow({
     ...geo,
+    // Browser E2E drives the app purely through /status (black box); the
+    // hidden window keeps unattended runs desktop-safe (the #193 decision
+    // bans visible GUI automation on the maintainer's machine).
+    show: process.env.YOUTUBESUB_E2E_OFFSCREEN !== "1",
     frame: false,        // capability 1: frameless
     transparent: true,   // capability 1: per-pixel translucency (renderer rgba)
     alwaysOnTop: true,   // capability 1: topmost
@@ -309,6 +322,118 @@ function createWindow(geo: { width: number; height: number; x?: number; y?: numb
   void win.loadFile(path.join(APP_ROOT, "dist", "renderer", "index.html"));
 }
 
+// ---- #206: the product stack - protocol v1 WSServer -> Engine -> display ----
+// app.py App.__init__/run() 1:1: the ConnectionTester lives once and reports
+// through /status; frames land in a bounded queue; the pump drains it into
+// the engine (50ms, capped rounds leaving the remainder queued), the tick
+// drives the display layer (33ms), and a 5s pulse re-asserts topmost while
+// the window is visible and not click-through.
+async function startProductStack(): Promise<void> {
+  // The cache default lives beside the app (app/data/translations.db, the
+  // TS-stack equivalent of the repo-root data dir); YOUTUBESUB_DATA_DIR
+  // relocates it (portable installs, E2E isolation under a private APPDATA).
+  const dataDir = process.env.YOUTUBESUB_DATA_DIR;
+  const cache = new TranslationCache(dataDir ? path.join(dataDir, "translations.db") : null);
+  const engine = new Engine(settings as unknown as Record<string, unknown>, cache);
+  const evq = new EventQueue(2000);
+  const tester = new ConnectionTester();
+
+  // App._status: engine.status() flattened + overlay state bits.
+  function statusPayload(): Record<string, unknown> {
+    const s = engine.status() as {
+      sources?: unknown;
+      active_source?: unknown;
+      display?: Record<string, unknown>;
+    };
+    const d = (s.display ?? {}) as Record<string, unknown>;
+    return {
+      state: typeof d.state === "string" ? d.state : "",
+      orig: typeof d.orig === "string" ? d.orig : "",
+      trans: typeof d.trans === "string" ? d.trans : "",
+      trans_state: typeof d.trans_state === "string" && d.trans_state ? d.trans_state : "idle",
+      trans_available: d.trans_available === true,
+      playing: d.playing === undefined || d.playing === null ? null : d.playing,
+      rate: d.rate === undefined || d.rate === null ? null : d.rate,
+      title: typeof d.title === "string" ? d.title : "",
+      video_description: typeof d.video_description === "string" ? d.video_description : "",
+      hook_error: typeof d.hook_error === "string" ? d.hook_error : "",
+      capture_error: typeof d.capture_error === "string" ? d.capture_error : "",
+      sources: typeof s.sources === "number" ? s.sources : 0,
+      active_source: (s.active_source ?? null) as unknown,
+      mode: display.mode,
+      order: display.order,
+      history: display.history.map((p) => [p[0], p[1]]),
+      click_through: clickThrough,
+    };
+  }
+
+  const secRaw = settings["server"];
+  const sec = (secRaw && typeof secRaw === "object" && !Array.isArray(secRaw) ? secRaw : {}) as JsonRecord;
+  const port = typeof sec["port"] === "number" && sec["port"] ? Math.trunc(sec["port"]) : 9877;
+  const server = new WSServer(port, evq, {
+    // app.py: payload.update(tester.status_payload()) - {} when never run.
+    status_provider: () => Object.assign(statusPayload(), tester.status_payload()),
+  });
+  try {
+    await server.start();
+    logLine("[ws] listening on 127.0.0.1:" + port + " (protocol v1)");
+  } catch (e) {
+    // server.py raises at boot -> the app dies with an error dialog.
+    logLine("[ws] start failed: " + String(e));
+    dialog.showErrorBox("字幕浮窗启动失败", String((e as Error).message ?? e));
+    app.quit();
+    return;
+  }
+
+  // App._pump: drain the queue into the engine; a capped round leaves the
+  // remainder for the next beat (Python breaks at n > 500, keeping order).
+  const pump = setInterval(() => {
+    const evs = evq.drain();
+    let n = 0;
+    for (const ev of evs) {
+      if (n >= 501) {
+        evq.put(ev);   // requeue the rest; drain() emptied the queue first
+        continue;
+      }
+      engine.handle_event(ev);
+      n++;
+    }
+  }, 50);
+
+  // App._tick: d = engine.tick(); if d: overlay.set_display(d).
+  const tick = setInterval(() => {
+    const d = engine.tick() as Record<string, unknown> | null;
+    if (d) {
+      display.set_display(d as unknown as Parameters<typeof display.set_display>[0]);
+      pushPlan();
+    }
+  }, 33);
+
+  // App._topmost -> overlay.pulse_topmost: hidden or click-through windows
+  // are never re-pinned.
+  const topmost = setInterval(() => {
+    const w = win;
+    if (w && w.isVisible() && !clickThrough) {
+      w.setAlwaysOnTop(true);
+      w.moveTop();
+    }
+  }, 5000);
+
+  // e2e_app.py port: the mode/provider control surface (env-gated).
+  if (process.env.YOUTUBESUB_E2E_MODE_PORT) {
+    startE2EControl({ engine, display, pushPlan, log: logLine })
+      .then((p) => logLine("[e2e] mode control on 127.0.0.1:" + p))
+      .catch((e: unknown) => logLine("[e2e] control start failed: " + String(e)));
+  }
+
+  app.on("before-quit", () => {
+    clearInterval(pump);
+    clearInterval(tick);
+    clearInterval(topmost);
+    void server.stop();
+  });
+}
+
 app.whenReady().then(() => {
   logLine("scene=" + SCENE + " boot");
   if (SCENE_MODE) {
@@ -334,14 +459,20 @@ app.whenReady().then(() => {
     createWindow(geo);
   }
 
-  // Capability 5: loopback WS placeholder (production port 9877).
-  startSkeletonServer(9877, {
-    onFrame: (ev: WireEvent) => {
-      win?.webContents.send("ws-frame", ev);
-      wireToDisplay(ev);      // #204: frames feed the real display layer now
-    },
-    onLog: (m: string) => logLine("[ws] " + m),
-  });
+  // Capability 5: loopback WS service on 9877. Scenes keep the skeleton
+  // server + wire shim (the acceptance stage); product mode runs the full
+  // stack - real protocol-v1 server -> Engine -> display (#206).
+  if (SCENE_MODE) {
+    startSkeletonServer(9877, {
+      onFrame: (ev: WireEvent) => {
+        win?.webContents.send("ws-frame", ev);
+        wireToDisplay(ev);      // #204: frames feed the real display layer now
+      },
+      onLog: (m: string) => logLine("[ws] " + m),
+    });
+  } else {
+    void startProductStack();
+  }
 
   // Capability 4: global hotkey Ctrl+Alt+U = unlock click-through.
   const hkOk = globalShortcut.register("Control+Alt+U", () => {

@@ -8,7 +8,8 @@
     "build": "tsc -p tsconfig.build.json && node scripts/build.mjs",
     "start": "electron .",
     "test": "node --test --test-concurrency=1 --test-force-exit --test-timeout=60000 \"tests/*.test.ts\"",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:e2e": "node --test --test-concurrency=1 --test-force-exit --test-timeout=180000 tests/browser/browser-e2e.test.ts"
   },
   "devDependencies": {
     "@types/node": "^26.6.4",

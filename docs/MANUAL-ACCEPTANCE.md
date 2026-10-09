@@ -16,10 +16,12 @@
 python -m pytest desktop/tests -q                       # 当前 366 passed + 1 条既有 E2E 时序失败（见下；无 Chrome 会 skip，不算通过）
 cd userscript; node --test "tests/*.test.mjs"           # 期望全绿：当前 48 pass / 0 fail（必须用 glob 形式）
 node --check userscript/youtubesub.user.js              # 语法检查
+cd app; npm run typecheck; npm test                     # TS 栈（#206）：期望 typecheck 0 error + 390 pass / 0 fail
+cd app; npm run test:e2e                                # TS 栈 10 条真 Chrome E2E（黑盒 /status），已知失败同 Python 那条
 ```
 
 通过标准：pytest **0 failed / 0 skipped** 为目标（当前 366 passed，数字随提交增长）；node 48 pass 0 fail；10 条 E2E 没有被 skip。
-已知例外（2026-10-08 合并时记账）：`test_browser_waiting_and_capture_diagnostics_preempt_translation_waiting` 在 CSP 夹具页（script-src 'nonce-fixture'）上的注入失败上浮超时——**master 分支同样失败**（worktree 实证），属既有 E2E 时序问题，合并没有引入回归，留待 E2E 专项修复。
+已知例外（2026-10-08 合并时记账）：`test_browser_waiting_and_capture_diagnostics_preempt_translation_waiting` 在 CSP 夹具页（script-src 'nonce-fixture'）上的注入失败上浮超时——**master 分支同样失败**（worktree 实证），属既有 E2E 时序问题，合并没有引入回归，留待 E2E 专项修复。TS 栈移植（#206）已做奇偶校验：同一条、同一等待点超时，last observed /status 逐字段一致（frames 89 / sources 3 / title eee / hook_error 空），移植忠实复现既有失败，非移植引入。
 （skip 说明 harness 没找到 Chrome，这时浏览器侧**等于没验**，要记下来）。
 
 E2E 用的测试特权（`--disable-web-security`、CDP `Page.setBypassCSP`）**只存在于测试 harness**，
@@ -27,17 +29,23 @@ E2E 用的测试特权（`--disable-web-security`、CDP `Page.setBypassCSP`）**
 
 ---
 
-## L1 · 夹具演示：真 Chrome + 真 userscript + 真 app.py（零安装、零 Key）
+## L1 · 夹具演示：真 Chrome + 真 userscript + 真桌面端（零安装、零 Key）
 
 **目的**：证明"页面钩子 → WS → 桌面端 → 浮窗"整条链在真浏览器里是通的，且 play/pause/seek/倍速/SPA 语义正确。
-**状态**：上一会话已实测通过。
+**状态**：上一会话已实测通过（Python 栈）；TS 栈（#206）同一夹具、同一 userscript、同一 10 条 E2E 口径自动验证 9 绿 + 1 条已知失败（见 L0）。
 
 ```
+# TS 栈（#206 起为主入口；先构建一次，E2E 直接拉起 Electron 主进程）
+cd app; npm run build
+node tests\browser\browser-e2e-harness.ts --demo [--seconds 30]
+
+# Python 栈（#207 退役前的对照入口）
 python desktop/tests/browser_e2e.py --demo [--seconds 30]
 ```
 
 会弹出一个 Chrome 窗口（独立 profile、CORS 检查关闭，用来顶替 Tampermonkey 的 GM 授权）和一个真浮窗
-（真 `desktop/app.py` 子进程，临时 APPDATA + mock 翻译）。夹具页自带按钮：
+（真桌面端子进程，临时 APPDATA + mock 翻译；TS 栈 = Electron 主进程 `app/dist/main/main.js`，
+harness 会自动剔除 `ELECTRON_RUN_AS_NODE`——agent/IDE 宿主进程常带这个变量，会把 electron.exe 降级成纯 Node）。夹具页自带按钮：
 `Load captions / Play / Pause / +2s / -2s / 2.0x / 1.0x / "SPA: switch video"`。
 
 逐项核对：
@@ -124,6 +132,11 @@ start-desktop.cmd          # 默认设置，不填任何模型
 证据留档：`.scratch/probe/logs/20260921-o3-evidence-summary.md`。
 
 ```
+# TS 栈（#206 起为主入口）
+cd app; npm run build
+node tests\browser\browser-e2e-harness.ts --live "https://www.youtube.com/watch?v=<带CC的视频>" --proxy http://127.0.0.1:10809 [--headless] [--seconds 20]
+
+# Python 栈（#207 退役前的对照入口）
 python desktop/tests/browser_e2e.py --live "https://www.youtube.com/watch?v=<带CC的视频>" ^
     --proxy http://127.0.0.1:10809 [--headless] [--seconds 20]
 ```
