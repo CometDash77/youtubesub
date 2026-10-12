@@ -54,28 +54,32 @@ function _window(settings: S.Settings | null = null,
   return [w, cfg, writes];
 }
 
-test("menu offers both entries and they land on different pages", () => {
-  // The menu-model half of the App test (the App shell itself lands with #206):
-  // both entries exist, 重读设置 stays gone, all copy is Chinese, and the two
-  // entries open ONE window landing on different pages (open_or_reuse).
+test("menu offers one settings entry opening the shared window", () => {
+  // The menu-model half of the App test (the App shell itself lands with #206).
+  // #209 Q1 决议:「调试……」并入「设置……」,菜单只留一个入口;重读设置 stays
+  // gone; all copy is Chinese; the single entry opens ONE window landing on
+  // the settings page (open_or_reuse).
   const entries = overlay_menu_model({ overlay_visible: true, click_through: false });
   const actions = new Map(entries.filter((e) => e.kind === "action")
     .map((e) => [(e as { label: string }).label, e]));
-  assert.ok(actions.has("设置……") && actions.has("调试……"),
-    [...actions.keys()].join(", "));
+  assert.ok(actions.has("设置……"), [...actions.keys()].join(", "));
+  assert.ok(!actions.has("调试……"),
+    "调试……已并入设置……,菜单不能再出双入口: " + [...actions.keys()].join(", "));
   assert.ok(!actions.has("重读设置"), [...actions.keys()].join(", "));
   const nonChinese = [...actions.keys()]
     .filter((t) => t.length > 0 && !/[一-鿿]/.test(t));
   assert.deepEqual(nonChinese, [], "菜单条目还有英文: " + nonChinese.join(", "));
 
   let made = 0;
-  const first = open_or_reuse(null, "tuning", () => { made += 1; return _window()[0]; });
+  const make = () => { made += 1; return _window()[0]; };
+  const first = open_or_reuse(null, "settings", make);
   assert.equal(made, 1);
   assert.equal(first.visible, true);
-  assert.equal(first.current_page_name(), "tuning");
-  // 第二个入口打开的是**同一个**窗口，只是落到设置页（#164 目标）。
-  const second = open_or_reuse(first, "settings", () => { made += 1; return _window()[0]; });
-  assert.equal(made, 1, "两个入口必须复用同一实例");
+  assert.equal(first.current_page_name(), "settings");
+  // 再次点击同一入口:打开的是**同一个**窗口,仍落设置页(#209 单入口语义;
+  // 调参/排障经窗口内页签到达)。
+  const second = open_or_reuse(first, "settings", make);
+  assert.equal(made, 1, "重复打开必须复用同一实例");
   assert.equal(second, first);
   assert.equal(first.current_page_name(), "settings");
 });
@@ -171,6 +175,21 @@ test("the window paints the documented opaque chrome", () => {
       new URL("../src/renderer/debug.html", import.meta.url), "utf8");
     assert.ok(html.includes("padding: 24px"), "阴影需要边距,去掉就看不见了");
     assert.ok(html.includes("0 8px 48px"), "柔阴影两版都留");
+    // #209 防回归:静态外壳自身必须涂上令牌的不透明窗口底——透明窗口层的
+    // alpha=0 像素在 Windows 上命中测试直接穿透(整窗点不到、透出桌面)。
+    // 值与 tokens 配方锁死同步,防止手工镜像再漂移。
+    const winBlock = html.match(/#debugWindow\s*\{([^}]*)\}/);
+    assert.ok(winBlock, "debug.html 必须有 #debugWindow 规则");
+    const [wr, wg, wb, wa] = TOKENS.WINDOW_RGBA;
+    const [sr, sg, sb, sa] = TOKENS.WINDOW_STROKE_RGBA;
+    assert.equal(wa, 255, "令牌窗口底必须不透明(透明/磨砂配方已废)");
+    assert.ok(winBlock[1]!.includes("rgb(" + wr + ", " + wg + ", " + wb + ")"),
+      "外壳窗口底必须与 WINDOW_RGBA 同步: " + winBlock[1]!);
+    assert.ok(winBlock[1]!.includes(
+        "rgba(" + sr + ", " + sg + ", " + sb + ", " + (sa / 255).toFixed(2) + ")"),
+      "外壳描边必须与 WINDOW_STROKE_RGBA 同步: " + winBlock[1]!);
+    assert.ok(winBlock[1]!.includes("border-radius: " + TOKENS.RADIUS + "px"),
+      "外壳圆角必须与 RADIUS 同步: " + winBlock[1]!);
     const card = TOKENS.qss().match(new RegExp('\\.debugCard\\s*\\{([^}]*)\\}'));
     assert.ok(card, "内层卡片保留(它是唯一的分组面)");
     assert.ok(card![1]!.includes(TOKENS.CARD), "内层卡片必须真的画成 token 色");

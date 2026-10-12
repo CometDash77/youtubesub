@@ -14,7 +14,6 @@ export type OverlayMenuAction =
   | "bg-lighter"
   | "click-through"
   | "open-settings"
-  | "open-debug"
   | "quit";
 
 export type OverlayMenuEntry =
@@ -43,7 +42,6 @@ export function overlay_menu_model(s: OverlayMenuState): OverlayMenuEntry[] {
         ? "鼠标穿透：已开启（Ctrl+Alt+U 解锁）"
         : "鼠标穿透（开启后点不到浮窗，Ctrl+Alt+U 解锁）" },
     { kind: "action", id: "open-settings", label: "设置……", checkable: false, checked: false },
-    { kind: "action", id: "open-debug", label: "调试……", checkable: false, checked: false },
     { kind: "separator" },
     { kind: "action", id: "quit", label: "退出程序", checkable: false, checked: false },
   ];

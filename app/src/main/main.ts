@@ -116,7 +116,7 @@ function rebuildTrayMenu(): void {
 
 const MENU_IDS: ReadonlySet<string> = new Set<string>([
   "toggle-overlay", "cycle-mode", "swap-order", "font-up", "font-down",
-  "bg-denser", "bg-lighter", "click-through", "open-settings", "open-debug", "quit",
+  "bg-denser", "bg-lighter", "click-through", "open-settings", "quit",
 ]);
 
 function handleMenuAction(idRaw: string): void {
@@ -138,14 +138,10 @@ function handleMenuAction(idRaw: string): void {
     case "bg-lighter": display.nudge_opacity(-25); pushPlan(); break;
     case "click-through": setClickThrough(!clickThrough); break;
     case "open-settings":
-      // One window, two entries (settings page vs tuning page); the Python
-      // unlock-before-open guard ships with the window host (#205).
+      // #209 Q1 ruling: ONE menu entry. It opens the settings/debug window on
+      // the settings page; tuning/diag stay reachable via the in-window tabs.
       logLine("[menu] open-settings -> debug window (settings page)");
       debugHost.open("settings");
-      break;
-    case "open-debug":
-      logLine("[menu] open-debug -> debug window (tuning page)");
-      debugHost.open("tuning");
       break;
     case "quit": app.quit(); break;
   }
