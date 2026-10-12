@@ -82,6 +82,11 @@ test("menu offers one settings entry opening the shared window", () => {
   assert.equal(made, 1, "重复打开必须复用同一实例");
   assert.equal(second, first);
   assert.equal(first.current_page_name(), "settings");
+  // #209 验收项(诊断评论 3):host 层 open("tuning") 的落页能力仍在
+  // (host open(page) -> show_page;页签切换共用同一 API,Q1 只删菜单启动
+  // 路径):独立打开必须落到调参页。
+  const tuningWin = open_or_reuse(null, "tuning", make);
+  assert.equal(tuningWin.current_page_name(), "tuning");
 });
 
 test("every menu label says what it changes", () => {

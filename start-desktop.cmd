@@ -2,7 +2,7 @@
 REM youtubesub desktop overlay - one-click start.
 REM Starts WS server + overlay on 127.0.0.1:9877 (port from setting.json).
 REM Right-click the overlay for display mode / order / font size / background / click-through / quit.
-REM "settings" and "debug" in that menu open the SAME non-modal window (settings / tuning / diagnostics pages).
+REM "settings" in that menu opens the SAME non-modal window (settings / tuning / diagnostics pages); single entry since #209.
 setlocal
 cd /d "%~dp0"
 
