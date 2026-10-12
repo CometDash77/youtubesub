@@ -1,0 +1,22 @@
+{
+  "name": "youtubesub-userscript",
+  "private": true,
+  "version": "0.1.1",
+  "type": "module",
+  "description": "Tampermonkey userscript: TS source (src/youtubesub.ts) built by esbuild into the single-file youtubesub.user.js artifact.",
+  "scripts": {
+    "build": "node scripts/build.ts",
+    "watch": "node scripts/build.ts --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run -s build && node --test \"tests/*.test.ts\""
+  },
+  "engines": {
+    "node": ">=22.18"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.4",
+    "@types/tampermonkey": "^5.5.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^7.0.2"
+  }
+}

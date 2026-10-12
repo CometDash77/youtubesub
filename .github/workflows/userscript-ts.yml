@@ -1,0 +1,39 @@
+name: userscript-ts
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'userscript/**'
+      - '.github/workflows/userscript-ts.yml'
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: userscript
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install deps
+        shell: cmd
+        run: |
+          npm ci --no-audit --no-fund || npm install --no-audit --no-fund
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      # Tests evaluate the BUILT artifact in a vm sandbox; npm test rebuilds
+      # anyway, the explicit step keeps typecheck / build / test failures apart.
+      - name: Build artifact
+        run: npm run build
+
+      - name: Unit tests (node --test over the built artifact)
+        run: npm test

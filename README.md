@@ -4,7 +4,7 @@
 模式: 原文 / 译文 / 双语. 翻译走 OpenAI-compatible API (Key/BaseURL/Model/Prompt 可配).
 
 ## 目录
-- `userscript/` — Tampermonkey 用户脚本 (抓 timedtext + 传 cues + 同步播放状态).
+- `userscript/` — Tampermonkey 用户脚本 (TS 源码 `src/youtubesub.ts` + esbuild 产出 `youtubesub.user.js`; 抓 timedtext + 传 cues + 同步播放状态).
 - `desktop/` — Python + PySide6 桌面 App (WS 服务 / 调度时钟 / 翻译队列缓存 / 浮窗).
 - `docs/DESIGN.md` — Phase 2 设计 (复用分类 + 架构).
 - `docs/PROTOCOL.md` — localhost 线协议 v1.
@@ -35,7 +35,8 @@
 
 ## 测试
 - `python -m pytest desktop/tests -q` — 全绿 (当前 **215 passed / 0 failed / 0 skipped**; 含 7 条真浏览器 E2E, 无 Chrome 会 skip, 不算通过).
-- `cd userscript; node --test "tests/*.test.mjs"` — **46 pass / 0 fail** (必须用 glob 形式; 传目录会 MODULE_NOT_FOUND).
+- `cd userscript; npm install; npm test` — **48 pass / 0 fail** (先构建产物再 `node --test "tests/*.test.ts"`; 测试直接 vm 载入 `youtubesub.user.js` 断言; glob 形式必须保留, 传目录会 MODULE_NOT_FOUND).
+- userscript 源码 `src/youtubesub.ts` (TS 单文件); `npm run build` 重产出 `youtubesub.user.js` (esbuild 直驱, Tampermonkey 元数据 banner 逐字携带, 产物路径不变), `npm run typecheck` 查型.
 
 ## 硬约束 (不做)
 - 不做屏幕 OCR; 不做 Whisper ASR fallback; 不一条 cue 一个请求.

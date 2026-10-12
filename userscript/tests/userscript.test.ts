@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const src = fs.readFileSync(path.join(here, '..', 'youtubesub.user.js'), 'utf8');
-const fixtures = JSON.parse(
+const fixtures: any[] = JSON.parse(
   fs.readFileSync(path.join(here, 'fixtures', 'parse_cases.json'), 'utf8'));
 
 // Mirrors desktop/suboverlay/protocol.py VALID_TYPES + sanitize_event().
@@ -24,13 +24,13 @@ const WATCH = 'https://www.youtube.com/watch?v=abcdef12345';
 
 // ---------------------------------------------------------------- sandbox ----
 
-function makeSandbox(opts = {}) {
-  const sent = [];
-  const sockets = [];
-  const timers = [];
-  const listeners = {};
-  const bodyChildren = [];
-  const headChildren = [];
+function makeSandbox(opts: any = {}) {
+  const sent: any[] = [];
+  const sockets: any[] = [];
+  const timers: any[] = [];
+  const listeners: any = {};
+  const bodyChildren: any[] = [];
+  const headChildren: any[] = [];
   const box = { video: null };
   const clock = { now: 1760000000000 };
 
@@ -38,22 +38,28 @@ function makeSandbox(opts = {}) {
   FakeDate.now = () => clock.now;
 
   class FakeWS {
-    constructor(url) {
+    url: string;
+    readyState: number;
+    sentFrames: any[];
+    onopen?: () => void;
+    onclose?: () => void;
+    onerror?: () => void;
+    constructor(url: string) {
       this.url = url; this.readyState = 0; this.sentFrames = [];
       sockets.push(this);
     }
-    send(s) { const f = JSON.parse(s); this.sentFrames.push(f); sent.push(f); }
+    send(s: string) { const f = JSON.parse(s); this.sentFrames.push(f); sent.push(f); }
     close() { this.readyState = 3; if (this.onclose) this.onclose(); }
     open() { this.readyState = 1; if (this.onopen) this.onopen(); }
     fail() { this.readyState = 3; if (this.onerror) this.onerror(); }
   }
 
-  function makeEl(tag) {
-    const el = {
+  function makeEl(tag: string) {
+    const el: any = {
       tag, style: {}, children: [], listeners: {},
-      appendChild(c) { this.children.push(c); },
+      appendChild(c: any) { this.children.push(c); },
       remove() { this.removed = true; },
-      addEventListener(t, f) { (this.listeners[t] = this.listeners[t] || []).push(f); }
+      addEventListener(t: string, f: any) { (this.listeners[t] = this.listeners[t] || []).push(f); }
     };
     let text = '';
     Object.defineProperty(el, 'textContent', {
@@ -74,18 +80,18 @@ function makeSandbox(opts = {}) {
   // Executing injected code in this very context models the main-world injection
   // (what desktop/tests/browser_e2e.py does over CDP). A real userscript sandbox is a
   // different realm; that is what the receipt deadline plus `sandboxed` model.
-  function runPageCode(code) {
+  function runPageCode(code: string) {
     if (typeof sandbox.__runPageCode !== 'function') return;
     try { sandbox.__runPageCode(code); }
     catch (e) { /* a page-world throw is silent to the injector, and that is the point */ }
   }
 
-  const doc = {
+  const doc: any = {
     readyState: opts.readyState || 'complete',
     title: opts.title || 'Test Video - YouTube',
-    body: { appendChild(el) { bodyChildren.push(el); el.parent = 'body'; } },
+    body: { appendChild(el: any) { bodyChildren.push(el); el.parent = 'body'; } },
     head: {
-      appendChild(el) {
+      appendChild(el: any) {
         headChildren.push(el);
         el.parent = 'head';
         // A real inline <script> runs on insertion. `scriptExecutes: false` models a
@@ -98,34 +104,34 @@ function makeSandbox(opts = {}) {
       }
     },
     documentElement: { appendChild() {} },
-    createElement: (tag) => makeEl(tag),
-    querySelector(sel) {
+    createElement: (tag: any) => makeEl(tag),
+    querySelector(sel: any) {
       if (sel === 'video') return box.video;
       if (sel === 'meta[name="description"]' && opts.videoDescription !== undefined) {
         return { content: opts.videoDescription };
       }
       return null;
     },
-    addEventListener(t, f) { (listeners[t] = listeners[t] || []).push(f); }
+    addEventListener(t: string, f: any) { (listeners[t] = listeners[t] || []).push(f); }
   };
 
-  const sandbox = {
+  const sandbox: any = {
     console: { warn() {}, log() {}, error() {} },
     location: { href: WATCH, search: '?v=abcdef12345' },
     document: doc,
     crypto: { randomUUID: (() => { let i = 0; return () => 'uuid-' + (++i); })() },
     URL,
     Date: FakeDate,
-    CustomEvent: class { constructor(type, o) { this.type = type; this.detail = o && o.detail; } },
+    CustomEvent: class { type: any; detail: any; constructor(type: string, o: any) { this.type = type; this.detail = o && o.detail; } },
     WebSocket: FakeWS,
-    setTimeout(fn, ms) { timers.push({ fn, ms, interval: false }); return timers.length; },
-    setInterval(fn, ms) { timers.push({ fn, ms, interval: true }); return timers.length; },
+    setTimeout(fn: any, ms: any) { timers.push({ fn, ms, interval: false }); return timers.length; },
+    setInterval(fn: any, ms: any) { timers.push({ fn, ms, interval: true }); return timers.length; },
     clearTimeout() {}, clearInterval() {}
   };
   if (opts.noGM !== true) {
-    sandbox.GM_xmlhttpRequest = (o) => { sandbox.__lastXhr = o; };
+    sandbox.GM_xmlhttpRequest = (o: any) => { sandbox.__lastXhr = o; };
     if (opts.noAddElement !== true) {
-      sandbox.GM_addElement = (tag, attrs) => {
+      sandbox.GM_addElement = (tag: any, attrs: any) => {
         if (opts.gmThrows) throw new Error('GM_addElement refused (simulated)');
         headChildren.push({ tag, ...attrs, viaGM: true });
         // GM_addElement returning only proves the injector ACCEPTED the job: the
@@ -139,9 +145,9 @@ function makeSandbox(opts = {}) {
   }
   if (opts.trustedTypes) {
     sandbox.trustedTypes = {
-      createPolicy(name, rules) {
+      createPolicy(name: string, rules: any) {
         if (opts.ttPolicyFails) throw new TypeError('Policy ' + name + ' is not allowed');
-        return { createScript: (s) => ({ __trusted: true, text: rules.createScript(s) }) };
+        return { createScript: (s: any) => ({ __trusted: true, text: rules.createScript(s) }) };
       }
     };
   }
@@ -160,13 +166,13 @@ function makeSandbox(opts = {}) {
   }
   // window-level stubs: boot() registers a timedtext listener and a beforeunload
   // listener on window, so a sandbox without these throws before any test can run.
-  sandbox.addEventListener = (t, f) => { (listeners[t] = listeners[t] || []).push(f); };
-  sandbox.removeEventListener = (t, f) => {
+  sandbox.addEventListener = (t: string, f: any) => { (listeners[t] = listeners[t] || []).push(f); };
+  sandbox.removeEventListener = (t: string, f: any) => {
     const a = listeners[t] || [];
     const i = a.indexOf(f);
     if (i >= 0) a.splice(i, 1);
   };
-  sandbox.dispatchEvent = (ev) => {
+  sandbox.dispatchEvent = (ev: any) => {
     for (const f of (listeners[ev.type] || []).slice()) f(ev);
     return true;
   };
@@ -184,47 +190,47 @@ function makeSandbox(opts = {}) {
   return sandbox;
 }
 
-function load(opts) {
+function load(opts?: any) {
   const sandbox = makeSandbox(opts);
   // The "page realm" is this same vm context: injected code runs here, and the
   // receipt it emits must travel back through the window event channel.
-  sandbox.__runPageCode = (code) => vm.runInContext(code, sandbox, { filename: 'page-hook.js' });
+  sandbox.__runPageCode = (code: string) => vm.runInContext(code, sandbox, { filename: 'page-hook.js' });
   vm.createContext(sandbox);
   vm.runInContext(src, sandbox, { filename: 'youtubesub.user.js' });
   return sandbox;
 }
 
-const api = (sb) => sb.__youtubesub;
-const bridge = (sb) => sb.__youtubesub.instance;
+const api = (sb: any) => sb.__youtubesub;
+const bridge = (sb: any) => sb.__youtubesub.instance;
 
 // Sanity probe (health probe OK) then onopen -> register + sync.
-function goLive(sb) {
+function goLive(sb: any) {
   sb.__lastXhr.onload({ status: 200 });
   const ws = sb.__sockets[sb.__sockets.length - 1];
   ws.open();
   return ws;
 }
 
-function fakeVideo(over = {}) {
+function fakeVideo(over: any = {}) {
   return Object.assign({
     currentTime: 12.5, paused: false, ended: false, playbackRate: 1,
     listeners: {},
-    addEventListener(t, f) { (this.listeners[t] = this.listeners[t] || []).push(f); }
+    addEventListener(this: any, t: string, f: any) { (this.listeners[t] = this.listeners[t] || []).push(f); }
   }, over);
 }
 
-function normCues(cues) {
-  return Array.from(cues, (c) => [
+function normCues(cues: any) {
+  return Array.from(cues, (c: any) => [
     Number(c.start_ms.toFixed(3)), Number(c.end_ms.toFixed(3)),
     c.text, Number(c.last_off_ms.toFixed(3))]);
 }
 
-function lastFrame(sb, type) {
-  const hit = [...sb.__sent].reverse().find((f) => f.type === type);
+function lastFrame(sb: any, type: string) {
+  const hit = [...sb.__sent].reverse().find((f: any) => f.type === type);
   return hit || null;
 }
 
-function assertWireFrame(f) {
+function assertWireFrame(f: any) {
   assert.ok(f && typeof f === 'object', 'frame is an object');
   assert.ok(VALID_TYPES.includes(f.type), 'known frame type: ' + JSON.stringify(f.type));
   if (f.type === 'sync' || f.type === 'deactivate') {
@@ -256,9 +262,9 @@ function assertWireFrame(f) {
 // A fresh load() creates no non-interval timer other than the page-hook receipt
 // waits (the reconnect timer only exists after a /health callback). Firing them in
 // order walks the installation through one level at a time, deterministically.
-function fireHookWaits(sb, max = 8) {
+function fireHookWaits(sb: any, max = 8) {
   for (let i = 0; i < max; i++) {
-    const t = sb.__timers.find((x) => !x.interval && !x.fired);
+    const t = sb.__timers.find((x: any) => !x.interval && !x.fired);
     if (!t) break;
     t.fired = true;
     t.fn();
@@ -268,7 +274,7 @@ function fireHookWaits(sb, max = 8) {
 // ------------------------------------------------------------------ loading ---
 
 test('harness: userscript evaluates in the sandbox and exposes the test surface', () => {
-  let sb;
+  let sb: any;
   assert.doesNotThrow(() => { sb = load(); });
   const t = api(sb);
   for (const k of ['parseJson3', 'normKey', 'trackKindFromUrl', 'trackLangFromUrl',
@@ -287,7 +293,7 @@ test('boot: page hook injected, timedtext listener + panel + poll timer wired', 
   assert.equal(sb.__listeners['beforeunload'].length, 1);
   assert.equal(sb.__bodyChildren.length, 1, 'status panel mounted');
   assert.match(sb.__bodyChildren[0].textContent, /^youtubesub: /);
-  assert.ok(sb.__timers.some((t) => t.interval), 'video poll interval registered');
+  assert.ok(sb.__timers.some((t: any) => t.interval), 'video poll interval registered');
 });
 
 test('boot without GM_addElement falls back to a script element in head', () => {
@@ -330,7 +336,7 @@ test('boot: an uninstallable page hook is reported, not hidden', () => {
   goLive(sb);
   assert.ok(!/connected/.test(panel.textContent),
     'a missing page hook must not read as a working connection');
-  const reg = sb.__sent.filter((f) => f.type === 'register').pop();
+  const reg = sb.__sent.filter((f: any) => f.type === 'register').pop();
   assert.ok(reg, 'the bridge must still register');
   assert.ok(reg.hook_error && reg.hook_error.length > 0,
     'register must carry hook_error so the desktop can show it');
@@ -339,7 +345,7 @@ test('boot: an uninstallable page hook is reported, not hidden', () => {
 test('boot: a successful injection reports no hook error', () => {
   const sb = load();
   assert.equal(bridge(sb).hookError, '');
-  const reg = goLive(sb).sentFrames.filter((f) => f.type === 'register').pop();
+  const reg = goLive(sb).sentFrames.filter((f: any) => f.type === 'register').pop();
   assert.equal(reg.hook_error, '');
 });
 
@@ -368,7 +374,7 @@ test('boot: the hook installs at document-start, only DOM work waits for DOMCont
   assert.equal(sb.__bodyChildren.length, 0, 'no panel before the DOM exists');
   assert.equal(sb.__lastXhr, undefined, 'no /health probe before the DOM is ready');
   assert.equal(sb.__listeners['DOMContentLoaded'].length, 1);
-  sb.__listeners['DOMContentLoaded'].forEach((f) => f());
+  sb.__listeners['DOMContentLoaded'].forEach((f: any) => f());
   assert.equal(sb.__bodyChildren.length, 1, 'the panel mounts at DOMContentLoaded');
   assert.equal(sb.__lastXhr.url, 'http://127.0.0.1:9877/health');
 });
@@ -442,7 +448,7 @@ test('parseJson3: shared fixtures match the desktop parser contract', () => {
   const sb = load();
   for (const c of fixtures) {
     assert.deepEqual(normCues(api(sb).parseJson3(c.json3, WATCH)),
-      c.expected.map((e) => [e.start_ms, e.end_ms, e.text, e.last_off_ms]),
+      c.expected.map((e: any) => [e.start_ms, e.end_ms, e.text, e.last_off_ms]),
       'case: ' + c.name);
   }
 });
@@ -515,7 +521,7 @@ test('videoIdFromLocation: v param, order and length guard', () => {
 
 test('cuesSignature: distinct for same-count-different-content tracks', () => {
   const sb = load();
-  const mk = (texts) => texts.map((t, i) => ({ start_ms: i * 1000, end_ms: i * 1000 + 900, text: t }));
+  const mk = (texts: any[]) => texts.map((t: any, i: number) => ({ start_ms: i * 1000, end_ms: i * 1000 + 900, text: t }));
   const a = api(sb).cuesSignature(mk(['one', 'two']));
   assert.notEqual(api(sb).cuesSignature(mk(['one', 'three'])), a);
   assert.notEqual(api(sb).cuesSignature(mk(['ONE', 'two'])), a);
@@ -526,24 +532,28 @@ test('cuesSignature: distinct for same-count-different-content tracks', () => {
 
 // ------------------------------------------------- generated page-hook code ----
 
-function makePageContext() {
-  const events = [];
-  const ready = [];
-  const payloads = [];
-  const bodies = [];
+function makePageContext(): any {
+  const events: any[] = [];
+  const ready: any[] = [];
+  const payloads: any[] = [];
+  const bodies: any[] = [];
   class FakeXHR {
+    listeners: any;
+    responseText: string;
+    __origUrl?: string;
+    __origSent?: boolean;
     constructor() { this.listeners = {}; this.responseText = ''; }
-    addEventListener(t, f) { (this.listeners[t] = this.listeners[t] || []).push(f); }
-    open(m, u) { this.__origUrl = u; }
+    addEventListener(t: string, f: any) { (this.listeners[t] = this.listeners[t] || []).push(f); }
+    open(m: string, u: string) { this.__origUrl = u; }
     send() { this.__origSent = true; }
   }
-  const ctx = {
+  const ctx: any = {
     console: { warn() {}, log() {} },
-    CustomEvent: class { constructor(type, o) { this.type = type; this.detail = o && o.detail; } },
+    CustomEvent: class { type: any; detail: any; constructor(type: string, o: any) { this.type = type; this.detail = o && o.detail; } },
     XMLHttpRequest: FakeXHR,
     // The installation receipt travels on its own event type; caption events stay in
     // __events so the counting assertions below keep meaning what they say.
-    dispatchEvent(ev) {
+    dispatchEvent(ev: any) {
       if (ev.type === 'youtubesub-hook-ready') ready.push(ev);
       else events.push(ev);
       return true;
@@ -706,7 +716,7 @@ test('bridge: healthy /health probe opens a socket to the documented URL', () =>
   assert.equal(bridge(sb).state, 'connected');
   // No video element is bound yet, so there is nothing to sync: register alone is
   // correct. The first sync follows as soon as the player exists.
-  assert.deepEqual(sb.__sent.map((f) => f.type), ['register']);
+  assert.deepEqual(sb.__sent.map((f: any) => f.type), ['register']);
   sb.__sent.forEach(assertWireFrame);
   assert.equal(lastFrame(sb, 'register').provider, 'youtube');
   assert.equal(lastFrame(sb, 'register').source_id, 'uuid-1');
@@ -779,9 +789,9 @@ test('bridge: ws close reconnects, retryNow resets attempts, stop is terminal', 
 test('bridge: status panel click retries, double-click stops', () => {
   const sb = load();
   const panel = sb.__bodyChildren[0];
-  panel.listeners.click.forEach((f) => f());
+  panel.listeners.click.forEach((f: any) => f());
   assert.match(bridge(sb).state, /^probing$/);
-  panel.listeners.dblclick.forEach((f) => f());
+  panel.listeners.dblclick.forEach((f: any) => f());
   assert.equal(bridge(sb).state, 'stopped');
   assert.equal(panel.style.color, '#f88');
 });
@@ -799,14 +809,14 @@ test('bridge: sync reflects live player state (time/playing/rate)', () => {
   assert.equal(f.timestamp, sb.__clock.now);
 
   v.paused = false; v.currentTime = 4.5; v.playbackRate = 2;
-  v.listeners.play.forEach((fn) => fn());
+  v.listeners.play.forEach((fn: any) => fn());
   f = lastFrame(sb, 'sync');
   assert.equal(f.video_time_ms, 4500);
   assert.equal(f.playing, true);
   assert.equal(f.playback_rate, 2);
 
   v.ended = true;
-  v.listeners.ratechange.forEach((fn) => fn());
+  v.listeners.ratechange.forEach((fn: any) => fn());
   assert.equal(lastFrame(sb, 'sync').playing, false, 'ended counts as not playing');
   sb.__sent.forEach(assertWireFrame);
 });
@@ -829,7 +839,7 @@ test('bridge: onTimedtext pushes register+cues and validates on the wire', () =>
   sb.__sent.length = 0;
   const url = 'https://www.youtube.com/api/timedtext?v=abcdef12345&kind=asr&lang=en&pot=P1';
   b.onTimedtext(url, fixtures[1].json3);
-  assert.deepEqual(sb.__sent.map((f) => f.type), ['register', 'cues']);
+  assert.deepEqual(sb.__sent.map((f: any) => f.type), ['register', 'cues']);
   const cuesFrame = lastFrame(sb, 'cues');
   assert.equal(cuesFrame.track_kind, 'asr');
   assert.equal(cuesFrame.track_lang, 'en');
@@ -861,7 +871,7 @@ test('bridge: same cue count but different text re-pushes (tlang switch regressi
   switched.events[0].segs[1].utf8 = 'translated differently';
   // same normKey inputs except tlang is stripped by normKey => same key, same count
   b.onTimedtext(base + '&lang=en&tlang=zh-Hans', switched);
-  assert.deepEqual(sb.__sent.map((f) => f.type), ['register', 'cues'],
+  assert.deepEqual(sb.__sent.map((f: any) => f.type), ['register', 'cues'],
     'identical cue count with different text must still be pushed');
   assert.equal(lastFrame(sb, 'cues').cues[0].text, 'translated differently folks');
   assert.equal(lastFrame(sb, 'cues').track_lang, 'zh-Hans',
@@ -905,7 +915,7 @@ test('bridge: reconnect replays cached register/cues and KEEPS the sync timestam
   assert.notEqual(ws2, sb.__sockets[0]);
   ws2.open();
 
-  assert.deepEqual(sb.__sent.map((f) => f.type), ['register', 'cues', 'sync'],
+  assert.deepEqual(sb.__sent.map((f: any) => f.type), ['register', 'cues', 'sync'],
     'replay order: register, cues, then the cached sync');
   assert.equal(sb.__sent[2].timestamp, cachedSync.timestamp,
     'replayed sync must keep the original timestamp');
@@ -935,12 +945,12 @@ test('bridge: SPA navigation starts a new source and drops stale cues', () => {
 
   assert.notEqual(b.sourceId, oldId, 'new source_id minted');
   assert.equal(b.videoId, 'zzzzzz99999');
-  assert.deepEqual(sb.__sent.map((f) => f.type), ['deactivate', 'register', 'sync'],
+  assert.deepEqual(sb.__sent.map((f: any) => f.type), ['deactivate', 'register', 'sync'],
     'stale source deactivated, new source registered');
   assert.equal(sb.__sent[0].source_id, oldId);
   assert.equal(sb.__sent[1].source_id, b.sourceId);
   assert.equal(sb.__sent[1].video_id, 'zzzzzz99999');
-  assert.ok(!sb.__sent.some((f) => f.type === 'cues'), 'no stale cues replayed');
+  assert.ok(!sb.__sent.some((f: any) => f.type === 'cues'), 'no stale cues replayed');
   sb.__sent.forEach(assertWireFrame);
 
   // same video twice must not churn sources
@@ -960,7 +970,7 @@ test('bridge: poll binds a video element that appears later', () => {
   b.poll();
   assert.equal(sb.__sent[0].type, 'sync', 'binding sends an immediate sync');
   const n = sb.__sent.length;
-  sb.__box.video.listeners.timeupdate.forEach((f) => f());
+  sb.__box.video.listeners.timeupdate.forEach((f: any) => f());
   assert.equal(sb.__sent.length, n + 1);
   sb.__sent.forEach(assertWireFrame);
 });
@@ -973,7 +983,7 @@ test('bridge: works without GM_xmlhttpRequest (no /health probe, connects anyway
   assert.equal(ws.url, 'ws://127.0.0.1:9877/ws');
   ws.open();
   assert.equal(bridge(sb).state, 'connected');
-  assert.deepEqual(sb.__sent.map((f) => f.type), ['register']);
+  assert.deepEqual(sb.__sent.map((f: any) => f.type), ['register']);
 });
 
 test('bridge: every frame produced during a full session is wire-valid', () => {
@@ -987,19 +997,19 @@ test('bridge: every frame produced during a full session is wire-valid', () => {
       + '&kind=manual', fx.json3);
   }
   v.currentTime = 40; v.paused = true;
-  v.listeners.pause.forEach((f) => f());
+  v.listeners.pause.forEach((f: any) => f());
   v.currentTime = 90;
-  v.listeners.seeked.forEach((f) => f());
+  v.listeners.seeked.forEach((f: any) => f());
   v.playbackRate = 2;
-  v.listeners.ratechange.forEach((f) => f());
-  sb.__listeners['beforeunload'].forEach((f) => f());
+  v.listeners.ratechange.forEach((f: any) => f());
+  sb.__listeners['beforeunload'].forEach((f: any) => f());
 
   assert.ok(sb.__sent.length > 10, 'a full session produces frames');
   sb.__sent.forEach(assertWireFrame);
-  assert.ok(sb.__sent.some((f) => f.type === 'deactivate'), 'unload deactivates the source');
-  const syncs = sb.__sent.filter((f) => f.type === 'sync');
+  assert.ok(sb.__sent.some((f: any) => f.type === 'deactivate'), 'unload deactivates the source');
+  const syncs = sb.__sent.filter((f: any) => f.type === 'sync');
   assert.equal(syncs[syncs.length - 1].video_time_ms, 90000);
-  const sids = new Set(sb.__sent.map((f) => f.source_id));
+  const sids = new Set(sb.__sent.map((f: any) => f.source_id));
   assert.equal(sids.size, 1, 'one session keeps one source_id');
 });
 
@@ -1036,7 +1046,7 @@ test('userscript metadata block is installable by Tampermonkey', () => {
     assert.ok(line === '' || line.startsWith('//'),
       `line ${i + 1} inside the metadata block is not a comment: ${JSON.stringify(line)}`);
   });
-  const meta = {};
+  const meta: any = {};
   for (const m of block.join('\n').matchAll(/^\/\/\s*@([\w-]+)\s+(.+)$/gm)) {
     (meta[m[1]] ||= []).push(m[2].trim());
   }
