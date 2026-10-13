@@ -336,7 +336,7 @@ export class Engine {
       const now_ms = Date.now();
       Clock.apply_sync(src.sync, Number(ev["video_time_ms"] || 0),
                        Boolean(ev["playing"]), Number(ev["playback_rate"] || 1),
-                       ts, now_ms, ev["duration_ms"]);
+                       ts, now_ms, ev["duration_ms"], ev["muted"]);
       const new_est = Clock.estimate_ms(src.sync);
       if (Math.abs(new_est - prev_est) > SEEK_JUMP_MS) {
         // Pending prefetch is dropped and the window refill waits out the
@@ -805,7 +805,14 @@ export class Engine {
                title: src !== undefined ? src.meta["tab_title"] : "",
                video_description: src !== undefined
                  ? (src.meta["video_description"] ?? "") : "",
-               hook_error, capture_error, trans_available: usable };
+               hook_error, capture_error, trans_available: usable,
+               // Control-bar feed (#217): playback position rides every tick
+               // even before cues arrive; no source at all -> nulls.
+               playing: src !== undefined ? src.sync.playing : null,
+               rate: src !== undefined ? src.sync.playback_rate : null,
+               position_ms: src !== undefined ? Clock.estimate_ms(src.sync) : null,
+               duration_ms: src !== undefined ? src.sync.duration_ms : null,
+               muted: src !== undefined ? src.sync.muted : null };
     }
     const t = Clock.estimate_ms(src.sync);
     const [cue, gi, trans0] = Engine._timeline_display(src, t);
@@ -848,6 +855,11 @@ export class Engine {
              trans_available: usable,
              playing: src.sync.playing,
              rate: src.sync.playback_rate, title,
+             // Control-bar feed (#217): position interpolates between syncs
+             // via the clock, duration/muted echo the last sync frame.
+             position_ms: t,
+             duration_ms: src.sync.duration_ms,
+             muted: src.sync.muted,
              video_description: src.meta["video_description"] ?? "",
              hook_error: str_(src.meta["hook_error"] ?? ""),
              capture_error: str_(src.meta["capture_error"] ?? "") };

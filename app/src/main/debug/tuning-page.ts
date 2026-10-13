@@ -1,6 +1,6 @@
 // Port of desktop/suboverlay/debug_tuning_page.py - the tuning page: the
-// "has-a-key-but-no-UI" parameters rendered as three groups (spec #161, 16
-// items since map #164).
+// "has-a-key-but-no-UI" parameters rendered as four groups (spec #161, 20
+// items since #222 added the motion group).
 //
 // The control layer cannot produce illegal values (enum dropdowns / bounded
 // number boxes / color picker); the write-back clamps only the keys touched
@@ -27,9 +27,16 @@ import { path_key, field_by_path, type FieldSpec, type TuningPath, type Json } f
 
 export const GROUP_TITLES: Record<string, string> = {
   display: "显示",
+  motion: "动效",
   network: "网络与服务",
   experimental: "实验（未校准）",
 };
+
+// The slider control is the integer pair (bg_opacity) unless its step says
+// otherwise (#222): a float-step slider keeps decimals everywhere.
+function slider_is_int(field: FieldSpec): boolean {
+  return (field.step ?? 1) >= 1;
+}
 
 const ORDER_PATH: TuningPath = ["display", "order"];
 const MODE_PATH: TuningPath = ["display", "mode"];
@@ -98,10 +105,44 @@ export class TuningPage {
     return c ? c.enabled : false;
   }
 
+  // ---- animation presets (#222) ----
+
+  // One click fills the two prototype-preset fields through the normal
+  // set_field_value path: clamped, dirty-tracked, save-gated like any edit.
+  apply_anim_preset(name: string): void {
+    const p = (S.ANIM_PRESETS as Record<string, { label: string; dur: number; fade_delay: number }>)[name];
+    if (p === undefined) {
+      const e = new Error("no such anim preset: " + name);
+      e.name = "KeyError";
+      throw e;
+    }
+    this.set_field_value(["anim", "dur"], p.dur);
+    this.set_field_value(["anim", "fade_delay"], p.fade_delay);
+  }
+
+  // Which preset the CURRENT values match (null once a slider moved off it):
+  // computed, never stored, so cancel/snapshot cannot desync it.
+  active_anim_preset(): string | null {
+    const dur = this.field_value(["anim", "dur"]);
+    const delay = this.field_value(["anim", "fade_delay"]);
+    for (const [name, p] of Object.entries(S.ANIM_PRESETS)) {
+      if (p.dur === dur && p.fade_delay === delay) return name;
+    }
+    return null;
+  }
+
+  anim_presets_view(): Array<{ name: string; label: string; active: boolean }> {
+    const active = this.active_anim_preset();
+    return Object.entries(S.ANIM_PRESETS)
+      .map(([name, p]) => ({ name, label: p.label, active: name === active }));
+  }
+
   field_value(path: TuningPath): UiValue {
     const c = this._controls.get(path_key(path))!;
     if (c.kind === "color") return [...c.rgb];
-    if (c.kind === "slider") return Math.trunc(c.spin);
+    if (c.kind === "slider") {
+      return slider_is_int(field_by_path(path)) ? Math.trunc(c.spin) : c.spin;
+    }
     if (c.kind === "choice") return c.value;
     if (c.kind === "int") return Math.trunc(c.value);
     return c.value;
@@ -122,7 +163,9 @@ export class TuningPage {
         c.rgb = rgb; this._emit_changed();
       }
     } else if (c.kind === "slider") {
-      const n = Math.trunc(v as number);
+      const raw = v as number;
+      const n = slider_is_int(field) ? Math.trunc(raw)
+        : Number(raw.toFixed(decimals_of(field.step ?? 0.1)));
       if (n !== c.spin) {
         c.spin = n;
         c.slider = n; // from_spin sync
@@ -209,7 +252,9 @@ export class TuningPage {
       } else if (field.control === "float") {
         this._controls.set(k, { kind: "float", enabled: true, value: initial as number });
       } else if (field.control === "slider") {
-        const v = Math.trunc(initial as number);
+        const raw = initial as number;
+        const v = slider_is_int(field) ? Math.trunc(raw)
+          : Number(raw.toFixed(decimals_of(field.step ?? 0.1)));
         this._controls.set(k, { kind: "slider", enabled: true, slider: v, spin: v });
       } else {
         this._controls.set(k, { kind: "color", enabled: true, rgb: [...(initial as number[])] });
@@ -263,8 +308,11 @@ export class TuningPage {
       if (c.kind === "color") {
         c.rgb = [...(value as number[])];
       } else if (c.kind === "slider") {
-        c.spin = Math.trunc(value as number);
-        c.slider = Math.trunc(value as number);
+        const raw = value as number;
+        const v = slider_is_int(field) ? Math.trunc(raw)
+          : Number(raw.toFixed(decimals_of(field.step ?? 0.1)));
+        c.spin = v;
+        c.slider = v;
       } else if (c.kind === "choice") {
         c.value = value as string;
       } else if (c.kind === "int") {

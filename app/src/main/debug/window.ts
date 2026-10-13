@@ -103,7 +103,7 @@ const CARD_PAD = 40;       // top+bottom padding of a card
 const CARD_GAP = 10;
 
 function tuning_height(): number {
-  const counts: Record<string, number> = { display: 8, network: 3, experimental: 5 };
+  const counts: Record<string, number> = { display: 8, motion: 4, network: 3, experimental: 5 };
   let h = 0;
   for (const g of S.TUNING_GROUPS) h += TITLE + counts[g]! * ROW + CARD_PAD + CARD_GAP;
   return h;

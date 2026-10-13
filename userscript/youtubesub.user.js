@@ -524,6 +524,7 @@
       if (typeof video.duration === "number" && Number.isFinite(video.duration)) {
         frame.duration_ms = Math.round(video.duration * 1e3);
       }
+      frame.muted = video.muted === true;
       this.cacheAndSend("sync", frame);
     }
     // ---- desktop->userscript commands (#219) --------------------------------
@@ -533,9 +534,10 @@
     // contract: whitelist first, then the source_id check (a stale SPA source
     // must not act on mail addressed to its predecessor), then a bound video.
     // Everything else is dropped silently - the desktop owns routing, the
-    // script owns execution. Playback state resyncs through the existing
-    // play/pause/seeked listeners installed by bindVideo; mute needs no
-    // report-back (the desktop does not track mute state).
+    // script owns execution. Playback and mute state resync through the
+    // existing listeners installed by bindVideo (muted reports on every sync,
+    // volumechange included, so the overlay's mute icon always mirrors the
+    // video element's truth).
     onCommand(raw) {
       let msg;
       try {
@@ -613,7 +615,7 @@
     }
     bindVideo(video) {
       this.videoEl = video;
-      ["timeupdate", "play", "pause", "seeked", "ratechange"].forEach((event) => {
+      ["timeupdate", "play", "pause", "seeked", "ratechange", "volumechange"].forEach((event) => {
         video.addEventListener(event, () => {
           this.sendSync();
         });

@@ -4,7 +4,8 @@
 另有 `GET http://127.0.0.1:9877/health` -> `{"ok":true,"version":1}` 供脚本连接前做存活探测.
 诊断端点 `GET http://127.0.0.1:9877/status` -> `{"ok":true,"version":1,"stats":{frames,bad_frames,error},
 "state":"ok|no_cues","orig":"...","trans":"...","trans_state":"idle|waiting|translating|unconfigured|ready|failed:<reason>","trans_available":bool,"playing":bool,"rate":num,"title":"...",
-"sources":n,"active_source":"...","mode":"...","order":"...","history":[[orig,trans],...],"click_through":bool,"hook_error":"...","capture_error":"...","video_description":"...","connection_test":report?}`
+"sources":n,"active_source":"...","mode":"...","order":"...","history":[[orig,trans],...],"click_through":bool,"overlay_state":"subtitles|controls|passthrough","hook_error":"...","capture_error":"...","video_description":"...","connection_test":report?}`
+`overlay_state` (#217) = 浮窗三态状态机的当前派生态: `subtitles`(纯字幕)/`controls`(悬停显示标题+控制条)/`passthrough`(穿透, 仅解锁图标). 旧消费者可忽略该键.
 `trans_available` = 这一轮究竟会不会产出译文 (显式 Mock, 或 base_url 与 model 都非空; 由 engine 判定)。
 `trans_state` 是顶层当前渲染句状态：`idle` / `waiting` / `translating` / `unconfigured` / `ready` / `failed:<reason>`；失败原因与浮窗使用同一固定短文案映射。`idle` 表示原文-only、没有当前渲染句或处于已知字幕轨的 cue 间隙；识别为中文原文的句子组也保持 `idle`，不会进入翻译流程；`waiting` 表示链路正常但当前活动视频尚未收到 cue。
 中文原文检测在本地提交边界完成：非空 `track_lang` 以 `zh` 开头时跳过，其他非空标签优先于正文；没有标签时，Han 表意字占字母字符至少 30% 且不含假名或韩文字母则按中文处理。该语义不扩展 `trans_state`、`/status` 字段或协议 schema；翻译配置是否可用不改变中文句子组不提交模型请求的行为。
@@ -56,7 +57,8 @@
 
 ### sync (播放状态)
 `{"type":"sync","source_id":"<uuid>","video_id":"...","video_time_ms":12340.5,"playing":true,"playback_rate":1.0,"timestamp":1767000000000}`
-发送时机: timeupdate (约 4Hz) + play/pause/seeked/ratechange 立即发送 (沿用 dkitle).
+发送时机: timeupdate (约 4Hz) + play/pause/seeked/ratechange/volumechange 立即发送 (沿用 dkitle).
+`muted` (v1 附加可选键, #215/#217): 每帧携带 `video.muted` 当前值, 桌面端据此回显浮窗静音图标; 旧桌面/旧脚本双向忽略缺省键, 桌面端读不到时静音图标按未静音渲染.
 `timestamp` = 发送时刻 Date.now(), 桌面端做 transit-delay 补偿; 重连回放缓存 sync 时必须保留原 timestamp,
 禁止刷新为 Date.now() (修复 dkitle 缺陷 #2, 否则 overlay 每次重连跳回).
 
@@ -80,7 +82,7 @@ v1 预留的 `play_pause` 占位由这四帧取代 (播放/暂停按显式态拆
 ### 发送与执行约定
 - 桌面端发送校验: type 白名单 (`play|pause|seek|mute`); `source_id` 必带且非空; `seek` 必带有限数值 `delta_ms`, `mute` 必带布尔 `muted`, 不合形判废不发送.
 - 路由: 桌面端维护 `source_id -> 连接` 映射 (register/cues/sync 建立, deactivate/断开移除), 命令只发给注册该 source 的连接, **永不广播**.
-- 脚本执行面: 白名单外的 type、`source_id` 不匹配 (SPA 旧 source)、video 未绑定时一律静默丢弃; seek 按当前时长钳边; 播放状态经既有 play/pause/seeked 监听以 sync 自动回传, mute 无需回传.
+- 脚本执行面: 白名单外的 type、`source_id` 不匹配 (SPA 旧 source)、video 未绑定时一律静默丢弃; seek 按当前时长钳边; 播放与静音状态经既有 play/pause/seeked/volumechange 监听以 sync 自动回传.
 
 ## 错误处理
 解析失败的帧只记日志 (不记敏感字段), 不断开 socket. 未知 type 忽略并计数.

@@ -570,6 +570,7 @@ export class DesktopApp {
   // (%APPDATA%/SubOverlay) and never talks to a real translation API.
   readonly port: number;
   modePort: number | null = null;
+  debugPort: number | null = null;
   readonly appdata: string;
   readonly logPath: string;
   proc: ChildProcess | null = null;
@@ -593,6 +594,7 @@ export class DesktopApp {
   }
   async start(): Promise<void> {
     if (this.modeControl && this.modePort === null) this.modePort = await free_port();
+    this.debugPort = await free_port();
     const require_ = createRequire(import.meta.url);
     const electronPath = require_("electron") as string;
     const env: NodeJS.ProcessEnv = { ...process.env, APPDATA: this.appdata };
@@ -608,7 +610,13 @@ export class DesktopApp {
     env["YOUTUBESUB_DATA_DIR"] = path.join(this.appdata, "data");
     if (this.modePort !== null) env["YOUTUBESUB_E2E_MODE_PORT"] = String(this.modePort);
     const logFd = fs.openSync(this.logPath, "w");
-    this.proc = spawn(electronPath, ["."], { cwd: APP_ROOT, env, stdio: ["ignore", logFd, logFd] });
+    // #220: expose the app's own CDP port so tests can attach to the debug
+    // settings window (a separate BrowserWindow target from the fixture page).
+    this.proc = spawn(
+      electronPath,
+      [".", "--remote-debugging-port=" + this.debugPort, "--remote-allow-origins=*"],
+      { cwd: APP_ROOT, env, stdio: ["ignore", logFd, logFd] },
+    );
   }
   private async control(reqPath: string, payload: Record<string, unknown>): Promise<void> {
     if (this.modePort === null) throw new Error("mode control is available only in the test harness");
@@ -642,6 +650,30 @@ export class DesktopApp {
     const body = await res.json() as { delivered?: boolean };
     if (res.status !== 202) throw new Error("E2E app rejected /command: HTTP " + res.status);
     return body.delivered === true;
+  }
+  // #220: open the debug/settings window through the e2e control surface.
+  async open_debug(): Promise<void> {
+    if (this.modePort === null) throw new Error("mode control is available only in the test harness");
+    await this.control("/debug-open", {});
+  }
+  // #220: CDP ws url of the debug window target. The window exists only
+  // after open_debug(), so poll /json/list until the debug.html page shows up.
+  async debug_page_ws_url(timeoutMs = 25000): Promise<string> {
+    if (this.debugPort === null) throw new Error("app not started");
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      try {
+        const { status, data } = await http_get_json(this.debugPort, "/json/list", 3000);
+        if (status === 200 && Array.isArray(data)) {
+          const debug = (data as CdpMsg[]).find(
+            (t) => t["type"] === "page" && String(t["url"] ?? "").endsWith("debug.html"),
+          );
+          if (debug) return String(debug["webSocketDebuggerUrl"]);
+        }
+      } catch { /* poll again */ }
+      await sleep(250);
+    }
+    throw new Error("debug window target never appeared (port " + this.debugPort + "): " + this.log_tail());
   }
   log_tail(limit = 3000): string {
     try { return fs.readFileSync(this.logPath).subarray(-limit).toString("utf8"); }

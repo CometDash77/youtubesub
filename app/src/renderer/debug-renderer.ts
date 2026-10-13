@@ -1,11 +1,15 @@
-// Settings/debug window renderer (#205). The headless model
-// (src/main/debug/*.ts) decides everything; the main process owns the instance
-// and pushes ready-to-render state ("debug-state"); this file is a dumb
-// applier that forwards user intents ("debug-intent").
+// Settings/debug window renderer (#205; display layer migrated to Web
+// Awesome in #216). The headless model (src/main/debug/*.ts) decides
+// everything; the main process owns the instance and pushes ready-to-render
+// state ("debug-state"); this file is a dumb applier that forwards user
+// intents ("debug-intent").
 //
 // Must stay import-free (classic script over file://, see tsconfig.build.json
 // and the #204 renderer pitfall): the state/intent schemas here mirror the
-// wire, not the lib types.
+// wire, not the lib types. Web Awesome components are consumed as bare
+// custom elements from the vendored subset (src/renderer/vendor/webawesome/
+// VENDOR-NOTE.md); the autoloader upgrades them, this script only touches
+// host-element properties and attributes.
 //
 // Static copy (card titles, field labels for the settings page) lives here -
 // it is display text, fixed by the #164 spec, while all dynamic values come
@@ -16,6 +20,16 @@ interface DebugBridge {
   onDebugCopyText(cb: (t: string) => void): void;
 }
 const debugBridge = (window as unknown as { youtubesub: DebugBridge }).youtubesub;
+
+// Minimal shape of the vendored WA host elements this script drives
+// (property access only - the classes live inside the vendored modules and
+// the script must stay import-free).
+interface WaCtl extends HTMLElement {
+  value: string;
+  checked: boolean;
+  disabled: boolean;
+  readOnly: boolean;
+}
 
 // ---- static display copy (settings page) ----
 const SETTINGS_CARDS = [
@@ -41,6 +55,31 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string): HTMLEl
   return e;
 }
 
+// WA host element factory: variant/appearance come from the debug.html token
+// mapping (brand accent = 主按钮, neutral filled = 次按钮, plain = ghost).
+function wa(tag: string): HTMLElement {
+  return document.createElement(tag);
+}
+function waBtn(text: string, primary: boolean, id?: string): HTMLElement {
+  const b = wa("wa-button");
+  b.setAttribute("variant", primary ? "brand" : "neutral");
+  b.setAttribute("appearance", primary ? "accent" : "filled");
+  if (id) b.id = id;
+  b.textContent = text;
+  return b;
+}
+function waSelect(id: string, opts?: Array<[string, string]>): HTMLElement {
+  const s = wa("wa-select");
+  if (id) s.id = id;
+  for (const [v, l] of opts ?? []) {
+    const o = wa("wa-option");
+    o.setAttribute("value", v);
+    o.textContent = l;
+    s.appendChild(o);
+  }
+  return s;
+}
+
 function send(intent: Record<string, unknown>): void {
   debugBridge.debugIntent(intent);
 }
@@ -58,13 +97,13 @@ function openRenameModal(): void {
     box.style.cssText = "padding:18px 20px;display:flex;flex-direction:column;gap:10px;min-width:320px;";
     const title = el("div", "debugSection"); title.textContent = "重命名预设"; box.appendChild(title);
     const lab = el("div", "debugValue"); lab.textContent = "名称："; box.appendChild(lab);
-    const input = el("input") as HTMLInputElement; input.type = "text"; input.id = "renameInput";
+    const input = wa("wa-input"); input.id = "renameInput";
     box.appendChild(input);
     const row = el("div", "btnrow");
-    const ok = el("button", "push debugPrimary"); ok.textContent = "确定";
-    const cancel = el("button", "push"); cancel.textContent = "取消";
+    const ok = waBtn("确定", true);
+    const cancel = waBtn("取消", false);
     ok.addEventListener("click", () => {
-      send({ type: "preset-rename", name: input.value.trim() });
+      send({ type: "preset-rename", name: ((input as WaCtl).value || "").trim() });
       modal!.style.display = "none";
     });
     cancel.addEventListener("click", () => { modal!.style.display = "none"; });
@@ -77,14 +116,19 @@ function openRenameModal(): void {
     modal.appendChild(box);
     document.body.appendChild(modal);
   }
-  const current = (document.getElementById("presetCombo") as HTMLSelectElement);
-  const inp = document.getElementById("renameInput") as HTMLInputElement;
-  inp.value = current.options[current.selectedIndex]?.text ?? "";
+  // The combo is a wa-select whose options carry value=String(index); the
+  // current label comes from the selected option's text (same as the old
+  // select.options[selectedIndex].text).
+  const combo = document.getElementById("presetCombo") as WaCtl;
+  const inp = document.getElementById("renameInput") as WaCtl;
+  const opts = Array.from(combo.querySelectorAll("wa-option")) as WaCtl[];
+  const sel = opts.find((o) => o.value === combo.value);
+  inp.value = sel?.textContent ?? "";
   modal.style.display = "flex";
   inp.focus();
 }
 
-function setVal(input: HTMLInputElement | HTMLTextAreaElement, value: string): void {
+function setVal(input: WaCtl, value: string): void {
   // Never clobber what the user is typing (matches Qt: the widget owns its
   // in-progress edit until focus leaves).
   if (document.activeElement === input) return;
@@ -97,15 +141,19 @@ function buildSwitch(s: Record<string, unknown>): void {
   const titles: Record<string, string> = { settings: "设置", tuning: "调参", diag: "排障" };
   if (bar.childElementCount === 0) {
     for (const name of ["settings", "tuning", "diag"]) {
-      const b = el("button");
+      const b = waBtn(titles[name] ?? name, false);
       b.dataset.page = name;
-      b.textContent = titles[name] ?? name;
       b.addEventListener("click", () => send({ type: "switch-page", page: name }));
       bar.appendChild(b);
     }
   }
-  for (const c of Array.from(bar.children)) {
-    (c as HTMLElement).classList.toggle("active", c === undefined ? false : (c as HTMLElement).dataset.page === current);
+  for (const c of Array.from(bar.children) as HTMLElement[]) {
+    const active = c === undefined ? false : c.dataset.page === current;
+    c.classList.toggle("active", active);
+    // Active pill = brand accent (indigo, cream text); the rest stay neutral
+    // filled - the palette mapping on #debugWindow paints both.
+    c.setAttribute("variant", active ? "brand" : "neutral");
+    c.setAttribute("appearance", active ? "accent" : "filled");
   }
   void s;
 }
@@ -128,23 +176,21 @@ function buildSettingsPage(root: HTMLElement, st: Record<string, unknown>): void
       }
       let ctl: HTMLElement;
       if (row.key === "protocol") {
-        const sel = el("select"); sel.id = "f_protocol";
-        for (const p of PROTOCOLS) {
-          const o = el("option"); o.value = p; o.textContent = p; sel.appendChild(o);
-        }
-        sel.addEventListener("change", () => send({ type: "edit-credential", field: "protocol", value: sel.value }));
+        const sel = waSelect("f_protocol", PROTOCOLS.map((p) => [p, p] as [string, string]));
+        sel.addEventListener("change", () => send({ type: "edit-credential", field: "protocol", value: (sel as WaCtl).value }));
         ctl = sel;
       } else if (row.key === "mock") {
-        const cb = el("input"); cb.type = "checkbox"; cb.id = "f_mock";
-        const lab = el("label"); lab.textContent = "Mock 模式：不真的调用 API，只在试界面时用";
-        lab.appendChild(cb); lab.appendChild(document.createTextNode(" Mock 模式：不真的调用 API，只在试界面时用"));
-        lab.removeChild(cb); lab.insertBefore(cb, lab.firstChild);
-        cb.addEventListener("change", () => send({ type: "edit-credential", field: "mock", value: cb.checked }));
+        const cb = wa("wa-switch"); cb.id = "f_mock";
+        const lab = el("label");
+        lab.appendChild(cb);
+        lab.appendChild(document.createTextNode(" Mock 模式：不真的调用 API，只在试界面时用"));
+        cb.addEventListener("change", () => send({ type: "edit-credential", field: "mock", value: (cb as WaCtl).checked }));
         ctl = lab;
       } else {
-        const inp = el("input"); inp.type = row.key === "api_key" ? "password" : "text";
+        const inp = wa("wa-input");
+        inp.setAttribute("type", row.key === "api_key" ? "password" : "text");
         inp.id = "f_" + row.key;
-        inp.addEventListener("input", () => send({ type: "edit-credential", field: row.key, value: inp.value }));
+        inp.addEventListener("input", () => send({ type: "edit-credential", field: row.key, value: (inp as WaCtl).value }));
         ctl = inp;
       }
       g1.appendChild(ctl);
@@ -156,8 +202,11 @@ function buildSettingsPage(root: HTMLElement, st: Record<string, unknown>): void
     c2.appendChild(Object.assign(el("h3", "debugSection"), { textContent: SETTINGS_CARDS[1]!.title }));
     const g2 = el("div", "grid");
     const cap1 = el("label", "cap debugValue"); cap1.textContent = "用哪套提示词"; g2.appendChild(cap1);
-    const combo = el("select"); combo.id = "presetCombo";
-    combo.addEventListener("change", () => send({ type: "preset-select", index: combo.selectedIndex }));
+    const combo = waSelect("presetCombo");
+    combo.addEventListener("change", () => {
+      const v = (combo as WaCtl).value;
+      if (v !== "") send({ type: "preset-select", index: Number(v) });
+    });
     g2.appendChild(combo);
     const h1 = el("div", "debugHint"); h1.textContent = "内置的三套只读；想改就先「复制为自定义」"; g2.appendChild(h1);
     g2.appendChild(el("span"));
@@ -167,7 +216,7 @@ function buildSettingsPage(root: HTMLElement, st: Record<string, unknown>): void
       ["renameBtn", "重命名", "preset-rename"],
       ["deleteBtn", "删除", "preset-delete"],
     ] as Array<[string, string, string]>) {
-      const b = el("button", "push"); b.id = id; b.textContent = label;
+      const b = waBtn(label, false, id);
       b.addEventListener("click", () => {
         if (intent === "preset-rename") { openRenameModal(); return; }
         send({ type: intent });
@@ -177,22 +226,23 @@ function buildSettingsPage(root: HTMLElement, st: Record<string, unknown>): void
     btns.className = "btnrow rowspan";
     g2.appendChild(btns);
     const cap2 = el("label", "cap debugValue"); cap2.textContent = "提示词内容"; g2.appendChild(cap2);
-    const editor = el("textarea"); editor.id = "promptEditor"; editor.style.height = "90px";
-    editor.addEventListener("input", () => send({ type: "prompt-text", text: editor.value }));
-    const ed = editor as HTMLTextAreaElement; ed.className = "rowspan";
+    const editor = wa("wa-textarea"); editor.id = "promptEditor"; editor.style.height = "90px";
+    editor.addEventListener("input", () => send({ type: "prompt-text", text: (editor as WaCtl).value }));
+    editor.className = "rowspan";
     g2.appendChild(editor);
     const h2 = el("div", "debugHint span-hint"); h2.textContent = "这就是发给模型的指令；内置的只读，复制出来的才能改"; g2.appendChild(h2);
     const cap3 = el("label", "cap debugValue"); cap3.textContent = "实际发出去的提示词"; g2.appendChild(cap3);
-    const preview = el("textarea"); preview.id = "promptPreview"; preview.readOnly = true; preview.style.height = "90px";
+    const preview = wa("wa-textarea"); preview.id = "promptPreview";
+    (preview as WaCtl).readOnly = true; preview.style.height = "90px";
     preview.className = "rowspan";
     g2.appendChild(preview);
     const h3 = el("div", "debugHint span-hint"); h3.textContent = "下面这段就是真正发出去的内容，改上面会立刻跟着变"; g2.appendChild(h3);
     g2.appendChild(el("span"));
     const ctxLab = el("label");
-    const ctx = el("input"); ctx.type = "checkbox"; ctx.id = "f_context";
+    const ctx = wa("wa-switch"); ctx.id = "f_context";
     ctxLab.appendChild(ctx);
     ctxLab.appendChild(document.createTextNode(" 携带上下文：把上一句、下一句也一起发给模型"));
-    ctx.addEventListener("change", () => send({ type: "edit-credential", field: "context_groups", value: ctx.checked }));
+    ctx.addEventListener("change", () => send({ type: "edit-credential", field: "context_groups", value: (ctx as WaCtl).checked }));
     ctxLab.className = "rowspan";
     g2.appendChild(ctxLab);
     const h4 = el("div", "debugHint span-hint"); h4.textContent = "勾上翻译更连贯（模型能看到前后句），每次请求也更大"; g2.appendChild(h4);
@@ -203,11 +253,11 @@ function buildSettingsPage(root: HTMLElement, st: Record<string, unknown>): void
     const g3 = el("div", "grid");
     g3.appendChild(el("span"));
     const testBtns = el("div", "btnrow rowspan");
-    const testBtn = el("button", "push debugPrimary"); testBtn.id = "testBtn"; testBtn.textContent = "测试连接";
+    const testBtn = waBtn("测试连接", true, "testBtn");
     testBtn.addEventListener("click", () => send({ type: "test-start" }));
-    const cancelBtn = el("button", "push"); cancelBtn.id = "cancelTestBtn"; cancelBtn.textContent = "取消测试";
-    cancelBtn.addEventListener("click", () => send({ type: "test-cancel" }));
-    testBtns.appendChild(testBtn); testBtns.appendChild(cancelBtn);
+    const cancelTest = waBtn("取消测试", false, "cancelTestBtn");
+    cancelTest.addEventListener("click", () => send({ type: "test-cancel" }));
+    testBtns.appendChild(testBtn); testBtns.appendChild(cancelTest);
     g3.appendChild(testBtns);
     const hTest = el("div", "debugHint span-hint");
     hTest.textContent = "测的是上面填的、还没保存的输入；不落盘、不动浮窗";
@@ -216,46 +266,78 @@ function buildSettingsPage(root: HTMLElement, st: Record<string, unknown>): void
     const prog = el("span", "debugHint"); prog.id = "testProgress"; g3.appendChild(prog);
     g3.appendChild(el("span"));
     const capR = el("label", "cap debugValue"); capR.textContent = "测试报告"; g3.appendChild(capR);
-    const report = el("textarea"); report.id = "testReport"; report.readOnly = true;
+    const report = wa("wa-textarea"); report.id = "testReport";
+    (report as WaCtl).readOnly = true;
     report.style.height = "150px"; report.className = "rowspan";
     g3.appendChild(report);
     const hRep = el("div", "debugHint span-hint"); hRep.textContent = "上一次的结果会一直留在这里"; g3.appendChild(hRep);
     c3.appendChild(g3);
-    root.appendChild(c1); root.appendChild(c2); root.appendChild(c3);
+    // card 4: WA prototype trial area (#220) - display-only: sends no
+    // intents and attaches no user-event listeners; facts are published on
+    // window.__waProtoStatus / __waBfProbe for the E2E smoke and the ADR.
+    const c4 = el("div", "debugCard"); c4.id = "waProtoCard";
+    const c4h = el("h3", "debugSection"); c4h.textContent = "WA 原型试验区（#220，只展示，不动任何设置）";
+    c4.appendChild(c4h);
+    const waRow1 = el("div"); waRow1.id = "waProtoRow";
+    const waBtnPrimary = wa("wa-button"); waBtnPrimary.setAttribute("variant", "brand"); waBtnPrimary.textContent = "主操作预览";
+    const waBtnNeutral = wa("wa-button"); waBtnNeutral.textContent = "次操作预览";
+    const waSwitch = wa("wa-switch"); waSwitch.id = "waProtoSwitch";
+    waRow1.appendChild(waBtnPrimary); waRow1.appendChild(waBtnNeutral); waRow1.appendChild(waSwitch);
+    const waRow2 = el("div"); waRow2.id = "waProtoRow";
+    const waInput = wa("wa-input"); waInput.id = "waProtoInput"; waInput.setAttribute("label", "示例输入");
+    const waProtoSel = wa("wa-select"); waProtoSel.id = "waProtoSelect"; waProtoSel.setAttribute("label", "示例选择");
+    for (const pair of [["a", "选项甲"], ["b", "选项乙"], ["c", "选项丙"]]) {
+      const o = wa("wa-option"); o.setAttribute("value", pair[0]!); o.textContent = pair[1]!;
+      waProtoSel.appendChild(o);
+    }
+    waRow2.appendChild(waInput); waRow2.appendChild(waProtoSel);
+    const waStatus = el("div"); waStatus.id = "waProtoStatus"; waStatus.textContent = "WA 自检中……";
+    const waBfWrap = el("div"); waBfWrap.id = "waBfWrap";
+    const waBfGlass = el("div"); waBfGlass.id = "waBfGlass"; waBfGlass.textContent = "backdrop-filter 磨砂探针";
+    waBfWrap.appendChild(waBfGlass);
+    c4.appendChild(waRow1); c4.appendChild(waRow2); c4.appendChild(waStatus); c4.appendChild(waBfWrap);
+    root.appendChild(c1); root.appendChild(c2); root.appendChild(c3); root.appendChild(c4);
+    // The instrumentation below may finish before the first state push
+    // builds this card; refresh the status line now that it exists.
+    waRenderHook();
   }
   // patch
-  setVal(document.getElementById("f_base_url") as HTMLInputElement, String(fields.base_url ?? ""));
-  setVal(document.getElementById("f_api_key") as HTMLInputElement, String(fields.api_key ?? ""));
-  setVal(document.getElementById("f_model") as HTMLInputElement, String(fields.model ?? ""));
-  const proto = document.getElementById("f_protocol") as HTMLSelectElement;
+  setVal(document.getElementById("f_base_url") as WaCtl, String(fields.base_url ?? ""));
+  setVal(document.getElementById("f_api_key") as WaCtl, String(fields.api_key ?? ""));
+  setVal(document.getElementById("f_model") as WaCtl, String(fields.model ?? ""));
+  const proto = document.getElementById("f_protocol") as WaCtl;
   if (document.activeElement !== proto) proto.value = String(fields.protocol ?? "auto");
-  (document.getElementById("f_mock") as HTMLInputElement).checked = Boolean(fields.mock);
-  (document.getElementById("f_context") as HTMLInputElement).checked = Boolean(fields.context_groups);
-  const combo = document.getElementById("presetCombo") as HTMLSelectElement;
+  (document.getElementById("f_mock") as WaCtl).checked = Boolean(fields.mock);
+  (document.getElementById("f_context") as WaCtl).checked = Boolean(fields.context_groups);
+  const combo = document.getElementById("presetCombo") as WaCtl;
   const items = preset.items as Array<{ label: string; separator: boolean }>;
   const wantLabels = JSON.stringify(items.map((i) => i.label));
-  const haveLabels = JSON.stringify(Array.from(combo.options).map((o) => o.text));
+  const haveLabels = JSON.stringify((Array.from(combo.querySelectorAll("wa-option")) as WaCtl[]).map((o) => o.textContent));
   if (wantLabels !== haveLabels) {
     combo.innerHTML = "";
-    for (const it of items) {
-      const o = el("option");
-      o.text = it.label;
-      o.disabled = it.separator;
-      combo.add(o);
+    for (const [idx, it] of items.entries()) {
+      const o = wa("wa-option");
+      o.setAttribute("value", String(idx));
+      o.textContent = it.label;
+      (o as WaCtl).disabled = it.separator;
+      combo.appendChild(o);
     }
   }
-  if (document.activeElement !== combo) combo.selectedIndex = Number(preset.index ?? -1);
-  const editor = document.getElementById("promptEditor") as HTMLTextAreaElement;
+  if (document.activeElement !== combo) {
+    const idx = Number(preset.index ?? -1);
+    combo.value = idx >= 0 ? String(idx) : "";
+  }
+  const editor = document.getElementById("promptEditor") as WaCtl;
   setVal(editor, String(preset.editor_text ?? ""));
   editor.readOnly = Boolean(preset.editor_readonly);
-  (document.getElementById("copyBtn") as HTMLButtonElement).disabled = !preset.copy_enabled;
-  (document.getElementById("renameBtn") as HTMLButtonElement).disabled = !preset.rename_enabled;
-  (document.getElementById("deleteBtn") as HTMLButtonElement).disabled = !preset.delete_enabled;
-  setVal(document.getElementById("promptPreview") as HTMLTextAreaElement, String(st.preview_text ?? ""));
+  (document.getElementById("copyBtn") as WaCtl).disabled = !preset.copy_enabled;
+  (document.getElementById("renameBtn") as WaCtl).disabled = !preset.rename_enabled;
+  (document.getElementById("deleteBtn") as WaCtl).disabled = !preset.delete_enabled;
+  setVal(document.getElementById("promptPreview") as WaCtl, String(st.preview_text ?? ""));
   document.getElementById("testProgress")!.textContent = String(st.progress_text ?? "");
-  (document.getElementById("testBtn") as HTMLButtonElement).disabled = !st.test_btn_enabled;
-  (document.getElementById("cancelTestBtn") as HTMLButtonElement).disabled = !st.cancel_btn_enabled;
-  setVal(document.getElementById("testReport") as HTMLTextAreaElement, String(st.report_text ?? ""));
+  (document.getElementById("testBtn") as WaCtl).disabled = !st.test_btn_enabled;
+  (document.getElementById("cancelTestBtn") as WaCtl).disabled = !st.cancel_btn_enabled;
+  setVal(document.getElementById("testReport") as WaCtl, String(st.report_text ?? ""));
 }
 
 // ---- tuning page ----
@@ -264,6 +346,18 @@ function buildTuningPage(root: HTMLElement, groups: Array<Record<string, unknown
   for (const g of groups) {
     const card = el("div", "debugCard");
     const h = el("h3", "debugSection"); h.textContent = String(g.title); card.appendChild(h);
+    // #222: the motion group leads with its preset buttons; the active one is
+    // highlighted, a manual slider change un-highlights it (value-matched).
+    const presets = (g.presets ?? []) as Array<{ name: string; label: string; active: boolean }>;
+    if (presets.length > 0) {
+      const prow = el("div", "btnrow");
+      for (const p of presets) {
+        const b = waBtn(p.label, p.active);
+        b.addEventListener("click", () => send({ type: "anim-preset", name: p.name }));
+        prow.appendChild(b);
+      }
+      card.appendChild(prow);
+    }
     const grid = el("div", "grid");
     for (const f of g.fields as Array<Record<string, unknown>>) {
       const cap = el("label", "cap debugValue"); cap.textContent = String(f.label); grid.appendChild(cap);
@@ -280,21 +374,19 @@ function buildTuningControl(f: Record<string, unknown>): HTMLElement {
   const path = f.path as [string, string];
   const key = path.join(".");
   if (kind === "choice") {
-    const sel = el("select"); sel.dataset.path = key;
     const choices = f.choices as string[];
     const labels = f.labels as string[];
-    choices.forEach((c, i) => {
-      const o = el("option"); o.value = c; o.textContent = labels[i] ?? c; sel.appendChild(o);
-    });
-    sel.value = String(f.value);
-    sel.disabled = !f.enabled;
-    sel.addEventListener("change", () => send({ type: "tuning-set", path, value: sel.value }));
+    const sel = waSelect("", choices.map((c, i) => [c, labels[i] ?? c] as [string, string]));
+    sel.dataset.path = key;
+    (sel as WaCtl).value = String(f.value);
+    (sel as WaCtl).disabled = !f.enabled;
+    sel.addEventListener("change", () => send({ type: "tuning-set", path, value: (sel as WaCtl).value }));
     return sel;
   }
   if (kind === "color") {
-    const btn = el("button", "push"); btn.textContent = String(f.color_text);
+    const btn = waBtn(String(f.color_text), false);
     btn.dataset.path = key;
-    if (!f.enabled) btn.disabled = true;
+    if (!f.enabled) (btn as WaCtl).disabled = true;
     const colorInput = document.getElementById("colorInput") as HTMLInputElement;
     btn.addEventListener("click", () => {
       colorInput.dataset.path = key;
@@ -305,11 +397,19 @@ function buildTuningControl(f: Record<string, unknown>): HTMLElement {
   }
   if (kind === "slider") {
     const row = el("div", "sliderrow");
-    const slider = el("input") as HTMLInputElement; slider.type = "range";
-    slider.min = String(f.min); slider.max = String(f.max); slider.step = "1";
+    // #222: the step comes from the authority table (float-step motion
+    // sliders keep decimals; bg_opacity stays the integer pair).
+    const stepStr = String(f.step ?? 1);
+    const slider = wa("wa-slider") as WaCtl;
+    slider.setAttribute("min", String(f.min));
+    slider.setAttribute("max", String(f.max));
+    slider.setAttribute("step", stepStr);
     slider.value = String(f.value);
-    const spin = el("input") as HTMLInputElement; spin.type = "number";
-    spin.min = String(f.min); spin.max = String(f.max); spin.step = "1";
+    const spin = wa("wa-input") as WaCtl;
+    spin.setAttribute("type", "number");
+    spin.setAttribute("min", String(f.min));
+    spin.setAttribute("max", String(f.max));
+    spin.setAttribute("step", stepStr);
     spin.value = String(f.value);
     const push2 = (v: string): void => send({ type: "tuning-set", path, value: Number(v) });
     slider.addEventListener("input", () => { spin.value = slider.value; push2(slider.value); });
@@ -318,9 +418,11 @@ function buildTuningControl(f: Record<string, unknown>): HTMLElement {
     row.dataset.path = key;
     return row;
   }
-  const inp = el("input") as HTMLInputElement; inp.type = "number";
-  inp.min = String(f.min ?? ""); inp.max = String(f.max ?? "");
-  inp.step = kind === "int" ? String(f.step ?? 1) : "any";
+  const inp = wa("wa-input") as WaCtl;
+  inp.setAttribute("type", "number");
+  inp.setAttribute("min", String(f.min ?? ""));
+  inp.setAttribute("max", String(f.max ?? ""));
+  inp.setAttribute("step", kind === "int" ? String(f.step ?? 1) : "any");
   inp.value = String(f.value);
   inp.disabled = !f.enabled;
   inp.dataset.path = key;
@@ -342,17 +444,18 @@ function buildDiagPage(root: HTMLElement, d: Record<string, unknown>): void {
     const zonesWrap = el("div"); zonesWrap.id = "diagZones";
     root.appendChild(zonesWrap);
     const footer = el("div"); footer.id = "diagFooter";
-    const ct = el("button", "push"); ct.id = "ctToggle";
+    const ct = waBtn("", false, "ctToggle");
     ct.addEventListener("click", () => send({ type: "ct-expand", expanded: !ct.dataset.expanded }));
     const freqLab = el("span", "debugHint"); freqLab.textContent = "多久刷新一次";
-    const freq = el("select"); freq.id = "diagFreq";
+    const freq = waSelect("diagFreq");
     for (const gear of [0.5, 1.0, 2.0]) {
-      const o = el("option"); o.value = String(gear); o.textContent = gear + " 秒"; freq.appendChild(o);
+      const o = wa("wa-option"); o.setAttribute("value", String(gear)); o.textContent = gear + " 秒";
+      freq.appendChild(o);
     }
-    freq.addEventListener("change", () => send({ type: "frequency", seconds: Number(freq.value) }));
-    const copy = el("button", "push"); copy.id = "diagCopy"; copy.textContent = "复制全部内容";
+    freq.addEventListener("change", () => send({ type: "frequency", seconds: Number((freq as WaCtl).value) }));
+    const copy = waBtn("复制全部内容", false, "diagCopy");
     copy.addEventListener("click", () => send({ type: "copy-all" }));
-    const refresh = el("button", "push debugPrimary"); refresh.id = "diagRefresh"; refresh.textContent = "立刻刷新一次";
+    const refresh = waBtn("立刻刷新一次", true, "diagRefresh");
     refresh.addEventListener("click", () => send({ type: "refresh" }));
     footer.appendChild(ct); footer.appendChild(freqLab); footer.appendChild(freq);
     footer.appendChild(copy); footer.appendChild(refresh);
@@ -393,11 +496,11 @@ function buildDiagPage(root: HTMLElement, d: Record<string, unknown>): void {
     }
     zonesWrap.appendChild(card);
   }
-  const ct = document.getElementById("ctToggle") as HTMLButtonElement;
+  const ct = document.getElementById("ctToggle") as WaCtl;
   ct.textContent = String(d.ct_label);
   ct.disabled = !d.ct_enabled;
   ct.dataset.expanded = d.ct_expanded ? "1" : "";
-  const freq = document.getElementById("diagFreq") as HTMLSelectElement;
+  const freq = document.getElementById("diagFreq") as WaCtl;
   if (document.activeElement !== freq) freq.value = String(d.frequency);
 }
 
@@ -409,7 +512,7 @@ function apply(s: unknown): void {
   buildSwitch(st);
   const foot = st.footer as Record<string, unknown>;
   document.getElementById("footerStatus")!.textContent = String(foot.status);
-  (document.getElementById("saveBtn") as HTMLButtonElement).disabled = !foot.save_enabled;
+  (document.getElementById("saveBtn") as WaCtl).disabled = !foot.save_enabled;
   document.getElementById("debugHint")!.textContent =
     [String(st.version ?? ""), String(st.env ?? "")].filter(Boolean).join(" · ");
   const geo = st.geometry as Record<string, number>;
@@ -439,3 +542,110 @@ window.addEventListener("keydown", (e) => {
 });
 debugBridge.onDebugCopyText((t) => { void navigator.clipboard.writeText(t); });
 debugBridge.onDebugState(apply);
+
+// ---- #220 WA prototype instrumentation (display-only; zero intents) ----
+// The vendored autoloader is a deferred module script: this classic script
+// runs first, so the console.warn tap below catches its per-tag load
+// failures (the autoloader warns instead of throwing). Upgrade facts and
+// the backdrop-filter probe feed the E2E smoke (#220 acceptance 3) and the
+// ADR verdict (#220 acceptance 2). #216 migrated the real controls too; the
+// instance counting stays scoped to the prototype card so the E2E evidence
+// keeps measuring exactly what it always measured.
+interface WaProtoGlobals {
+  __waProtoStatus?: Record<string, unknown>;
+  __waProtoRender?: () => void;
+  __waBfProbe?: { supported: boolean; fps: number | null };
+  __waScriptError?: string;
+}
+const waGlobals = window as unknown as WaProtoGlobals;
+const WA_TAGS = ["wa-button", "wa-input", "wa-select", "wa-option", "wa-switch"];
+const waAutoloadWarns: string[] = [];
+const waOrigWarn = console.warn.bind(console);
+console.warn = ((...args: unknown[]) => {
+  waAutoloadWarns.push(args.map((a) => (a instanceof Error ? a.message : String(a))).join(" "));
+  waOrigWarn(...args);
+}) as typeof console.warn;
+const waProtoStatus: Record<string, unknown> = waGlobals.__waProtoStatus = {
+  tags: {} as Record<string, boolean>,
+  defined: 0, total: 0, upgraded: 0,
+  discoveryComplete: false,
+  autoloadWarns: waAutoloadWarns,
+};
+function waRefreshUpgrades(): void {
+  const tags = waProtoStatus.tags as Record<string, boolean>;
+  let defined = 0;
+  for (const t of WA_TAGS) {
+    const has = Boolean(customElements.get(t));
+    tags[t] = has;
+    if (has) defined++;
+  }
+  // Probe facts come from the prototype card's subtree only (see comment above).
+  const card = document.getElementById("waProtoCard");
+  const nodes = card ? Array.from(card.querySelectorAll(WA_TAGS.join(","))) : [];
+  let upgraded = 0;
+  for (const node of nodes) {
+    if ((node as HTMLElement).shadowRoot) upgraded++;
+  }
+  waProtoStatus.defined = defined;
+  waProtoStatus.total = nodes.length;
+  waProtoStatus.upgraded = upgraded;
+}
+function waStatusText(): string {
+  const tags = waProtoStatus.tags as Record<string, boolean>;
+  const missing = WA_TAGS.filter((t) => !tags[t]);
+  const bf = waGlobals.__waBfProbe;
+  const bfText = bf
+    ? "；backdrop-filter " + (bf.supported ? "支持" : "不支持") +
+      "，磨砂层刷新实测 " + (bf.fps === null ? "…" : String(bf.fps)) + " fps（2s rAF 采样）"
+    : "";
+  if (missing.length === 0) {
+    return "WA 自检通过：5 个标签全部定义，" + String(waProtoStatus.upgraded) + "/" + String(waProtoStatus.total) +
+      " 实例已挂 shadowRoot" + (waProtoStatus.discoveryComplete ? "，autoloader 扫描完成" : "") + bfText;
+  }
+  return "WA 自检未过：未定义 " + missing.join(", ") +
+    (waAutoloadWarns.length ? "；autoloader 警告：" + waAutoloadWarns.join(" | ") : "") +
+    (waGlobals.__waScriptError ? "；模块加载失败：" + waGlobals.__waScriptError : "") + bfText;
+}
+function waRenderHook(): void {
+  const line = document.getElementById("waProtoStatus");
+  if (line) line.textContent = waStatusText();
+}
+waGlobals.__waProtoRender = waRenderHook;
+document.addEventListener("wa-discovery-complete", () => {
+  waProtoStatus.discoveryEvent = true;
+  waRefreshUpgrades();
+  waRenderHook();
+});
+// "Settled" means the honest verdict: every tag defined and every instance
+// upgraded. The autoloader's first discovery-complete can fire before this
+// classic-script-built card exists (module scripts are deferred, the card
+// builds on the first debug-state push), so settle on facts, not the event.
+function waSettled(): boolean {
+  const total = waProtoStatus.total as number;
+  return waProtoStatus.defined === WA_TAGS.length &&
+    total >= WA_TAGS.length &&
+    (waProtoStatus.upgraded as number) === total;
+}
+(function waPollUpgrades(): void {
+  waRefreshUpgrades();
+  if (waSettled()) waProtoStatus.discoveryComplete = true;
+  waRenderHook();
+  if (!waProtoStatus.discoveryComplete) window.setTimeout(waPollUpgrades, 250);
+})();
+const waBfSupported = typeof CSS !== "undefined" &&
+  (CSS.supports("backdrop-filter", "blur(12px)") || CSS.supports("-webkit-backdrop-filter", "blur(12px)"));
+const waBf: { supported: boolean; fps: number | null } = waGlobals.__waBfProbe =
+  { supported: waBfSupported, fps: null };
+if (waBfSupported) {
+  const waBfT0 = performance.now();
+  let waBfFrames = 0;
+  const waBfStep = (t: number): void => {
+    waBfFrames++;
+    if (t - waBfT0 < 2000) { requestAnimationFrame(waBfStep); return; }
+    waBf.fps = Math.round(waBfFrames / ((t - waBfT0) / 1000));
+    waRenderHook();
+  };
+  requestAnimationFrame(waBfStep);
+} else {
+  waRenderHook();
+}

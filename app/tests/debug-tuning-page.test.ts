@@ -129,7 +129,10 @@ test("opacity is a slider and a number box that stay in sync", () => {
   // spec #161 字段表：背景不透明度 = 滑条 + 数字框（用户故事 18）。
   const [p, cfg] = page();
   const sliders = p.slider_controls();
-  assert.equal(sliders.length, 1, "只有背景不透明度这一项带滑条");
+  // #222 起动效三项也是滑条（浮点步长），整表共 4 条，顺序随权威表。
+  assert.deepEqual(sliders, [
+    ["display", "bg_opacity"], ["anim", "fade_delay"], ["anim", "dur"], ["anim", "shrink"],
+  ]);
   const path = sliders[0]!;
   const view = p.control_view(path);
   assert.equal(view.slider, 150);
@@ -141,6 +144,44 @@ test("opacity is a slider and a number box that stay in sync", () => {
   assert.equal(p.control_view(path).slider, 40, "改滑条（经同一入口）时数字框跟着走");
   p.apply();
   assert.equal((cfg["display"] as S.JsonObject)["bg_opacity"], 40);
+});
+
+test("float-step motion sliders keep decimals and stay in sync", () => {
+  const [p, cfg] = page();
+  p.set_field_value(["anim", "dur"], 0.333);
+  assert.equal(p.field_value(["anim", "dur"]), 0.33, "三位小数收敛到 0.01 网格");
+  p.set_field_value(["anim", "dur"], 9);
+  assert.equal(p.field_value(["anim", "dur"]), 0.6, "越界夹回表范围");
+  p.set_field_value(["anim", "fade_delay"], 0.30000001);
+  assert.equal(p.field_value(["anim", "fade_delay"]), 0.3, "按表步长收敛到 0.1 位");
+  p.apply();
+  assert.equal((cfg["anim"] as S.JsonObject)["dur"], 0.6);
+  assert.equal((cfg["anim"] as S.JsonObject)["fade_delay"], 0.3);
+});
+
+test("anim presets fill the two prototype fields and stay save-gated", () => {
+  const [p, cfg] = page();
+  assert.equal(p.active_anim_preset(), "mid", "默认值就是 mid 档");
+  assert.deepEqual(
+    p.anim_presets_view().map((v) => [v.name, v.active]),
+    [["fast", false], ["mid", true], ["slow", false]]);
+  p.set_field_value(["anim", "dur"], 0.3);
+  assert.equal(p.active_anim_preset(), null, "手动改过就失配");
+  p.apply_anim_preset("fast");
+  assert.equal(p.field_value(["anim", "dur"]), 0.18);
+  assert.equal(p.field_value(["anim", "fade_delay"]), 0.6);
+  assert.equal(p.field_value(["anim", "shrink"]), 0.72, "预设不动缩小比");
+  assert.equal(p.field_value(["anim", "ease"]), "cubic-bezier(.22,1,.36,1)");
+  assert.equal(p.active_anim_preset(), "fast");
+  assert.equal(p.count_dirty(), 2, "预设恰好改两个字段");
+  p.apply();
+  assert.equal((cfg["anim"] as S.JsonObject)["dur"], 0.18);
+  assert.equal((cfg["anim"] as S.JsonObject)["fade_delay"], 0.6);
+  p.snapshot();
+  p.apply_anim_preset("slow");
+  p.cancel();
+  assert.equal(p.active_anim_preset(), "fast", "取消回到保存过的值");
+  assert.throws(() => p.apply_anim_preset("turbo"), Error, "表外预设名 raise");
 });
 
 test("font size lives in the display group with the authority range", () => {

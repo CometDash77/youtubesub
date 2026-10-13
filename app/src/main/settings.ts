@@ -124,6 +124,10 @@ export function default_settings(): Settings {
     display: { mode: "bilingual", order: "trans_first", history_lines: 2,
                font_size: 10, font_bold: "none", stroke: 1.5,
                bg_color: [0, 0, 0], bg_opacity: 150 },
+    // Animation tuning area (#222): the prototype's four parameters. The
+    // defaults are the prototype's mid feel; #214 owns the final numbers.
+    anim: { fade_delay: 1.2, dur: 0.24, shrink: 0.72,
+            ease: "cubic-bezier(.22,1,.36,1)" },
     window: { x: null, y: null, w: 380, h: 64 },
     server: { port: 9877 },
   };
@@ -145,7 +149,7 @@ export function default_settings(): Settings {
 // control is the widget kind the page must use, one per spec #161:
 // "choice" (dropdown), "int"/"float" (number box), "slider" (slider + number
 // box, backdrop opacity), "color" (color picker).
-export const TUNING_GROUPS = ["display", "network", "experimental"] as const;
+export const TUNING_GROUPS = ["display", "motion", "network", "experimental"] as const;
 
 function _tune(path: TuningPath, group: string, label: string, control: Control,
                def: Json, kw: Partial<FieldSpec> = {}): FieldSpec {
@@ -183,6 +187,22 @@ export const TUNING_FIELDS: readonly FieldSpec[] = [
   _tune(["display", "bg_opacity"], "display", "底板浓淡", "slider", 150,
         { min: 0, max: 255, step: 1, notify_overlay: true,
           hint: "越小越透，能看见后面的画面" }),
+  // ---- motion (#222): the animation tuning area, the prototype's four
+  // parameters. Float-step sliders keep decimals (only the integer pair
+  // rounds) - see _clamp_number and the tuning-page slider branches.
+  _tune(["anim", "fade_delay"], "motion", "淡出延迟", "slider", 1.2,
+        { min: 0.0, max: 3.0, step: 0.1, unit: "秒", notify_overlay: true,
+          hint: "控制条弹出后，字幕等多久才开始淡出" }),
+  _tune(["anim", "dur"], "motion", "动画时长", "slider", 0.24,
+        { min: 0.05, max: 0.6, step: 0.01, unit: "秒", notify_overlay: true,
+          hint: "淡出、恢复这一下用多长时间" }),
+  _tune(["anim", "shrink"], "motion", "字幕缩小比", "slider", 0.72,
+        { min: 0.5, max: 1.0, step: 0.01, notify_overlay: true,
+          hint: "控制条弹出时字幕缩到多大；1 = 不缩小" }),
+  _tune(["anim", "ease"], "motion", "缓动曲线", "choice", "cubic-bezier(.22,1,.36,1)",
+        { choices: ["cubic-bezier(.22,1,.36,1)", "ease-out", "ease", "linear"],
+          labels: ["柔和收尾", "快速启动", "标准", "匀速"],
+          notify_overlay: true, hint: "动画是先快后慢还是匀速走完" }),
   _tune(["provider", "timeout_s"], "network", "一次请求最多等多久", "float", 60.0,
         { min: 1.0, max: 600.0, step: 1.0, unit: "秒",
           hint: "超过就算这次失败；网络慢就调大" }),
@@ -209,6 +229,15 @@ export const TUNING_FIELDS: readonly FieldSpec[] = [
         { min: 100, max: 64000, step: 500, uncalibrated: true,
           hint: "和上一项谁先到算谁" }),
 ];
+
+// Animation presets (#222): one click fills anim.dur + anim.fade_delay from
+// the prototype (shrink/ease stay untouched, same as the prototype). The
+// numbers mirror app/prototype/213-three-states; #214 owns the final values.
+export const ANIM_PRESETS = {
+  fast: { label: "快", dur: 0.18, fade_delay: 0.6 },
+  mid: { label: "中", dur: 0.24, fade_delay: 1.2 },
+  slow: { label: "慢", dur: 0.4, fade_delay: 2.0 },
+} as const;
 
 // Python tuples hash by value; TS arrays do not, so paths key maps by their
 // JSON form. Exported because the tuning UI state (and later the settings
@@ -260,7 +289,11 @@ function _clamp_number(field: FieldSpec, value: Json | undefined): number | null
   if (!_is_number(value)) return null;
   if (field.min === null || field.max === null) return null;
   const v = Math.min(Math.max(value, field.min), field.max);
-  return field.control === "int" || field.control === "slider" ? roundHalfEven(v) : v;
+  // slider is the integer pair (bg_opacity); a float-step slider (#222)
+  // keeps decimals - only the integer pair rounds.
+  if (field.control === "int") return roundHalfEven(v);
+  if (field.control === "slider") return (field.step ?? 1) >= 1 ? roundHalfEven(v) : v;
+  return v;
 }
 
 function _clamp_channels(field: FieldSpec, value: Json | undefined): number[] | null {

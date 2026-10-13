@@ -141,6 +141,11 @@ export function createDebugWindowHost(deps: DebugHostDeps): DebugHost {
     });
     win.setMenuBarVisibility(false);
     win.webContents.on("preload-error", (_e, p, err) => log("[debug] preload-error " + p + " : " + err.message));
+    // The open()-time pushes can fire before the freshly-loading page has its
+    // listeners registered; without a post-load push the page would sit
+    // stateless (empty cards) until the next model change. #220 caught this
+    // intermittently in E2E.
+    win.webContents.on("did-finish-load", () => pushState());
     win.on("show", () => {
       debug.show();          // first show after hide: resnapshot + refit
       applyBounds();
@@ -215,6 +220,12 @@ export function createDebugWindowHost(deps: DebugHostDeps): DebugHost {
         if (p && rgb && rgb.length === 3) tp.set_field_value(p, rgb as unknown as S.Json);
         break;
       }
+      case "anim-preset": {
+        // #222: a preset fills the two fields through the normal edit path -
+        // clamped, dirty-tracked, save-gated (the window's single save).
+        if (typeof it.name === "string") tp.apply_anim_preset(it.name);
+        break;
+      }
       case "save": debug.save(); break;
       case "ctrl-s": debug.save_via_shortcut(); break;
       case "cancel": debug.cancel(); break;
@@ -265,6 +276,9 @@ export function createDebugWindowHost(deps: DebugHostDeps): DebugHost {
       tuning: tp.groups().map((g) => ({
         group: g.group,
         title: g.title,
+        // #222: the motion group carries its preset buttons; active is
+        // computed from the current values (a manual change un-highlights).
+        presets: g.group === "motion" ? tp.anim_presets_view() : [],
         fields: g.fields.map((f) => ({
           path: f.path,
           label: tp.label_text(f),

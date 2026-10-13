@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<!-- =====================================================================
+  PROTOTYPE (throwaway) — CometDash77/youtubesub#213
+  浮窗三态视觉与动效原型：A 常驻纯字幕 / B 悬停控制条淡入+字幕缩小 / C 穿透解锁小图标
+  变体经 ?variant=A|B|C 切换 + 底部悬浮切换条；Electron 真窗与双击便携双形态同文件。
+  回答的设计问题：三态观感与过渡是否成立；Chromium backdrop-filter 在 Electron 44
+  真透明窗是否达标（#154 acrylic 禁用先例约束）。动效数值仅供 #214 反应，本票不定案。
+  三态转移矩阵 = #211 决议（整窗热区 / 离窗淡出 / 右键或 Ctrl+Alt+U / 解锁落回纯字幕）。
+====================================================================== -->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>PROTOTYPE #213 浮窗三态</title>
+<style>
+  :root {
+    --fade-delay: 1.2s;      /* controls→subtitles 淡出延迟 */
+    --dur: 0.24s;            /* 过渡时长 */
+    --ease: cubic-bezier(.22, 1, .36, 1);
+    --shrink: 0.72;          /* controls 态字幕缩小比 */
+    --blur: 18px;            /* 真磨砂档位 */
+    --player-bg: rgba(20, 22, 28, 0.55);
+    --player-border: rgba(255, 255, 255, 0.14);
+    --accent: #4f8cff;
+    --text: #f2f4f8;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; }
+  body {
+    font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+    background: transparent;
+  }
+  /* ---------- 便携模式模拟背景（Electron 真窗下隐藏） ---------- */
+  #simbackdrop {
+    position: fixed; inset: 0; z-index: 0;
+    background:
+      radial-gradient(1200px 500px at 70% 20%, #3a5f8f 0%, transparent 60%),
+      radial-gradient(900px 600px at 20% 80%, #7a4a2f 0%, transparent 55%),
+      linear-gradient(160deg, #10141c 0%, #232c3a 100%);
+  }
+  #simbackdrop::after {  /* 假窗格，给磨砂提供可糊的细节 */
+    content: ""; position: absolute; inset: 0;
+    background:
+      repeating-linear-gradient(90deg, rgba(255,255,255,.05) 0 2px, transparent 2px 120px),
+      repeating-linear-gradient(0deg, rgba(255,255,255,.04) 0 2px, transparent 2px 90px);
+  }
+  body.electron #simbackdrop { display: none; }
+
+  /* ---------- 被评估的浮窗本体 ---------- */
+  #player {
+    position: fixed; z-index: 1;
+    left: 50%; top: 46%; transform: translate(-50%, -50%);
+    width: min(920px, 92vw);
+    border-radius: 18px;
+    background: var(--player-bg);
+    box-shadow: inset 0 0 0 1px var(--player-border), 0 14px 44px rgba(0, 0, 0, 0.45);
+    padding: 14px 20px 12px;
+    color: var(--text);
+    transition: background var(--dur) var(--ease);
+  }
+  body.material-frost #player {
+    -webkit-backdrop-filter: blur(var(--blur)) saturate(1.3);
+    backdrop-filter: blur(var(--blur)) saturate(1.3);
+  }
+  body.material-faux #player { background: rgba(26, 28, 34, 0.82); }
+  body.material-opaque #player { background: #171a21; }
+
+  /* 字幕层 */
+  #subtitle {
+    font-size: 27px; line-height: 1.35; font-weight: 600; text-align: center;
+    text-shadow: 0 0 4px rgba(0,0,0,.9), 0 1px 2px rgba(0,0,0,.9);
+    transition: transform var(--dur) var(--ease), font-size var(--dur) var(--ease), opacity var(--dur) var(--ease);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  /* 标题+控制条层 */
+  #controls {
+    opacity: 0; transform: translateY(10px); pointer-events: none;
+    transition: opacity var(--dur) var(--ease), transform var(--dur) var(--ease);
+  }
+  #title {
+    font-size: 13px; color: rgba(242,244,248,.85);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 8px;
+  }
+  #bar { display: flex; align-items: center; gap: 10px; }
+  #bar .zone { display: flex; gap: 6px; align-items: center; }
+  #bar button {
+    width: 36px; height: 34px; border: none; border-radius: 9px; cursor: pointer;
+    background: rgba(255,255,255,.08); color: var(--text);
+    display: flex; align-items: center; justify-content: center;
+  }
+  #bar button:hover { background: rgba(255,255,255,.16); }
+  #bar button svg { width: 18px; height: 18px; fill: currentColor; }
+  #seekwrap {
+    flex: 1; height: 22px; display: flex; align-items: center; cursor: pointer;
+  }
+  #seektrack { width: 100%; height: 5px; border-radius: 3px; background: rgba(255,255,255,.18); position: relative; }
+  #seekfill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px; background: var(--accent); }
+  #seekghost { position: absolute; top: -3px; bottom: -3px; width: 2px; background: rgba(255,255,255,.7); display: none; }
+  #timelabel { font-size: 11px; color: rgba(242,244,248,.6); font-variant-numeric: tabular-nums; }
+
+  /* 穿透解锁小图标层 */
+  #unlock {
+    position: absolute; right: 10px; bottom: 10px;
+    width: 44px; height: 44px; border-radius: 50%;
+    background: rgba(20,22,28,.75); border: 1px solid var(--player-border);
+    display: flex; align-items: center; justify-content: center; cursor: pointer;
+    opacity: 0; pointer-events: none; transform: scale(.6);
+    transition: opacity var(--dur) var(--ease), transform var(--dur) var(--ease);
+  }
+  #unlock svg { width: 20px; height: 20px; fill: #ffd166; }
+  #unlock:hover { background: rgba(60,64,76,.9); }
+
+  /* ---------- 三态 ---------- */
+  body.state-subtitles #controls { opacity: 0; transform: translateY(10px); pointer-events: none; }
+  body.state-subtitles #subtitle { transform: scale(1); font-size: 27px; }
+  body.state-subtitles #unlock { opacity: 0; transform: scale(.6); pointer-events: none; }
+
+  body.state-controls #controls { opacity: 1; transform: translateY(0); pointer-events: auto; }
+  body.state-controls #subtitle { transform: scale(var(--shrink)); font-size: calc(27px * var(--shrink)); }
+  body.state-controls #unlock { opacity: 0; transform: scale(.6); pointer-events: none; }
+
+  body.state-passthrough #subtitle,
+  body.state-passthrough #controls { opacity: 0 !important; pointer-events: none !important; }
+  body.state-passthrough #unlock { opacity: 1; transform: scale(1); pointer-events: auto; }
+
+  /* ---------- 右键菜单 ---------- */
+  #ctxmenu {
+    position: fixed; z-index: 50; display: none; min-width: 190px;
+    background: rgba(28,30,38,.96); border-radius: 10px; padding: 6px;
+    box-shadow: inset 0 0 0 1px var(--player-border), 0 10px 30px rgba(0,0,0,.5);
+    font-size: 13px; color: var(--text);
+  }
+  #ctxmenu .item { padding: 8px 12px; border-radius: 7px; cursor: pointer; display: flex; justify-content: space-between; gap: 18px; }
+  #ctxmenu .item:hover { background: rgba(255,255,255,.12); }
+  #ctxmenu .sep { height: 1px; background: rgba(255,255,255,.1); margin: 4px 8px; }
+
+  /* ---------- 原型工作台（切换条+状态面板，非被评估对象） ---------- */
+  #switcher {
+    position: fixed; z-index: 40; left: 50%; bottom: 18px; transform: translateX(-50%);
+    display: flex; align-items: center; gap: 10px;
+    background: #0b0d12; color: #dfe4ec; border-radius: 999px; padding: 8px 14px;
+    box-shadow: 0 0 0 2px #2c3547, 0 10px 30px rgba(0,0,0,.6);
+    font-size: 13px;
+  }
+  #switcher button { border: none; background: #1d2740; color: #dfe4ec; border-radius: 50%; width: 28px; height: 28px; cursor: pointer; font-size: 14px; }
+  #switcher button:hover { background: #2c3a5e; }
+  #switcher #tourbtn { border-radius: 999px; width: auto; padding: 0 12px; height: 28px; font-size: 12px; }
+  #varlabel { min-width: 200px; text-align: center; }
+  #varlabel b { color: #8fb6ff; }
+
+  #panel {
+    position: fixed; z-index: 40; right: 12px; top: 12px; width: 264px;
+    background: rgba(6,8,12,.88); color: #cfd6e2; border-radius: 12px;
+    box-shadow: 0 0 0 2px #2c3547; padding: 10px 12px; font-size: 11.5px; line-height: 1.55;
+  }
+  #panel h3 { font-size: 11px; color: #8fb6ff; letter-spacing: .08em; margin-bottom: 6px; }
+  #panel .row { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin: 3px 0; }
+  #panel input[type=range] { width: 118px; }
+  #panel select { background: #1d2740; color: #cfd6e2; border: none; border-radius: 6px; padding: 2px 4px; font-size: 11px; }
+  #panel .mat { display: flex; gap: 4px; }
+  #panel .mat button { flex: 1; border: none; border-radius: 6px; padding: 3px 0; cursor: pointer; background: #1d2740; color: #cfd6e2; font-size: 11px; }
+  #panel .mat button.on { background: #2c5aa0; color: #fff; }
+  #panel .preset button { border: none; border-radius: 6px; padding: 3px 8px; cursor: pointer; background: #1d2740; color: #cfd6e2; font-size: 11px; }
+  #panel .preset button.on { background: #2c5aa0; color: #fff; }
+  #panel #log { margin-top: 6px; border-top: 1px solid rgba(255,255,255,.12); padding-top: 5px; max-height: 130px; overflow: hidden; color: #93a0b4; }
+  #panel #log div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #panel #log .latest { color: #dfe4ec; }
+  #panel label { display: flex; align-items: center; gap: 5px; }
+</style>
+</head>
+<body class="material-frost state-subtitles">
+  <div id="simbackdrop"></div>
+
+  <div id="player">
+    <div id="controls">
+      <div id="title">【4K·样片】三态原型合成测试片 — 浮窗播放器化视觉验证（单行截断演示用超长标题AAAAAAAAAAAAAAAAAAAA）</div>
+      <div id="bar">
+        <div class="zone">
+          <button id="b-15" title="后退 15 秒"><svg viewBox="0 0 24 24"><path d="M12 5V1L6 7l6 6V9c3.3 0 6 2.7 6 6s-2.7 6-6 6-6-2.7-6-6H4c0 4.4 3.6 8 8 8s8-3.6 8-8-3.6-8-8-8z"/></svg></button>
+          <button id="b-play" title="播放/暂停"><svg id="i-play" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg><svg id="i-pause" viewBox="0 0 24 24" style="display:none"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg></button>
+          <button id="b+15" title="前进 15 秒"><svg viewBox="0 0 24 24"><path d="M12 5V1l6 6-6 6V9c-3.3 0-6 2.7-6 6s2.7 6 6 6 6-2.7 6-6h2c0 4.4-3.6 8-8 8s-8-3.6-8-8 3.6-8 8-8z"/></svg></button>
+        </div>
+        <div id="seekwrap"><div id="seektrack"><div id="seekfill"></div><div id="seekghost"></div></div></div>
+        <div id="timelabel">0:00 / 1:30</div>
+        <div class="zone">
+          <button id="b-mute" title="静音切换"><svg id="i-vol" viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 7.97v8.05A4.5 4.5 0 0 0 16.5 12z"/></svg><svg id="i-muted" viewBox="0 0 24 24" style="display:none"><path d="M16.5 12A4.5 4.5 0 0 0 14 7.97v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51A8.8 8.8 0 0 0 21 12c0-4.28-3-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06a8.99 8.99 0 0 0 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/></svg></button>
+        </div>
+      </div>
+    </div>
+    <div id="subtitle">字幕行 Alpha — 磨砂浮窗三态原型</div>
+    <div id="unlock" title="解锁（回到纯字幕）"><svg viewBox="0 0 24 24"><path d="M12 17a2 2 0 1 0 0-4 2 2 0 0 0 0 4zm6-9h-1V6a5 5 0 0 0-9.9-1h2.1A3 3 0 0 1 15 6v2H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10a2 2 0 0 0-2-2zm0 12H6V10h12v10z"/></svg></div>
+  </div>
+
+  <div id="ctxmenu">
+    <div class="item" id="m-passthrough"><span>鼠标穿透</span><span id="m-pt-state">Ctrl+Alt+U</span></div>
+    <div class="sep"></div>
+    <div class="item" id="m-close"><span>关闭菜单</span><span>Esc</span></div>
+  </div>
+
+  <div id="panel">
+    <h3>PROTOTYPE 状态外显</h3>
+    <div class="row"><span>模式</span><span id="p-mode">…</span></div>
+    <div class="row"><span>状态</span><span id="p-state">subtitles</span></div>
+    <div class="row"><span>材质</span>
+      <div class="mat">
+        <button data-mat="frost" class="on">真磨砂</button><button data-mat="faux">伪磨砂</button><button data-mat="opaque">不透明</button>
+      </div>
+    </div>
+    <div class="row"><span>blur <span id="v-blur">18</span>px</span><input type="range" id="s-blur" min="4" max="40" step="1" value="18"></div>
+    <div class="row preset"><span>动效档</span>
+      <span style="display:flex;gap:4px">
+        <button data-preset="fast">快</button><button data-preset="mid" class="on">中</button><button data-preset="slow">慢</button>
+      </span>
+    </div>
+    <div class="row"><span>淡出延迟 <span id="v-delay">1.2</span>s</span><input type="range" id="s-delay" min="0" max="3" step="0.1" value="1.2"></div>
+    <div class="row"><span>时长 <span id="v-dur">0.24</span>s</span><input type="range" id="s-dur" min="0.05" max="0.6" step="0.01" value="0.24"></div>
+    <div class="row"><span>缩小比 <span id="v-shrink">0.72</span></span><input type="range" id="s-shrink" min="0.5" max="1" step="0.01" value="0.72"></div>
+    <div class="row"><span>曲线</span>
+      <select id="sel-ease">
+        <option value="cubic-bezier(.22,1,.36,1)">out-soft（弹收）</option>
+        <option value="ease-out">ease-out</option>
+        <option value="ease">ease</option>
+        <option value="linear">linear</option>
+      </select>
+    </div>
+    <div class="row"><label><input type="checkbox" id="ck-live"> 模拟直播流（无时长，进度条隐藏）</label></div>
+    <div id="log"></div>
+  </div>
+
+  <div id="switcher">
+    <button id="prev">◀</button>
+    <span id="varlabel"></span>
+    <button id="next">▶</button>
+    <button id="tourbtn">▶ 自动巡演</button>
+  </div>
+
+<script>
+(function () {
+  "use strict";
+  // ---------- 环境 ----------
+  var qs = new URLSearchParams(location.search);
+  var IS_ELECTRON = qs.get("electron") === "1";
+  if (IS_ELECTRON) document.body.classList.add("electron");
+  var electron = IS_ELECTRON ? require("electron") : null; // prototype shell: nodeIntegration on
+
+  // ---------- 状态机（#211 转移矩阵） ----------
+  var VARIANTS = [
+    { key: "A", name: "常驻纯字幕", state: "subtitles" },
+    { key: "B", name: "悬停控制条+字幕缩小", state: "controls" },
+    { key: "C", name: "穿透解锁小图标", state: "passthrough" },
+  ];
+  var S = {
+    state: "subtitles",        // subtitles | controls | passthrough
+    frozen: false,             // 右键菜单打开中：自动转移冻结（#211 例外）
+    menuOpen: false,
+    playing: true,
+    muted: false,
+    liveMode: false,
+    t: 0, duration: 90,
+    variantIdx: 0,
+    tourTimer: null, fadeTimer: null, cueTimer: null, tickTimer: null,
+    log: [],
+  };
+  var body = document.body;
+  var $ = function (id) { return document.getElementById(id); };
+
+  function setState(next, reason, opts) {
+    opts = opts || {};
+    if (next === S.state) return false;
+    var prev = S.state;
+    S.state = next;
+    body.classList.remove("state-" + prev);
+    body.classList.add("state-" + next);
+    if (next === "controls") clearFade();
+    addLog(prev + " → " + next + "（" + reason + "）");
+    syncVariantLabel();
+    syncPassthrough();
+    syncUrl();
+    return true;
+  }
+  function enterControls() { // subtitles → controls：鼠标进入窗口（整窗即热区）
+    if (S.state === "subtitles" && !S.frozen) return setState("controls", "鼠标进入");
+    return false;
+  }
+  function scheduleFade() {  // controls → subtitles：鼠标离开，延迟淡出（数值归 #214）
+    if (S.state !== "controls" || S.frozen) return;
+    clearFade();
+    var d = getComputedStyle(body).getPropertyValue("--fade-delay").trim();
+    S.fadeTimer = setTimeout(function () {
+      if (S.state === "controls" && !S.frozen) setState("subtitles", "鼠标离开，延迟 " + d);
+    }, parseFloat(d) * 1000);
+  }
+  function clearFade() { if (S.fadeTimer) { clearTimeout(S.fadeTimer); S.fadeTimer = null; } }
+  function enterPassthrough() { // → passthrough：右键勾选 或 Ctrl+Alt+U
+    return setState("passthrough", "右键菜单 / Ctrl+Alt+U");
+  }
+  function exitPassthrough() {  // passthrough → subtitles：点解锁小图标（落回纯字幕，不落 controls）
+    return setState("subtitles", "点解锁小图标");
+  }
+
+  // ---------- Electron 穿透协同 ----------
+  function syncPassthrough() {
+    if (!electron) return;
+    electron.ipcRenderer.send("proto:passthrough", S.state === "passthrough");
+  }
+  var unlock = $("unlock");
+  if (electron) {
+    unlock.addEventListener("mouseenter", function () { electron.ipcRenderer.send("proto:interactive", true); });
+    unlock.addEventListener("mouseleave", function () { electron.ipcRenderer.send("proto:interactive", false); });
+    electron.ipcRenderer.on("proto:hotkey", function () {
+      if (S.state === "passthrough") exitPassthrough(); else enterPassthrough();
+    });
+  }
+
+  // ---------- 热区 ----------
+  var player = $("player");
+  player.addEventListener("mouseenter", enterControls);
+  player.addEventListener("mouseleave", scheduleFade);
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && S.menuOpen) { closeMenu(); return; }
+    if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
+    if (e.key === "ArrowLeft") cycleVariant(-1);
+    if (e.key === "ArrowRight") cycleVariant(1);
+  });
+
+  // ---------- 右键菜单（打开期间自动转移冻结） ----------
+  var menu = $("ctxmenu");
+  document.addEventListener("contextmenu", function (e) {
+    e.preventDefault();
+    if (S.state === "passthrough") return; // 穿透态整窗无鼠标事件，菜单无入口
+    menu.style.display = "block";
+    var mw = 200, mh = 96;
+    menu.style.left = Math.min(e.clientX, innerWidth - mw - 8) + "px";
+    menu.style.top = Math.min(e.clientY, innerHeight - mh - 8) + "px";
+    S.menuOpen = true; S.frozen = true; clearFade();  // 冻结自动转移
+    $("m-pt-state").textContent = "Ctrl+Alt+U";
+    addLog("右键菜单打开（自动转移冻结）");
+  });
+  function closeMenu() {
+    menu.style.display = "none";
+    S.menuOpen = false; S.frozen = false;
+    addLog("菜单关闭（解冻）");
+  }
+  $("m-close").addEventListener("click", closeMenu);
+  $("m-passthrough").addEventListener("click", function () {
+    closeMenu();
+    enterPassthrough();
+  });
+  document.addEventListener("mousedown", function (e) {
+    if (S.menuOpen && !menu.contains(e.target)) closeMenu();
+  });
+  unlock.addEventListener("click", function (e) { e.stopPropagation(); exitPassthrough(); });
+
+  // ---------- 控制条（#211 控制语义） ----------
+  function fmt(s) { s = Math.max(0, Math.floor(s)); return Math.floor(s / 60) + ":" + ("0" + (s % 60)).slice(-2); }
+  function renderTime() {
+    $("seekfill").style.width = (S.duration ? (S.t / S.duration) * 100 : 0) + "%";
+    $("timelabel").textContent = S.liveMode ? "直播流" : fmt(S.t) + " / " + fmt(S.duration);
+    $("seekwrap").style.visibility = S.liveMode ? "hidden" : "visible";
+  }
+  function setPlaying(p) {
+    S.playing = p;
+    $("i-play").style.display = p ? "none" : "";
+    $("i-pause").style.display = p ? "" : "none";
+  }
+  $("b-play").addEventListener("click", function () { setPlaying(!S.playing); addLog(S.playing ? "播放" : "暂停"); });
+  function seekBy(delta) { // 相对偏移（协议 v2 语义：userscript 侧 clamp）
+    S.t = Math.min(S.duration, Math.max(0, S.t + delta));
+    addLog("已发送 seek(delta=" + (delta > 0 ? "+" : "") + delta + "ms) → " + fmt(S.t));
+    renderTime();
+  }
+  $("b-15").addEventListener("click", function () { seekBy(-15); });
+  $("b+15").addEventListener("click", function () { seekBy(15); });
+  $("b-mute").addEventListener("click", function () {
+    S.muted = !S.muted;
+    $("i-vol").style.display = S.muted ? "none" : "";
+    $("i-muted").style.display = S.muted ? "" : "none";
+    addLog("mute(muted=" + S.muted + ")");
+  });
+  // 进度条：点击 + 拖拽只预览，松手发一次 seek
+  var seekwrap = $("seekwrap"), ghost = $("seekghost"), dragging = false;
+  seekwrap.addEventListener("mousedown", function (e) { dragging = true; preview(e); });
+  window.addEventListener("mousemove", function (e) { if (dragging) preview(e); });
+  window.addEventListener("mouseup", function (e) {
+    if (!dragging) return;
+    dragging = false; ghost.style.display = "none";
+    var target = frac(e) * S.duration;
+    seekBy(Math.round((target - S.t) * 1000)); // delta_ms 相对偏移
+  });
+  seekwrap.addEventListener("mousemove", function (e) { if (!dragging) { ghost.style.display = "block"; ghost.style.left = frac(e) * 100 + "%"; } });
+  seekwrap.addEventListener("mouseleave", function () { if (!dragging) ghost.style.display = "none"; });
+  function frac(e) { var r = $("seektrack").getBoundingClientRect(); return Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)); }
+  function preview(e) { var f = frac(e); ghost.style.display = "block"; ghost.style.left = f * 100 + "%"; $("seekfill").style.width = f * 100 + "%"; }
+
+  $("ck-live").addEventListener("change", function (e) {
+    S.liveMode = e.target.checked;
+    addLog(S.liveMode ? "降级：duration 不可用 → 进度条整条隐藏，其余按钮照常" : "恢复点播（有时长）");
+    renderTime();
+  });
+
+  // ---------- 字幕 cues + 播放推进 ----------
+  var CUES = [
+    "字幕行 Alpha — 磨砂浮窗三态原型",
+    "字幕行 Beta — 悬停试试控制条淡入与字幕缩小",
+    "字幕行 Gamma — 右键或 Ctrl+Alt+U 进入穿透",
+    "字幕行 Delta — 点右下小图标解锁，落回纯字幕",
+    "字幕行 Epsilon — 离窗后控制条延迟淡出",
+  ];
+  var cueIdx = 0;
+  S.cueTimer = setInterval(function () {
+    if (!S.playing || S.state === "passthrough") return;
+    cueIdx = (cueIdx + 1) % CUES.length;
+    $("subtitle").textContent = CUES[cueIdx];
+  }, 5000);
+  S.tickTimer = setInterval(function () {
+    if (!S.playing) return;
+    S.t = S.liveMode ? S.t : (S.t + 0.25) % S.duration;
+    if (!dragging) renderTime();
+  }, 250);
+
+  // ---------- 材质（#154 约束：真磨砂达标与否在此呈现） ----------
+  var MATS = { frost: "material-frost", faux: "material-faux", opaque: "material-opaque" };
+  document.querySelectorAll(".mat button").forEach(function (b) {
+    b.addEventListener("click", function () {
+      document.querySelectorAll(".mat button").forEach(function (x) { x.classList.remove("on"); });
+      b.classList.add("on");
+      Object.keys(MATS).forEach(function (k) { body.classList.remove(MATS[k]); });
+      body.classList.add(MATS[b.dataset.mat]);
+      addLog("材质 → " + b.textContent + (b.dataset.mat === "frost" ? "（Electron 真窗下糊真实桌面/视频窗）" : ""));
+    });
+  });
+  function bindSlider(id, vlabel, cssVar, fmtv) {
+    $(id).addEventListener("input", function (e) {
+      var v = parseFloat(e.target.value);
+      body.style.setProperty(cssVar, cssVar === "--shrink" ? v : v + (cssVar === "--blur" ? "px" : "s"));
+      $(vlabel).textContent = fmtv ? fmtv(v) : v;
+      if (cssVar === "--fade-delay") markPreset(null);
+    });
+  }
+  bindSlider("s-blur", "v-blur", "--blur");
+  bindSlider("s-delay", "v-delay", "--fade-delay");
+  bindSlider("s-dur", "v-dur", "--dur", function (v) { return v.toFixed(2); });
+  bindSlider("s-shrink", "v-shrink", "--shrink", function (v) { return v.toFixed(2); });
+  $("sel-ease").addEventListener("change", function (e) { body.style.setProperty("--ease", e.target.value); addLog("曲线 → " + e.target.value); });
+
+  var PRESETS = { fast: { dur: .18, delay: .6, shrink: .72 }, mid: { dur: .24, delay: 1.2, shrink: .72 }, slow: { dur: .4, delay: 2, shrink: .72 } };
+  document.querySelectorAll(".preset button").forEach(function (b) {
+    b.addEventListener("click", function () {
+      var p = PRESETS[b.dataset.preset];
+      setVar("--dur", p.dur, "s-dur", "v-dur", 2); setVar("--fade-delay", p.delay, "s-delay", "v-delay", 1);
+      markPreset(b.dataset.preset);
+      addLog("动效档 → " + b.textContent + "（时长 " + p.dur + "s / 淡出延迟 " + p.delay + "s）");
+    });
+  });
+  function markPreset(name) {
+    document.querySelectorAll(".preset button").forEach(function (x) { x.classList.toggle("on", x.dataset.preset === name); });
+  }
+  function setVar(cssVar, v, sid, vid, digits) {
+    body.style.setProperty(cssVar, v + (cssVar === "--shrink" ? "" : "s"));
+    $(sid).value = v; $(vid).textContent = v.toFixed(digits);
+  }
+
+  // ---------- 变体切换条（?variant= 可分享、←/→ 可循环） ----------
+  function syncVariantLabel() {
+    var i = VARIANTS.findIndex(function (v) { return v.state === S.state; });
+    S.variantIdx = i < 0 ? 0 : i;
+    var v = VARIANTS[S.variantIdx];
+    $("varlabel").innerHTML = "<b>" + v.key + "</b> (" + v.name + ")";
+    $("p-state").textContent = S.state;
+  }
+  function cycleVariant(dir) {
+    S.variantIdx = (S.variantIdx + dir + VARIANTS.length) % VARIANTS.length;
+    var v = VARIANTS[S.variantIdx];
+    clearFade();
+    setState(v.state, "切换条/键盘");
+  }
+  $("prev").addEventListener("click", function () { cycleVariant(-1); });
+  $("next").addEventListener("click", function () { cycleVariant(1); });
+  function syncUrl() {
+    try {
+      var u = new URL(location.href);
+      u.searchParams.set("variant", VARIANTS[S.variantIdx].key);
+      history.replaceState(null, "", u);
+    } catch (e) { /* file:// 个别环境受限则跳过 */ }
+  }
+
+  // ---------- 自动巡演 ----------
+  $("tourbtn").addEventListener("click", function () {
+    if (S.tourTimer) return stopTour("手动取消巡演");
+    $("tourbtn").textContent = "■ 停止巡演";
+    addLog("自动巡演开始");
+    var steps = [
+      function () { setState("subtitles", "巡演"); },
+      function () { enterControls(); addLog("巡演：整窗热区 → 控制条淡入"); },
+      function () { scheduleFade(); addLog("巡演：离窗 → 延迟淡出"); },
+      function () { enterPassthrough(); addLog("巡演：穿透只留小图标"); },
+      function () { exitPassthrough(); stopTour("巡演结束"); },
+    ];
+    var i = 0;
+    (function next() {
+      if (i < steps.length) { steps[i++](); S.tourTimer = setTimeout(next, 1400); }
+    })();
+  });
+  function stopTour(msg) {
+    clearTimeout(S.tourTimer); S.tourTimer = null;
+    $("tourbtn").textContent = "▶ 自动巡演";
+    addLog(msg);
+  }
+
+  // ---------- 状态外显日志 ----------
+  function addLog(msg) {
+    var ts = new Date().toTimeString().slice(0, 8);
+    S.log.unshift("[" + ts + "] " + msg);
+    S.log = S.log.slice(0, 30);
+    var el = $("log");
+    el.innerHTML = S.log.slice(0, 8).map(function (l, i) {
+      return '<div class="' + (i === 0 ? "latest" : "") + '">' + l.replace(/</g, "&lt;") + "</div>";
+    }).join("");
+  }
+
+  // ---------- 自检（?selfcheck=1：断言转移矩阵，结果发主进程后退出） ----------
+  function selfcheck() {
+    var out = [];
+    function assert(name, cond) { out.push((cond ? "PASS " : "FAIL ") + name); if (!cond) out.hasFail = true; }
+    var origDelay = body.style.getPropertyValue("--fade-delay");
+    body.style.setProperty("--fade-delay", "0.05s");
+    // 1. 初始 = subtitles
+    assert("初始态 subtitles", S.state === "subtitles");
+    // 2. 进入 → controls
+    enterControls();
+    assert("subtitles→controls（鼠标进入）", S.state === "controls");
+    // 3. 冻结：菜单打开时 scheduleFade 不生效
+    S.frozen = true; scheduleFade();
+    assert("菜单冻结阻断淡出", S.state === "controls");
+    S.frozen = false;
+    // 4. 离开 → 延迟后 subtitles
+    scheduleFade();
+    assert("淡出调度已挂", !!S.fadeTimer);
+    // 5. → passthrough → 解锁回 subtitles（不落 controls）
+    clearFade();
+    enterPassthrough();
+    assert("→passthrough", S.state === "passthrough");
+    exitPassthrough();
+    assert("解锁落回 subtitles 而非 controls", S.state === "subtitles");
+    // 6. 变体循环
+    cycleVariant(1); assert("A→B 循环", S.state === "controls");
+    cycleVariant(1); assert("B→C 循环", S.state === "passthrough");
+    cycleVariant(1); assert("C→A 循环", S.state === "subtitles");
+    cycleVariant(-1); assert("反向 C", S.state === "passthrough");
+    body.style.setProperty("--fade-delay", origDelay || "1.2s");
+    setState("subtitles", "自检复位");
+    var text = out.join("\n");
+    addLog("自检：" + (out.hasFail ? "有 FAIL" : "全部 PASS") + "（" + out.length + " 项）");
+    if (electron) electron.ipcRenderer.send("proto:selfcheck", text);
+    else console.log(text);
+  }
+
+  // ---------- 启动 ----------
+  if (IS_ELECTRON) $("p-mode").textContent = "Electron 真窗（backdrop-filter 糊真实内容）";
+  else $("p-mode").textContent = "便携模拟（双击版，模拟背景）";
+  var initV = qs.get("variant");
+  if (initV) {
+    var v = VARIANTS.find(function (x) { return x.key === initV.toUpperCase(); });
+    if (v) { body.classList.remove("state-subtitles"); body.classList.add("state-" + v.state); S.state = v.state; }
+  }
+  syncVariantLabel(); syncPassthrough(); renderTime();
+  addLog("原型就绪：状态机=#211 转移矩阵；动效数值仅作 #214 输入");
+  window.__proto213 = { S: S, setState: setState, enterControls: enterControls, scheduleFade: scheduleFade, enterPassthrough: enterPassthrough, exitPassthrough: exitPassthrough, cycleVariant: cycleVariant };
+  if (qs.get("selfcheck") === "1") setTimeout(selfcheck, 300);
+})();
+</script>
+</body>
+</html>

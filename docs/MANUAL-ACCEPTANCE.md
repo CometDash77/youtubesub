@@ -13,13 +13,13 @@
 ## L0 · 自动基线（不需要人，先跑这个）
 
 ```
-cd userscript; node --test "tests/*.test.mjs"           # 期望全绿：当前 48 pass / 0 fail（必须用 glob 形式）
+cd userscript; node --test "tests/*.test.mjs"           # 期望全绿：当前 53 pass / 0 fail（必须用 glob 形式）
 node --check userscript/youtubesub.user.js              # 语法检查
-cd app; npm run typecheck; npm test                     # 期望 typecheck 0 error + 390 pass / 0 fail
-cd app; npm run test:e2e                                # 10 条真 Chrome E2E（黑盒 /status），已知失败见下
+cd app; npm run typecheck; npm test                     # 期望 typecheck 0 error + 415 pass / 0 fail
+cd app; npm run test:e2e                                # 12 条真 Chrome E2E（黑盒 /status），已知失败见下
 ```
 
-通过标准：TS 栈 typecheck 0 error 且 `npm test` **0 failed**（当前 390 passed，数字随提交增长）；node 48 pass 0 fail；10 条 E2E 没有被 skip。
+通过标准：TS 栈 typecheck 0 error 且 `npm test` **0 failed**（当前 415 passed，数字随提交增长）；node 53 pass 0 fail；12 条 E2E 没有被 skip。
 已知例外（2026-10-08 合并时记账）：`test_browser_waiting_and_capture_diagnostics_preempt_translation_waiting` 在 CSP 夹具页（script-src 'nonce-fixture'）上的注入失败上浮超时——**master 分支同样失败**（worktree 实证），属既有 E2E 时序问题，合并没有引入回归，留待 E2E 专项修复。TS 栈移植（#206）已做奇偶校验：同一条、同一等待点超时，last observed /status 逐字段一致（frames 89 / sources 3 / title eee / hook_error 空），移植忠实复现既有失败，非移植引入。
 （skip 说明 harness 没找到 Chrome，这时浏览器侧**等于没验**，要记下来）。
 
@@ -31,7 +31,7 @@ E2E 用的测试特权（`--disable-web-security`、CDP `Page.setBypassCSP`）**
 ## L1 · 夹具演示：真 Chrome + 真 userscript + 真桌面端（零安装、零 Key）
 
 **目的**：证明"页面钩子 → WS → 桌面端 → 浮窗"整条链在真浏览器里是通的，且 play/pause/seek/倍速/SPA 语义正确。
-**状态**：上一会话已实测通过（Python 栈）；TS 栈（#206）同一夹具、同一 userscript、同一 10 条 E2E 口径自动验证 9 绿 + 1 条已知失败（见 L0）。
+**状态**：上一会话已实测通过（Python 栈）；TS 栈（#206）同一夹具、同一 userscript、同一 12 条 E2E 口径自动验证 11 绿 + 1 条已知失败（见 L0）。
 
 ```
 # 先构建一次，E2E 直接拉起 Electron 主进程
@@ -62,7 +62,7 @@ harness 会自动剔除 `ELECTRON_RUN_AS_NODE`——agent/IDE 宿主进程常带
 随时可看机器可读状态（另开一个终端）：`Invoke-RestMethod http://127.0.0.1:<harness 打印的端口>/status`。
 harness 只 kill 自己启动的 Chrome；**不要 kill 你自己常驻的 chrome.exe**。
 
-自动验收补充：当前有 10 条真实 Chrome + userscript + desktop app 黑盒 E2E，其中保留原有 7 条；新增用例通过 `/status` 验证翻译状态、失败后 seek 恢复、hook/capture 诊断到达及原文-only 请求拦截。浮窗状态行优先级由 `app/tests/overlay-status.test.ts` 单测覆盖。受控 provider 是本机测试服务，不代表真实 AI 服务或 Tampermonkey 已验证。
+自动验收补充：当前有 12 条真实 Chrome + userscript + desktop app 黑盒 E2E，其中保留原有 7 条；新增用例通过 `/status` 验证翻译状态、失败后 seek 恢复、hook/capture 诊断到达及原文-only 请求拦截。浮窗状态行优先级由 `app/tests/overlay-status.test.ts` 单测覆盖。受控 provider 是本机测试服务，不代表真实 AI 服务或 Tampermonkey 已验证。
 
 **失败时记什么**：哪一步、`/status` 的 `state/orig/trans/playing/rate/hook_error` 原文、控制台里 `[youtubesub]` 开头的行。
 
@@ -116,6 +116,26 @@ start-desktop.cmd          # 默认设置，不填任何模型
 - [ ] `Ctrl+S` 保存但**窗口不关**。
 - [ ] 整窗文案判据：不问人、不看文档，能从每项的标签 + 一句说明说出「改了这个会发生什么」；未见 `seek`、`预取窗口秒数`、`粗体范围` 这类内部黑话。
 - [ ] 排障页只读；「测试连接」只在设置页有一颗（测的是还没保存的输入）。
+
+---
+
+### L1e · 浮窗三态与控制条（#211 信息架构 / #214 动效 / #217 实施）
+
+**自动状态**：三态状态机（hover/冻结/穿透派生、解锁落回字幕不落控制条）、paint plan 载荷（state/title/playing/position_ms/duration_ms/muted）、engine 播放载荷、sync `muted` 回显由 `app/tests/overlay-states.test.ts` 覆盖；`/status` 新键 `overlay_state` 可机器读取。
+
+**仍需真人眼验**（起法同 L1）：
+
+- [ ] 鼠标进窗：标题 + 控制条淡入（上移入场），字幕整体缩小到设定比例；移出窗：先等「淡出延迟」再一起淡出/还原
+- [ ] 淡出等待期内重新进窗：立即取消等待并淡入（不等延迟走完）
+- [ ] 控制条只含四语义：±15s / 播放暂停 / 进度条 / 静音；播放暂停图标随播放状态切换
+- [ ] 进度条点击与拖拽：拖拽只本地预览（灰标跟随），松手才跳转一次；点空白处不误触窗口拖拽，标题区仍可拖窗
+- [ ] 直播流/无时长：进度条整条隐藏，时间位置显示「直播流」，±15s/播放/静音仍可点
+- [ ] 右键 → 鼠标穿透：全窗淡出、右上解锁图标淡入（缩放入场）；点解锁：图标淡出、字幕淡回，**不**顺带进入控制条态
+- [ ] 开穿透后 Ctrl+Alt+U 解锁回路仍通（既有功能零丢失）；拖动/8 边 resize 进行中三态不乱跳
+- [ ] 右键菜单打开时拖动浮窗/移出鼠标：状态保持不闪烁
+- [ ] 调参页改四动效参数（延迟/时长/缩小比/缓动）与快中慢预设：浮窗三态动效当场跟随（#222 联动）
+
+**失败时记什么**：`/status` 的 `overlay_state/playing/position_ms/duration_ms/muted` 原文、复现步骤、浮窗截图。
 
 ---
 

@@ -11,13 +11,14 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import * as S from "../lib/settings.ts";
 
-// The 16 authoritative paths, in page order (display.font_size joined per
-// decision #167: the settings dialog was absorbed into the window).
+// The 20 authoritative paths, in page order (display.font_size joined per
+// decision #167; the motion group joined per #222).
 const SPEC_PATHS: S.TuningPath[] = [
   ["display", "font_size"],
   ["display", "mode"], ["display", "order"], ["display", "history_lines"],
   ["display", "font_bold"], ["display", "stroke"], ["display", "bg_color"],
   ["display", "bg_opacity"],
+  ["anim", "fade_delay"], ["anim", "dur"], ["anim", "shrink"], ["anim", "ease"],
   ["provider", "timeout_s"], ["provider", "max_concurrent"], ["server", "port"],
   ["prefetch", "lead_s"], ["prefetch", "max_groups"],
   ["prefetch", "seek_debounce_ms"], ["batch", "max_groups"], ["batch", "max_chars"],
@@ -37,7 +38,7 @@ const setOf = (paths: readonly S.TuningPath[]): Set<string> =>
 
 test("fields cover exactly the spec paths", () => {
   assert.deepEqual(S.TUNING_FIELDS.map((f) => f.path), SPEC_PATHS);
-  assert.deepEqual([...S.TUNING_GROUPS], ["display", "network", "experimental"]);
+  assert.deepEqual([...S.TUNING_GROUPS], ["display", "motion", "network", "experimental"]);
 });
 
 test("no credentials or already exposed keys are tunable", () => {
@@ -68,7 +69,8 @@ test("clamp is boundary inclusive", () => {
     const vlo = S.stored_value(f, lo) as number;
     const vhi = S.stored_value(f, hi) as number;
     assert.ok(vlo < (got as number) && (got as number) < vhi, JSON.stringify(f.path));
-    if (f.control === "int" || f.control === "slider" || S.is_scaled(f)) {
+    // slider is the integer pair; a float-step slider (#222) keeps decimals.
+    if (f.control === "int" || (f.control === "slider" && (f.step ?? 1) >= 1) || S.is_scaled(f)) {
       assert.ok(Number.isInteger(got), JSON.stringify(f.path) + " must be int-like");
     } else {
       assert.equal(typeof got, "number", JSON.stringify(f.path) + " must be numeric");
@@ -170,6 +172,8 @@ test("restart and uncalibrated flags match the spec", () => {
       ["display", "font_size"], ["display", "mode"], ["display", "order"],
       ["display", "font_bold"], ["display", "stroke"], ["display", "bg_color"],
       ["display", "bg_opacity"],
+      // #222: the animation values reach the overlay through the plan push.
+      ["anim", "fade_delay"], ["anim", "dur"], ["anim", "shrink"], ["anim", "ease"],
     ]));
   const groups = new Set(S.TUNING_FIELDS.map((f) => f.group));
   assert.deepEqual(groups, new Set(S.TUNING_GROUPS));
@@ -191,4 +195,23 @@ test("every field carries a label and hint slot", () => {
   for (const f of S.TUNING_FIELDS) {
     if (f.uncalibrated) assert.equal(f.group, "experimental", JSON.stringify(f.path));
   }
+});
+
+test("float-step motion sliders keep decimals; the integer pair still rounds", () => {
+  const dur = S.field_by_path(["anim", "dur"]);
+  assert.equal(dur.control, "slider");
+  assert.equal(S.stored_value(dur, 0.325), 0.325);
+  assert.equal(S.display_value(dur, { anim: { dur: 0.325 } }), 0.325);
+  const opacity = S.field_by_path(["display", "bg_opacity"]);
+  assert.equal(S.stored_value(opacity, 150.7), 151); // roundHalfEven 语义不变
+});
+
+test("anim fields fall back to defaults on old or broken configs", () => {
+  const fade = S.field_by_path(["anim", "fade_delay"]);
+  assert.equal(S.display_value(fade, {}), 1.2);
+  assert.equal(S.display_value(fade, { anim: "broken" }), 1.2);
+  assert.equal(S.display_value(fade, { anim: { fade_delay: "x" } }), 1.2);
+  assert.equal(S.display_value(fade, { anim: { fade_delay: 2.5 } }), 2.5);
+  const ease = S.field_by_path(["anim", "ease"]);
+  assert.equal(S.display_value(ease, { anim: { ease: "nope" } }), "cubic-bezier(.22,1,.36,1)");
 });

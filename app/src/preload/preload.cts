@@ -26,4 +26,9 @@ contextBridge.exposeInMainWorld("youtubesub", {
   onDebugState: (cb: (s: unknown) => void) => ipcRenderer.on("debug-state", (_e, s) => cb(s)),
   debugIntent: (intent: unknown) => ipcRenderer.send("debug-intent", intent),
   onDebugCopyText: (cb: (t: string) => void) => ipcRenderer.on("debug-copy-text", (_e, t) => cb(t)),
+  // #217 three-state + control bar: hover enter/leave, the four control
+  // semantics, and context-menu open/close (the freeze's renderer half).
+  overlayHover: (hovering: boolean) => ipcRenderer.send("overlay-hover", hovering),
+  overlayCommand: (cmd: unknown) => ipcRenderer.send("overlay-command", cmd),
+  menuOpenState: (open: boolean) => ipcRenderer.send("overlay-menu-open", open),
 });

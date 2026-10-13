@@ -20,5 +20,12 @@
     "lib/**/*.ts",
     "tests/**/*.ts",
     "src/**/*"
+  ],
+  // Vendored Web Awesome (#220) is a runtime asset: its .d.ts global
+  // HTMLElementTagNameMap augmentation pollutes el()'s keyof union (WA
+  // classes do not extend HTMLElement in these declarations), and the .js
+  // ships verbatim. Keep it out of the type program entirely.
+  "exclude": [
+    "src/renderer/vendor"
   ]
 }

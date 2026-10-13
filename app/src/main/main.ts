@@ -33,6 +33,7 @@ import {
 import { overlay_menu_model, type OverlayMenuAction, type OverlayMenuEntry } from "./overlay-menu.ts";
 import { createDebugWindowHost } from "./debug-window-host.ts";
 import { EventQueue, WSServer } from "./ws-server.ts";
+import { COMMAND_TYPES } from "./protocol.ts";
 import { Engine } from "./engine.ts";
 import { TranslationCache } from "./queue-cache.ts";
 import { ConnectionTester } from "./connection-test.ts";
@@ -71,13 +72,29 @@ let win: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let ctxMenu: Menu | null = null;
 let clickThrough = false;
+// #217 control-bar command route: the IPC handler (registered below, before
+// the stack starts) forwards to these once the product stack exists; before
+// that (and in scene mode) the bar is a no-op.
+let productEngine: Engine | null = null;
+let productServer: WSServer | null = null;
+// #211 freeze input from the renderer's DOM context menu (the drag half of
+// the freeze lives in the drag machine below).
+let overlayMenuOpen = false;
 
 // #205: the settings/debug window host owns the headless DebugWindow model
 // plus its single permanently-reused BrowserWindow. The menu entries land on
 // different pages of the same instance (settings page / tuning page).
 const debugHost = createDebugWindowHost({
   settings,
-  overlay: display,
+  // #222: the animation values ride paint_plan (read per paint); after a save
+  // that touched notify_overlay fields, push a fresh plan so the overlay
+  // picks up the new CSS variables on the spot (no restart).
+  overlay: {
+    reread_settings: () => {
+      display.reread_settings();
+      pushPlan();
+    },
+  },
   appRoot: APP_ROOT,
   log: logLine,
 });
@@ -155,6 +172,11 @@ function setClickThrough(on: boolean): void {
   w.setIgnoreMouseEvents(on, { forward: true });
   w.webContents.send("click-through", on);
   clickThrough = on;
+  // #217: the same flip feeds the three-state machine (passthrough in,
+  // unlock back to subtitles) and pushes a plan so the renderer fades
+  // immediately instead of waiting for the next tick.
+  display.set_overlay_click_through(on);
+  pushPlan();
   logLine("set_click_through " + on);
   pushMenuModel();
   rebuildTrayMenu();         // click-through label + checked flip, like _set_click_through
@@ -250,6 +272,10 @@ ipcMain.on("overlay-mouse", (_e, raw: unknown) => {
       resizing: edge !== null,
       edge: edge ?? "r",
     };
+    // #211 exception freeze: auto transitions hold while drag/resize runs,
+    // so a fast cursor cannot fade the controls out mid-gesture.
+    display.set_overlay_frozen(true);
+    pushPlan();
     setCursor("");            // arrow while dragging, like Qt's default
   } else if (type === "move") {
     const gx = numOr(ev.gx, 0), gy = numOr(ev.gy, 0);
@@ -268,12 +294,46 @@ ipcMain.on("overlay-mouse", (_e, raw: unknown) => {
     if (drag) {
       drag = null;
       persistGeometry(w);
+      // Unfreeze: the state re-derives from the last hover event (a cursor
+      // pushed outside during a resize then lands back on subtitles).
+      display.set_overlay_frozen(overlayMenuOpen);
+      pushPlan();
     }
   }
 });
 
 ipcMain.on("menu-action", (_e, id: unknown) => {
   if (typeof id === "string" && MENU_IDS.has(id)) handleMenuAction(id);
+});
+
+// #217 three-state wiring. Hover: the renderer reports enter/leave only while
+// the window is interactive; the machine derives subtitles <-> controls.
+ipcMain.on("overlay-hover", (_e, hovering: unknown) => {
+  display.set_overlay_hover(hovering === true);
+  pushPlan();
+});
+// Menu-open freeze input (the other half lives in the drag machine above).
+ipcMain.on("overlay-menu-open", (_e, open: unknown) => {
+  overlayMenuOpen = open === true;
+  display.set_overlay_frozen(overlayMenuOpen || drag !== null);
+  pushPlan();
+});
+// Control-bar commands: whitelist the four semantics, attach the active
+// source, route through the WS command channel. No source -> no-op (the bar
+// stays visible but inert, per #211).
+ipcMain.on("overlay-command", (_e, raw: unknown) => {
+  const engine = productEngine;
+  const server = productServer;
+  if (!engine || !server || raw === null || typeof raw !== "object" || Array.isArray(raw)) return;
+  const cmd = raw as Record<string, unknown>;
+  const type = cmd["type"];
+  if (typeof type !== "string" || !COMMAND_TYPES.has(type)) return;
+  if (type === "seek" && typeof cmd["delta_ms"] !== "number") return;
+  if (type === "mute" && typeof cmd["muted"] !== "boolean") return;
+  const sid = engine.active_source;
+  if (sid === null) return;
+  const sent = server.sendCommand({ ...cmd, source_id: sid } as Parameters<typeof server.sendCommand>[0]);
+  if (!sent) logLine("[overlay-command] dropped (" + type + ") - no route for " + String(sid));
 });
 // #205 debug window: renderer intents (edits / page switch / save / close...).
 ipcMain.on("debug-intent", (_e, raw: unknown) => debugHost.handleIntent(raw));
@@ -334,6 +394,7 @@ async function startProductStack(): Promise<void> {
   const engine = new Engine(settings as unknown as Record<string, unknown>, cache);
   const evq = new EventQueue(2000);
   const tester = new ConnectionTester();
+  productEngine = engine;   // #217 overlay-command route target
 
   // App._status: engine.status() flattened + overlay state bits.
   function statusPayload(): Record<string, unknown> {
@@ -361,6 +422,9 @@ async function startProductStack(): Promise<void> {
       order: display.order,
       history: display.history.map((p) => [p[0], p[1]]),
       click_through: clickThrough,
+      // #217: the three-state machine's derived state, per the observability
+      // ruling (new key, additive; old consumers ignore it).
+      overlay_state: display.overlay_state,
     };
   }
 
@@ -373,6 +437,7 @@ async function startProductStack(): Promise<void> {
   });
   try {
     await server.start();
+    productServer = server;   // #217 overlay-command route target
     logLine("[ws] listening on 127.0.0.1:" + port + " (protocol v1)");
   } catch (e) {
     // server.py raises at boot -> the app dies with an error dialog.
@@ -418,7 +483,12 @@ async function startProductStack(): Promise<void> {
 
   // e2e_app.py port: the mode/provider control surface (env-gated).
   if (process.env.YOUTUBESUB_E2E_MODE_PORT) {
-    startE2EControl({ engine, display, pushPlan, sendCommand: (cmd) => server.sendCommand(cmd), log: logLine })
+    startE2EControl({
+      engine, display, pushPlan,
+      sendCommand: (cmd) => server.sendCommand(cmd),
+      debugOpen: () => { debugHost.open("settings"); return true; },
+      log: logLine,
+    })
       .then((p) => logLine("[e2e] mode control on 127.0.0.1:" + p))
       .catch((e: unknown) => logLine("[e2e] control start failed: " + String(e)));
   }

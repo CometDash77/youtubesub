@@ -52,6 +52,13 @@ export const OVERLAY_MODES = ["bilingual", "trans", "orig"] as const;
 export const DIVIDER_RGB = [255, 255, 255] as const;
 export const DIVIDER_ALPHA = 80;
 
+// Animation tuning area fallbacks (#222): local mirrors of the anim.*
+// authority defaults in settings.ts (#214 owns the final numbers). This file
+// keeps zero relative imports (conversion register), so they live here.
+const FALLBACK_ANIM_NUMS = { fade_delay: 1.2, dur: 0.24, shrink: 0.72 } as const;
+const FALLBACK_ANIM_EASE = "cubic-bezier(.22,1,.36,1)";
+const ANIM_EASES = [FALLBACK_ANIM_EASE, "ease-out", "ease", "linear"] as const;
+
 export type RowRole = "orig" | "trans";
 
 // Wire display payload (engine.ts _tick_locked / status contract). Values
@@ -157,10 +164,36 @@ export interface PlanDividerEvent {
 
 export type PlanEvent = PlanTextEvent | PlanDividerEvent;
 
+export interface AnimVars {
+  fade_delay: string;
+  dur: string;
+  shrink: string;
+  ease: string;
+}
+
+// Three overlay states in ONE window (#211 decision block): subtitles (rest),
+// controls (pointer over the window), passthrough (click-through). The
+// machine below is the headless authority; the renderer is a dumb applier
+// that maps plan.state onto body classes and lets CSS transitions (fed by
+// anim_vars) do every visual step (#214: no plan pushes as animation frames).
+export type OverlayState = "subtitles" | "controls" | "passthrough";
+
 export interface PaintPlan {
   events: PlanEvent[];
   status_text: string;
   bg: { r: number; g: number; b: number; a: number };
+  // Animation tuning area (#222): CSS-ready values the renderer writes onto
+  // :root; #217's three-state transitions consume them.
+  anim: AnimVars;
+  // #217 three-state + control-bar payload. state drives the renderer's
+  // state classes; the playback fields feed the control bar (null = unknown,
+  // the bar degrades: seek hidden, buttons render their default face).
+  state: OverlayState;
+  title: string;
+  playing: boolean | null;
+  position_ms: number | null;
+  duration_ms: number | null;
+  muted: boolean | null;
 }
 
 export class OverlayDisplay {
@@ -175,6 +208,18 @@ export class OverlayDisplay {
   trans_state: string;
   status_text: string;
   trans_available: boolean;
+  // #217 three-state machine + control-bar payload. The machine inputs
+  // (hover/frozen/click_through) are private; only the derived state is
+  // public - callers mutate through the setters and re-push the plan.
+  overlay_state: OverlayState;
+  private overlay_hover: boolean;
+  private overlay_frozen: boolean;
+  private overlay_click_through: boolean;
+  title_text: string;
+  playing: boolean | null;
+  position_ms: number | null;
+  duration_ms: number | null;
+  muted: boolean | null;
 
   constructor(settings: JsonRecord, deps: OverlayDeps = {}) {
     this.settings = settings;
@@ -192,6 +237,16 @@ export class OverlayDisplay {
     this.status_text = "";
     // Engine's word on whether this run can translate at all; see display_rows().
     this.trans_available = false;
+    // #217: rest state is subtitles; every overlay window starts there.
+    this.overlay_state = "subtitles";
+    this.overlay_hover = false;
+    this.overlay_frozen = false;
+    this.overlay_click_through = false;
+    this.title_text = "";
+    this.playing = null;
+    this.position_ms = null;
+    this.duration_ms = null;
+    this.muted = null;
   }
 
   // ---- text API (set_display) ----
@@ -200,6 +255,16 @@ export class OverlayDisplay {
     // translation is possible, so don't assume one is.
     this.trans_available = Boolean(d.trans_available ?? false);
     this.trans_state = asText(d.trans_state) || "idle";
+    // #217 control-bar feed: stored on both branches (the controls state can
+    // show up with no cues on screen yet); nulls mean "unknown", the renderer
+    // degrades (seek bar hidden, default button faces).
+    this.title_text = asText(d.title);
+    this.playing = typeof d.playing === "boolean" ? d.playing : null;
+    this.position_ms = typeof d.position_ms === "number" && Number.isFinite(d.position_ms)
+      ? d.position_ms : null;
+    this.duration_ms = typeof d.duration_ms === "number" && Number.isFinite(d.duration_ms)
+      ? d.duration_ms : null;
+    this.muted = typeof d.muted === "boolean" ? d.muted : null;
     if (d.state === "no_cues") {
       const hook_error = asText(d.hook_error);
       const capture_error = asText(d.capture_error);
@@ -341,7 +406,68 @@ export class OverlayDisplay {
       // them, even while one of them is still empty.
       if (i === 0 && rows.length === 2) events.push({ kind: "divider", y: 20 * i + 2 });
     });
-    return { events, status_text: this.status_text, bg };
+    return { events, status_text: this.status_text, bg, anim: this.anim_vars(),
+      state: this.overlay_state, title: this.title_text,
+      playing: this.playing, position_ms: this.position_ms,
+      duration_ms: this.duration_ms, muted: this.muted };
+  }
+
+  // CSS custom properties for the animation tuning area (#222): read per
+  // paint from the anim.* section, garbage values fall back to the defaults
+  // the same way the tuning table does (old configs without the keys are
+  // normal, like the #174 appearance keys).
+  anim_vars(): AnimVars {
+    const a = this.settings["anim"];
+    const node = (a !== null && typeof a === "object" && !Array.isArray(a)
+      ? a : {}) as { [k: string]: unknown };
+    const numOr = (key: "fade_delay" | "dur" | "shrink"): number => {
+      const v = node[key];
+      return typeof v === "number" && Number.isFinite(v) ? v : FALLBACK_ANIM_NUMS[key];
+    };
+    const cssNum = (v: number): string => String(Math.round(v * 1000) / 1000);
+    const ease = node["ease"];
+    return {
+      fade_delay: cssNum(numOr("fade_delay")) + "s",
+      dur: cssNum(numOr("dur")) + "s",
+      shrink: cssNum(numOr("shrink")),
+      ease: typeof ease === "string" && (ANIM_EASES as readonly string[]).includes(ease)
+        ? ease : FALLBACK_ANIM_EASE,
+    };
+  }
+
+  // ---- three-state machine (#211 decision block, #217) ----
+  //
+  // Derived state, recomputed after every input change:
+  //   click_through ? passthrough : frozen ? keep : hover ? controls : subtitles.
+  // freeze (drag/8-edge resize in progress, context menu open) gates ONLY the
+  // automatic enter/leave transitions; explicit passthrough flips are user
+  // actions and always land. Unlock (click-through off) clears hover so the
+  // overlay falls back to subtitles, never straight into controls (#211:
+  // 解锁图标点击 → subtitles，不落 controls). Timing is NOT this machine's
+  // business: a state flip is instant here, and the fade-delay/shrink numbers
+  // ride anim_vars into CSS transitions (#214 matrix).
+  private overlay_recompute(): void {
+    this.overlay_state = this.overlay_click_through
+      ? "passthrough"
+      : this.overlay_frozen
+        ? this.overlay_state
+        : (this.overlay_hover ? "controls" : "subtitles");
+  }
+
+  set_overlay_hover(hovering: boolean): void {
+    this.overlay_hover = hovering;
+    this.overlay_recompute();
+  }
+
+  set_overlay_frozen(frozen: boolean): void {
+    this.overlay_frozen = frozen;
+    this.overlay_recompute();
+  }
+
+  set_overlay_click_through(on: boolean): void {
+    this.overlay_click_through = on;
+    if (!on) this.overlay_hover = false; // unlock lands on subtitles
+    this.overlay_recompute();
   }
 
   // ---- settings reread (#152 / spec #161) ----

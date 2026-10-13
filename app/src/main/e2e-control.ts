@@ -9,6 +9,7 @@
 //   POST /mode     {"mode": "orig" | "trans" | "bilingual"} -> 202
 //   POST /provider {"provider": {...}}                      -> 202
 //   POST /command  {"type": "...", "source_id": "...", ...} -> 202 {"delivered": bool}
+//   POST /debug-open {}                                    -> 202 {"opened": bool} (#220)
 //   unknown path -> 404; unparseable body or invalid value -> 400.
 // /command is the #219 addition (no e2e_app.py counterpart): it forwards the
 // body through WSServer.sendCommand so tests drive the downstream command
@@ -23,6 +24,7 @@ export interface E2EControlDeps {
   display: { mode: string };
   pushPlan: () => void;
   sendCommand?: (cmd: Record<string, unknown>) => boolean;
+  debugOpen?: () => boolean;
   log?: (msg: string) => void;
 }
 
@@ -64,6 +66,15 @@ function handlePost(
       res.end(JSON.stringify({ delivered }));
       deps.log?.("[e2e] command " + String(cmd["type"]) + " delivered=" + delivered);
     });
+    return;
+  }
+  // #220: tests open the debug/settings window through the control surface
+  // so the harness can attach CDP to its BrowserWindow target.
+  if (path === "/debug-open") {
+    const opened = deps.debugOpen ? deps.debugOpen() : false;
+    res.writeHead(202, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ opened }));
+    deps.log?.("[e2e] debug-open");
     return;
   }
   if (path !== "/mode" && path !== "/provider") {

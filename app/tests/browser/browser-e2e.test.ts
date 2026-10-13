@@ -415,4 +415,93 @@ suite("browser E2E (real Chrome -> real userscript -> TS app)", () => {
     const portErrors = errors.filter((m) => m.includes("port override failed"));
     assert.deepEqual(portErrors, [], JSON.stringify(errors));
   });
+
+  // #220: the vendored Web Awesome prototype card must come alive over
+  // file:// inside the real Electron debug window - module autoloader loads,
+  // all five tags define, every instance upgrades, controls accept
+  // interaction, and the backdrop-filter probe publishes numbers for the ADR.
+  test("WA prototype card upgrades over file:// in the debug window (#220)", { timeout: 60000 }, async () => {
+    // Own harness with mode control: open_debug() rides the e2e control
+    // surface, which the shared harness does not enable (same as the
+    // diagnostics test above).
+    const harness = new Harness({ headed: false, desktopOptions: { modeControl: true } });
+    try {
+      await harness.start();
+    } catch (e) {
+      await harness.stop();
+      throw e;
+    }
+    const h = harness;
+    try {
+      await run_wa_checks(h);
+    } finally {
+      await h.stop();
+    }
+  });
+
+  async function run_wa_checks(h: Harness): Promise<void> {
+    await h.app!.open_debug();
+    const ws = await h.app!.debug_page_ws_url();
+    const dbg = await CDP.connect(ws);
+    try {
+      // Wait for the autoloader's discovery to complete (the renderer
+      // publishes the settled facts on window.__waProtoStatus).
+      const probe = await wait_for(async () => {
+        const raw = await dbg.evaluate("JSON.stringify(window.__waProtoStatus ?? null)");
+        const st = JSON.parse(String(raw)) as Record<string, unknown> | null;
+        return st !== null && st.discoveryComplete === true ? st : null;
+      }, {
+        timeout: 20000,
+        what: "WA autoloader discovery completes over file://",
+        detail: async () => ({ waStatus: await dbg.evaluate("JSON.stringify(window.__waProtoStatus ?? null)").catch((e: Error) => "eval_error: " + e.message) }),
+      }) as Record<string, unknown>;
+      // The module autoloader itself loaded.
+      const scriptError = await dbg.evaluate("window.__waScriptError ?? null");
+      assert.equal(scriptError, null, "webawesome.loader.js module load error over file://");
+      // All five tags defined, every instance upgraded (shadowRoot attached).
+      const tags = probe.tags as Record<string, unknown>;
+      for (const t of ["wa-button", "wa-input", "wa-select", "wa-option", "wa-switch"]) {
+        assert.equal(tags[t], true, t + " defined");
+      }
+      assert.equal(probe.defined, 5, "5 tags defined");
+      assert.ok(Number(probe.total) >= 5, "prototype instances present: " + String(probe.total));
+      assert.equal(probe.upgraded, probe.total, "every instance upgraded");
+      assert.deepEqual(probe.autoloadWarns as string[], [],
+        "autoloader warned: " + JSON.stringify(probe.autoloadWarns));
+      // Display-layer interaction: switch flips, select/input accept values
+      // (the card sends no debug-intent by design).
+      const flip = await dbg.evaluate(
+        "(() => { const sw = document.getElementById('waProtoSwitch'); const before = sw.checked; sw.click(); return [before, sw.checked]; })()",
+      ) as [boolean, boolean];
+      assert.notEqual(flip[0], flip[1], "wa-switch click toggles checked");
+      const sel = await dbg.evaluate(
+        "(() => { const s = document.getElementById('waProtoSelect'); s.value = 'b'; return s.value; })()",
+      );
+      assert.equal(sel, "b", "wa-select accepts a value");
+      const inp = await dbg.evaluate(
+        "(() => { const i = document.getElementById('waProtoInput'); i.value = 'hi'; return i.value; })()",
+      );
+      assert.equal(inp, "hi", "wa-input accepts a value");
+      // No CORS / module errors surfaced by the window so far.
+      const errs = dbg.console_errors().filter((m) => m.includes("CORS") || m.includes("module"));
+      assert.deepEqual(errs, [], JSON.stringify(errs));
+      // backdrop-filter probe: support verdict + a measured fps number.
+      // The probe samples 2s of rAF; wait for it to publish.
+      const bfRaw = await wait_for(async () => {
+        const raw = await dbg.evaluate("JSON.stringify(window.__waBfProbe ?? null)");
+        const p = JSON.parse(String(raw)) as { supported: boolean; fps: number | null } | null;
+        return p !== null && p.fps !== null ? raw : null;
+      }, { timeout: 15000, what: "backdrop-filter probe publishes fps" });
+      const bf = JSON.parse(String(bfRaw)) as { supported: boolean; fps: number | null } | null;
+      assert.ok(bf !== null, "__waBfProbe published");
+      assert.equal(bf!.supported, true, "backdrop-filter supported");
+      assert.ok(bf!.fps !== null && bf!.fps > 0, "backdrop-filter probe measured fps=" + String(bf!.fps));
+      // The status line rendered a readable verdict for humans.
+      const statusText = String(await dbg.evaluate(
+        "document.getElementById('waProtoStatus')?.textContent ?? ''"));
+      assert.ok(statusText.includes("WA 自检通过"), statusText);
+    } finally {
+      dbg.close();
+    }
+  }
 });

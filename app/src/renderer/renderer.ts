@@ -22,6 +22,10 @@ interface SkeletonBridge {
   menuAction(id: string): void;
   overlayMouse(ev: unknown): void;
   onOverlayCursor(cb: (cursor: string) => void): void;
+  // #217 three-state + control bar (see preload.cts)
+  overlayHover(hovering: boolean): void;
+  overlayCommand(cmd: unknown): void;
+  menuOpenState(open: boolean): void;
 }
 
 const bridge = (window as unknown as { youtubesub: SkeletonBridge }).youtubesub;
@@ -39,6 +43,21 @@ const rowsEl = document.getElementById("rows") as HTMLElement;
 const statusEl = document.getElementById("status") as HTMLElement;
 const boxEl = document.getElementById("box") as HTMLElement;
 const ctxMenuEl = document.getElementById("ctxmenu") as HTMLElement;
+// #217 control bar
+const ctlTitleEl = document.getElementById("ctl-title") as HTMLElement;
+const btnBack = document.getElementById("btn-back") as HTMLButtonElement;
+const btnPlay = document.getElementById("btn-play") as HTMLButtonElement;
+const btnFwd = document.getElementById("btn-fwd") as HTMLButtonElement;
+const btnMute = document.getElementById("btn-mute") as HTMLButtonElement;
+const iPlay = document.getElementById("i-play") as unknown as SVGElement;
+const iPause = document.getElementById("i-pause") as unknown as SVGElement;
+const iVol = document.getElementById("i-vol") as unknown as SVGElement;
+const iMuted = document.getElementById("i-muted") as unknown as SVGElement;
+const seekWrapEl = document.getElementById("seekwrap") as HTMLElement;
+const seekTrackEl = document.getElementById("seektrack") as HTMLElement;
+const seekFillEl = document.getElementById("seekfill") as HTMLElement;
+const seekGhostEl = document.getElementById("seekghost") as HTMLElement;
+const timeLabelEl = document.getElementById("timelabel") as HTMLElement;
 
 // ---------------------------------------------------------------------------
 // Paint plan application (rows / divider / status / bg box)
@@ -50,7 +69,18 @@ interface PlanTextView {
 }
 interface PlanDividerView { kind: "divider"; y: number }
 type PlanEventView = PlanTextView | PlanDividerView;
-interface PlanView { events: PlanEventView[]; status_text: string; bg: { r: number; g: number; b: number; a: number } }
+interface PlanView {
+  events: PlanEventView[]; status_text: string;
+  bg: { r: number; g: number; b: number; a: number };
+  anim?: { fade_delay: string; dur: string; shrink: string; ease: string };
+  // #217 three-state + control-bar payload (null = unknown, degrade)
+  state?: "subtitles" | "controls" | "passthrough";
+  title?: string;
+  playing?: boolean | null;
+  position_ms?: number | null;
+  duration_ms?: number | null;
+  muted?: boolean | null;
+}
 
 function isPlanText(ev: PlanEventView): ev is PlanTextView {
   return ev.kind === "text";
@@ -93,7 +123,149 @@ bridge.onDisplayPlan((raw) => {
       typeof bg.b === "number" && typeof bg.a === "number") {
     boxEl.style.background = "rgba(" + bg.r + "," + bg.g + "," + bg.b + "," + bg.a / 255 + ")";
   }
+  const anim = plan.anim;
+  if (anim) {
+    // Animation tuning area (#222): the four values land as CSS custom
+    // properties on :root; the three-state transitions (#217) consume them.
+    const rootStyle = document.documentElement.style;
+    rootStyle.setProperty("--fade-delay", anim.fade_delay);
+    rootStyle.setProperty("--dur", anim.dur);
+    rootStyle.setProperty("--shrink", anim.shrink);
+    rootStyle.setProperty("--ease", anim.ease);
+  }
+  applyPlanState(plan);
+  updateControlBar(plan);
 });
+
+// ---------------------------------------------------------------------------
+// Three-state machine applier + control bar (#211 IA / #214 motion, #217)
+// ---------------------------------------------------------------------------
+
+let latestPlan: PlanView | null = null;
+// Seek-drag local preview: while dragging, the fill/timelabel show the pointer
+// target instead of plan.position_ms; nothing is sent until mouseup (#211:
+// 拖拽期间只预览不发包、松手发一次 seek).
+let seekDragging = false;
+let seekFrac = 0;
+
+function applyPlanState(plan: PlanView): void {
+  // Body classes drive the CSS transitions; "ct" stays the click-through
+  // channel (hotspot code + unlock visibility), the state-* classes are new.
+  const st = plan.state ?? "subtitles";
+  document.body.classList.toggle("state-controls", st === "controls");
+  document.body.classList.toggle("state-passthrough", st === "passthrough");
+}
+
+function fmtTime(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000));
+  return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+}
+
+function updateControlBar(plan: PlanView): void {
+  latestPlan = plan;
+  ctlTitleEl.textContent = typeof plan.title === "string" ? plan.title : "";
+  // Faces: show pause while playing, play otherwise (null = paused face);
+  // muted icon only when muted is explicitly true (null = unmuted face).
+  const playing = plan.playing === true;
+  iPlay.style.display = playing ? "none" : "";
+  iPause.style.display = playing ? "" : "none";
+  const muted = plan.muted === true;
+  iVol.style.display = muted ? "none" : "";
+  iMuted.style.display = muted ? "" : "none";
+  // Degrade rule (#211): no finite positive duration -> the seek area hides
+  // entirely and the label says live stream; the buttons stay (no-op without
+  // an active source - main drops the command).
+  const dur = plan.duration_ms;
+  const seekable = typeof dur === "number" && Number.isFinite(dur) && dur > 0;
+  seekWrapEl.style.visibility = seekable ? "visible" : "hidden";
+  if (!seekable) {
+    timeLabelEl.textContent = "直播流";
+    seekGhostEl.style.display = "none";
+    return;
+  }
+  const durMs = dur as number;
+  const dragging = seekDragging;
+  const pos = dragging
+    ? seekFrac * durMs
+    : (typeof plan.position_ms === "number" && Number.isFinite(plan.position_ms) ? plan.position_ms : 0);
+  const frac = Math.min(1, Math.max(0, pos / durMs));
+  seekFillEl.style.width = (frac * 100) + "%";
+  timeLabelEl.textContent = fmtTime(pos) + " / " + fmtTime(durMs);
+}
+
+function seekFractionFromEvent(e: MouseEvent): number {
+  const r = seekTrackEl.getBoundingClientRect();
+  if (r.width <= 0) return 0;
+  return Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
+}
+
+// The four control semantics (#211, strictly): seek offsets, explicit
+// play/pause, explicit mute. Main attaches the active source and routes.
+function sendOverlayCommand(cmd: Record<string, unknown>): void {
+  bridge.overlayCommand(cmd);
+}
+
+btnBack.addEventListener("mousedown", (e) => e.stopPropagation());
+btnFwd.addEventListener("mousedown", (e) => e.stopPropagation());
+btnPlay.addEventListener("mousedown", (e) => e.stopPropagation());
+btnMute.addEventListener("mousedown", (e) => e.stopPropagation());
+seekWrapEl.addEventListener("mousedown", (e) => e.stopPropagation()); // never a window drag
+
+btnBack.addEventListener("click", () => sendOverlayCommand({ type: "seek", delta_ms: -15000 }));
+btnFwd.addEventListener("click", () => sendOverlayCommand({ type: "seek", delta_ms: 15000 }));
+btnPlay.addEventListener("click", () => {
+  const playing = latestPlan?.playing === true;
+  sendOverlayCommand({ type: playing ? "pause" : "play" });
+});
+btnMute.addEventListener("click", () => {
+  const muted = latestPlan?.muted === true;
+  sendOverlayCommand({ type: "mute", muted: !muted });
+});
+
+seekWrapEl.addEventListener("mousedown", (e) => {
+  const dur = latestPlan?.duration_ms;
+  if (!(typeof dur === "number" && Number.isFinite(dur) && dur > 0)) return;
+  e.preventDefault();
+  seekDragging = true;
+  seekFrac = seekFractionFromEvent(e);
+  updateControlBar(latestPlan as PlanView);   // preview without sending
+});
+
+document.addEventListener("mousemove", (e) => {
+  if (!seekDragging) return;
+  seekFrac = seekFractionFromEvent(e);
+  const ghostLeft = seekFrac * 100;
+  seekGhostEl.style.left = ghostLeft + "%";
+  seekGhostEl.style.display = "block";
+  if (latestPlan) updateControlBar(latestPlan);
+});
+
+document.addEventListener("mouseup", () => {
+  if (!seekDragging) return;
+  seekDragging = false;
+  seekGhostEl.style.display = "none";
+  const dur = latestPlan?.duration_ms;
+  if (typeof dur === "number" && Number.isFinite(dur) && dur > 0) {
+    const cur = typeof latestPlan?.position_ms === "number" && Number.isFinite(latestPlan.position_ms)
+      ? (latestPlan.position_ms as number) : 0;
+    const target = seekFrac * dur;
+    // One seek on release: delta = target - current (#211).
+    sendOverlayCommand({ type: "seek", delta_ms: Math.round(target - cur) });
+  }
+  if (latestPlan) updateControlBar(latestPlan);
+});
+
+// Hover reporting: enter/leave on the box + a synthetic enter on the first
+// move after an unlock (the cursor was already inside, so no enter event
+// fires; #211 says unlock lands on subtitles, the NEXT movement re-enters
+// controls like any normal hover).
+let hoverSent = false;
+function reportHover(h: boolean): void {
+  hoverSent = h;
+  bridge.overlayHover(h);
+}
+boxEl.addEventListener("mouseenter", () => { if (!clickThrough) reportHover(true); });
+boxEl.addEventListener("mouseleave", () => { if (!clickThrough) reportHover(false); });
 
 // ---------------------------------------------------------------------------
 // Click-through + hotspot unlock (skeleton contract, kept verbatim)
@@ -103,6 +275,7 @@ bridge.onClickThrough((on) => {
   clickThrough = on;
   document.body.classList.toggle("ct", on);
   if (!on) document.body.classList.remove("hot-bg");
+  if (on) reportHover(false);   // leaving interactive mode ends the hover claim
   // The plan owns the status line; the click-through hint rides it only while
   // no plan text is showing, exactly like the skeleton did before plans.
   if (on && !statusEl.textContent) statusEl.textContent = "click-through ON (Ctrl+Alt+U unlock)";
@@ -125,6 +298,7 @@ document.addEventListener("mousemove", (e: MouseEvent) => {
   lastHot = null;
   // Interactive mode: forward moves so main can show resize-edge cursors.
   bridge.overlayMouse({ type: "move", x: e.clientX, y: e.clientY, gx: e.screenX, gy: e.screenY });
+  if (!hoverSent) reportHover(true);   // first move after unlock re-enters controls
 });
 
 bridge.onOverlayCursor((cursor) => {
@@ -172,12 +346,14 @@ bridge.onMenuModel((raw) => {
 function hideMenu(): void {
   menuOpen = false;
   ctxMenuEl.hidden = true;
+  bridge.menuOpenState(false);   // #211 freeze input: menu closed
 }
 
 function showMenuAt(x: number, y: number): void {
   buildMenu(menuModel);
   ctxMenuEl.hidden = false;
   menuOpen = true;
+  bridge.menuOpenState(true);    // #211 freeze input: menu open blocks auto transitions
   const r = ctxMenuEl.getBoundingClientRect();
   ctxMenuEl.style.left = Math.min(x, window.innerWidth - r.width - 2) + "px";
   ctxMenuEl.style.top = Math.min(y, window.innerHeight - r.height - 2) + "px";

@@ -24,22 +24,55 @@
       border: 1px solid rgba(255, 255, 255, 0.43);
       border-radius: 24px;
       box-shadow: 0 8px 48px rgba(0, 0, 0, 0.27);
+      /* repo palette -> WA custom properties: the token mapping the #220 ADR
+         prototyped on the trial card, promoted to the whole window by #216 so
+         every migrated control speaks the same recipe (values mirror
+         src/main/debug/tokens.ts). */
+      --wa-color-brand-fill-loud: #343E68;      /* 主强调靛蓝 8.04:1 */
+      --wa-color-brand-fill-normal: rgba(52, 62, 104, 0.14);
+      --wa-color-brand-fill-quiet: rgba(52, 62, 104, 0.08);
+      --wa-color-brand-on-loud: #F6F3EB;
+      --wa-color-brand-on-normal: #343E68;
+      --wa-color-brand-on-quiet: #343E68;
+      --wa-color-brand-border-loud: #343E68;
+      --wa-color-brand-border-normal: rgba(52, 62, 104, 0.38);
+      --wa-color-brand-border-quiet: rgba(52, 62, 104, 0.22);
+      --wa-color-danger-fill-loud: #B94D37;     /* 危险赭红 3.92:1 */
+      --wa-color-danger-on-loud: #F6F3EB;
+      --wa-color-focus: #343E68;
+      --wa-color-surface-default: #EFEDE4;      /* 控件底 */
+      --wa-color-text-normal: #2D3662;          /* 主文字 */
+      --wa-color-text-quiet: #355044;           /* 次文字 */
+      --wa-color-neutral-fill-loud: #EFEDE4;    /* 次按钮底 */
+      --wa-color-neutral-fill-normal: #EFEDE4;
+      --wa-color-neutral-fill-quiet: #EFEDE4;
+      --wa-color-neutral-on-loud: #2D3662;
+      --wa-color-neutral-on-normal: #2D3662;
+      --wa-color-neutral-on-quiet: #2D3662;
+      --wa-color-neutral-border-loud: #C9C4B6;  /* 控件描边 */
+      --wa-color-neutral-border-normal: #C9C4B6;
+      --wa-color-neutral-border-quiet: #C9C4B6;
+      --wa-font-family-body: "Microsoft YaHei UI", sans-serif;
+      --wa-font-size-m: 13px;
+      --wa-border-radius-m: 6px;
+      --wa-form-control-background-color: #EFEDE4;
+      --wa-form-control-border-color: #C9C4B6;
+      --wa-form-control-activated-color: #343E68;
+      --wa-form-control-label-color: #2D3662;
+      --wa-form-control-value-color: #2D3662;
+      --wa-form-control-hint-color: #355044;
+      --wa-form-control-height: 32px;
     }
     #debugHeader { display: flex; align-items: flex-start; gap: 18px; }
     #debugTitle { margin: 0; }
     #debugHint { font-size: 12px; }
     #pageswitch { display: flex; gap: 4px; background: #DAD6C8; border-radius: 8px; padding: 3px; }
-    #pageswitch button {
-      border: none; background: transparent; padding: 5px 16px; border-radius: 6px;
-      cursor: pointer; font-size: 13px; color: #2D3662; font-family: inherit;
-    }
-    #pageswitch button.active { background: #343E68; color: #E6E3DA; }
+    #pageswitch wa-button { font-size: 13px; border-radius: 6px; }
     #closeBtn {
-      margin-left: auto; border: none; background: transparent; cursor: pointer;
-      font-size: 15px; color: #355044; padding: 2px 8px; border-radius: 6px;
-      font-family: inherit;
+      margin-left: auto; font-size: 15px; color: #355044;
+      --wa-color-neutral-fill-quiet: transparent;
+      --wa-color-neutral-fill-normal: transparent;
     }
-    #closeBtn:hover { background: rgba(0, 0, 0, 0.08); }
     #debugScroll { flex: 1; overflow-y: auto; min-height: 0; }
     .page { display: none; flex-direction: column; gap: 10px; padding-bottom: 4px; }
     .page.active { display: flex; }
@@ -50,23 +83,21 @@
     .grid .span-hint { grid-column: 2 / 4; font-size: 12px; }
     .rowspan { grid-column: 2 / 4; }
     label.cap { font-size: 13px; }
-    input[type=text], input[type=password], select, textarea {
-      font-family: inherit; font-size: 13px; color: #2D3662;
-      background: #EFEDE4; border: 1px solid #C9C4B6; border-radius: 6px;
-      padding: 5px 8px; box-sizing: border-box;
-    }
-    input[type=text] { width: 100%; }
-    select { min-width: 160px; }
-    textarea { width: 100%; resize: none; user-select: text; }
-    textarea[readonly] { background: #E7E4D9; color: #355044; }
+    /* Migrated Web Awesome form controls (#216): host-level layout only -
+       colors/typography come from the token mapping above. The vendored
+       theme is @layer-ed with zero-specificity :where(:root), unlayered
+       rules win. */
+    wa-input, wa-textarea { display: block; width: 100%; font-size: 13px; }
+    wa-select { display: block; min-width: 160px; font-size: 13px; }
+    wa-textarea { resize: none; }
+    #page-tuning wa-input { width: 96px; }
+    .sliderrow { display: flex; gap: 8px; align-items: center; }
+    .sliderrow wa-slider { flex: 1; }
+    .sliderrow wa-input { width: 76px; }
+    wa-button { font-family: inherit; font-size: 13px; }
+    /* WA reports widget disabled via custom states, not the [disabled] attr. */
+    #debugWindow :state(disabled) { opacity: 0.45; cursor: default; }
     .btnrow { display: flex; gap: 8px; align-items: center; }
-    button.push {
-      font-family: inherit; font-size: 13px; cursor: pointer;
-      color: #2D3662; background: #EFEDE4; border: 1px solid #C9C4B6;
-      border-radius: 6px; padding: 6px 18px;
-    }
-    button.push:disabled { color: #355044; background: #C9C4B6; border-color: #C9C4B6; cursor: default; }
-    input[type=checkbox] { accent-color: #343E68; }
     #debugFooter { display: flex; align-items: center; gap: 10px; }
     #footerStatus { font-size: 12px; }
     #footerButtons { margin-left: auto; display: flex; gap: 10px; }
@@ -83,17 +114,29 @@
       width: 100%; height: 120px; overflow: auto; white-space: pre;
       font-size: 12px; user-select: text;
     }
-    /* tuning controls */
-    .sliderrow { display: flex; gap: 8px; align-items: center; }
-    .sliderrow input[type=range] { flex: 1; accent-color: #343E68; }
-    .sliderrow input[type=number] { width: 76px; }
-    input[type=number] {
-      font-family: inherit; font-size: 13px; color: #2D3662;
-      background: #EFEDE4; border: 1px solid #C9C4B6; border-radius: 6px;
-      padding: 5px 6px; width: 96px; box-sizing: border-box;
+    /* #220 WA prototype trial card - the bare-DOM layout helpers below the
+       card are shared with the migrated pages; the card itself only adds
+       this row/status styling. */
+    #waProtoRow { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 8px; }
+    #waProtoStatus { font-size: 12px; color: #355044; user-select: text; white-space: pre-wrap; }
+    #waBfWrap {
+      position: relative; height: 72px; border-radius: 8px; overflow: hidden; margin-top: 8px;
+      background: repeating-linear-gradient(45deg, #DAD6C8 0 12px, #C9C4B6 12px 24px);
     }
-    input:disabled, select:disabled { opacity: 0.45; }
+    #waBfGlass {
+      position: absolute; inset: 10px 30%; display: flex; align-items: center; justify-content: center;
+      border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.43);
+      background: rgba(246, 243, 235, 0.35);
+      backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+      color: #2D3662; font-size: 12px;
+    }
+    #renameModal wa-input { width: 100%; }
   </style>
+  <!-- #220 WA prototype: vendored dist-cdn theme closure (pulls
+       layers.css + color/palettes/default.css via relative @import). The
+       opaque #debugWindow surface and html/body transparency are untouched
+       by the theme (no :root/body background rules - verified). -->
+  <link rel="stylesheet" href="./vendor/webawesome/styles/themes/default.css">
 </head>
 <body>
   <div id="debugWindow">
@@ -103,7 +146,7 @@
         <div id="debugHint" class="debugHint"></div>
       </div>
       <div id="pageswitch"></div>
-      <button id="closeBtn" title="关闭（Esc）">✕</button>
+      <wa-button id="closeBtn" variant="neutral" appearance="plain" title="关闭（Esc）">✕</wa-button>
     </div>
     <div id="debugScroll">
       <div class="page" id="page-settings"></div>
@@ -113,12 +156,22 @@
     <div id="debugFooter">
       <span id="footerStatus" class="debugHint"></span>
       <div id="footerButtons">
-        <button id="cancelBtn" class="push">取消</button>
-        <button id="saveBtn" class="push debugPrimary">保存</button>
+        <wa-button id="cancelBtn" variant="neutral" appearance="filled">取消</wa-button>
+        <wa-button id="saveBtn" variant="brand" appearance="accent">保存</wa-button>
       </div>
     </div>
   </div>
   <input type="color" id="colorInput" style="position:absolute; left:-100px; top:-100px; width:1px; height:1px; opacity:0;">
   <script src="./debug-renderer.js"></script>
+  <!-- #220 WA autoloader: a module script - proven alive over file:// in
+       Electron 44 (issue #220 probe: dynamic import + module scripts both
+       work; the tsconfig comment about blocked module scripts was the #204
+       tsc export{} pitfall, not a Chromium rule). data-webawesome gives the
+       autoloader the component base path - a bare relative src
+       double-resolves inside module import(). Since #216 it also upgrades
+       every migrated control on the three pages. -->
+  <script type="module" src="./vendor/webawesome/webawesome.loader.js"
+          data-webawesome="./vendor/webawesome/"
+          onerror="window.__waScriptError='webawesome.loader.js failed to load'"></script>
 </body>
 </html>

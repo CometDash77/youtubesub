@@ -27,6 +27,9 @@ export interface SyncState {
   // null when the frame omitted it or carried a non-finite value (duration
   // is unknown until metadata loads). Display-only; never used for cues.
   duration_ms: number | null;
+  // Muted state echoed by the browser sync (#215 additive key, #217 mute
+  // toggle echo). null when the frame omitted it (older scripts).
+  muted: boolean | null;
   anchor_mono: number;
 }
 
@@ -42,6 +45,7 @@ export function make_sync_state(init: Partial<SyncState> = {}): SyncState {
     playing: init.playing ?? false,
     playback_rate: init.playback_rate ?? 1.0,
     duration_ms: init.duration_ms ?? null,
+    muted: init.muted ?? null,
     anchor_mono: init.anchor_mono ?? monotonic(),
   };
 }
@@ -52,7 +56,7 @@ export function make_sync_state(init: Partial<SyncState> = {}): SyncState {
 export function apply_sync(state: SyncState, video_time_ms: number,
                            playing: boolean, playback_rate: number,
                            sender_ts_ms: number, now_epoch_ms: number,
-                           duration_ms?: unknown): SyncState {
+                           duration_ms?: unknown, muted?: unknown): SyncState {
   const rate = typeof playback_rate === "number" && playback_rate > 0
     ? playback_rate : 1.0;
   let transit = 0.0;
@@ -67,6 +71,9 @@ export function apply_sync(state: SyncState, video_time_ms: number,
   // key as null; the browser omits duration_ms until metadata is loaded).
   state.duration_ms = typeof duration_ms === "number" && Number.isFinite(duration_ms)
     ? duration_ms : null;
+  // Absent key -> null (#215: older scripts never send muted; the mute
+  // icon degrades to send-what-you-saw instead of lying).
+  state.muted = typeof muted === "boolean" ? muted : null;
   state.anchor_mono = monotonic();
   return state;
 }

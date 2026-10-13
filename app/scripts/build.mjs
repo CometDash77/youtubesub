@@ -12,4 +12,10 @@ cpSync(
   new URL("../src/renderer/debug.html", import.meta.url),
   new URL("../dist/renderer/debug.html", import.meta.url),
 );
-console.log("copied dist/renderer/{index,debug}.html");
+// Vendored Web Awesome subset (#220) ships as-is: not compiled, just copied.
+cpSync(
+  new URL("../src/renderer/vendor", import.meta.url),
+  new URL("../dist/renderer/vendor", import.meta.url),
+  { recursive: true },
+);
+console.log("copied dist/renderer/{index,debug}.html + vendor/");

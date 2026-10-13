@@ -44,6 +44,7 @@
 - **脏状态**: 「脏 = 会落盘的编辑」。调参页用 `settings.collect_edits`（值相等不算脏，不是 dirty flag）；设置页自建 8 字段快照（`presets` 用 json 规范化后比较）。窗口级只暴露 `is_dirty()` / `dirty_counts()`（[desktop/suboverlay/debug_window.py:170](desktop/suboverlay/debug_window.py#L170)）；排障页**永不参与**。关窗时若还脏，先弹三选一（默认「回去继续改」，见 [desktop/suboverlay/debug_window.py:61](desktop/suboverlay/debug_window.py#L61)）—— 选它时什么都不停，因为排障页重启取数的挂点只有 `showEvent`。
 - **再快照挂点**: `DebugWindow.showEvent`（首次显示时）重新取基线 —— 窗口实例被 App 永久复用，构造时那一次快照早就过期。
 - **事件留痕**: 排障页在**本页内存**里记下的事件（状态翻转，带时间戳），关窗即弃。**不是「日志」**（不落盘、跨会话不留）、**不是「快照」**（不导出、不归档）。已知边界：只看得见**本页打开之后**的事件。
+- 更正（2026-10-13，[#222](https://github.com/CometDash77/youtubesub/issues/222) 落地）：调参页自本票起为 **20 项、四组**（显示 / 动效 / 网络与服务 / 实验（未校准））—— 上一条「调参页（16 项）/ 三组」作废；#174 的 6 键落地后为 26 项（本行替代 #174 节「落地后为 22 项」的旧算术）。动效组四键 `anim.fade_delay` / `anim.dur` / `anim.shrink` / `anim.ease` + 快/中/慢预设（预设只填延迟与时长两项）。
 
 
 ### 浮窗外观键（#174；术语 + 键表形状，不含实现）
@@ -61,6 +62,9 @@
 - **标题区**: `controls` 态的视频标题行（`title`，源头 `tab_title`），单行 ellipsis，只在 `controls` 态出现。
 - **态转移**: 进窗即 `controls`、出窗回 `subtitles`、穿透经右键菜单或 Ctrl+Alt+U、解锁小图标回 `subtitles`；拖拽/resize 进行中与右键菜单打开中自动转移冻结。淡出延迟、字幕缩小系数等数值归 #214。
 - **静音回显**: sync 帧需增 `muted`（v1 additive，归属 #215/#219），否则控制条只能回显本地最后命令。
+- **动效四参数**: 淡出延迟（鼠标离窗后等多久开始淡出）/ 时长（一次过渡动画的长度）/ 缩小比（控制态字幕缩小的比例）/ 缓动（动画节奏感）。默认值、预设与可调范围归 #214 定案。
+- **动效档**: 快/中/慢三档预设，只动「时长 + 淡出延迟」；默认档 = 中。缩小比与缓动不随档变。
+- **淡出等待**: 离窗后、淡出开始前的待窗期；期间重新进窗 = 取消等待、立即淡入。
 
 ## 许可证边界
 - dkitle: Rust 端无 LICENSE (GitHub license:null) -> 只参考设计, 不抄代码; 其 userscript 有 @license MIT 头, 可改写适配。
