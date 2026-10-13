@@ -57,5 +57,6 @@ jobs:
       - name: Attach zip to Release
         uses: softprops/action-gh-release@v2
         with:
-          files: release/youtubesub-*-win64.zip
+          # uses-steps run from the repo root (working-directory only applies to run steps)
+          files: app/release/youtubesub-*-win64.zip
           fail_on_unmatched_files: true
