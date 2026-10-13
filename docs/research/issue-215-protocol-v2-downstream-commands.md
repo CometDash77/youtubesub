@@ -123,3 +123,14 @@ userscript 执行面：
 6. **桌面端命令入口**：#215 票面只定义协议通道；命令从哪触发（浮窗 hover 工具栏/全局热键/调试窗口）属 UI 范围，本报告未取证 UI 现状（overlay-menu.ts 未读），留待实施票。
 
 ——本报告全部论断均标注出处（file:line 或 issue URL）；标注「未取证」处为超出仓库证据的明确声明。
+
+## ⑤ 收尾复核（2026-10-13，研究收尾会话）
+
+本节为复核记录，不改动上文 2026-10-08 取证快照。方法：主会话独立抽查（ADR-003:4/6/7/8 现文逐字比对；PROTOCOL.md、app/src/main/ws-server.ts 于取证时点快照 cf9b10e^ 逐字比对）+ 后台审计 agent 对全文引文逐条核对。
+
+- **快照准确性**：本报告随 cf9b10e 入库；取证时点（cf9b10e^）所引 docs/PROTOCOL.md:66-67（「v1 保留, 暂不用」+ play_pause 预留行）与 app/src/main/ws-server.ts:7-8（endsWith 怪癖注释）、:44/:205（play_pause 判废）、:192-197（origin_allowed）逐字相符——报告在取证时点准确。
+- **全量引文复核 51 组**（重复引用已合并）：19 组仍精确相符（上行帧 PROTOCOL.md:3-64、ADR-013:5、ADR-003、app/src/main/engine.ts 全部、app/src/main/protocol.ts:161、DESIGN.md:9）；13 组行号漂移但主张仍成立（userscript 读侧 poll/bindVideo/sendSync/newSource/replay/health、ws-server 绑定与 upgrade 403 等）；19 组被 #219 实施取代或推翻。
+- **被 #219 推翻的关键事实（现为现状）**：docs/PROTOCOL.md:66-84 为四帧命令通道（预留行按裁决 B 取代）；ws-server.ts:455 起 sendCommand 下行（ws.send）、:277 新增 source_id→socket 映射；play_pause 出白名单（ws-server.ts:17、protocol.ts:168-172）；Origin 收紧为精确后缀匹配（ws-server.ts:201-208，怪癖 retired）；token 已实现（ws-server.ts:282/:364-370 GET /token/:398，userscript fetchToken:453-469）；sync 增 duration_ms（clock.ts:22-31、engine.ts:339、userscript:575-583）；userscript 已补 onmessage（:510）。测试锚点迁移：ws-server.test.ts:126→138、ws-server-integration.test.ts:141→151、userscript.test.ts:922→1005-1036。
+- **仍成立**：buffered 全仓零出现（未决项 3 的推迟选项维持）；loopback 绑定与 upgrade 403 行为不变；SEEK_JUMP_MS=2500.0 调度失效路径不变。
+- **无出处主张 1 处**：§C「DOM 规范上脚本赋值 currentTime 会触发 seeked」引外部规范未给链接（其余「未取证」处均已显式自标，见下）。
+- **结论**：本票取证/定案职责完成；未决项 2-6 全部随 #219 处理（其中 4、5 的实施形态已在 cf9b10e 落地：token 连接级认证、Origin 收紧；3 维持推迟：buffered 未纳入首版）。
