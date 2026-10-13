@@ -1,0 +1,84 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>youtubesub-bar</title>
+  <style>
+    html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }
+    /* Animation tuning area (#222): #227 bar consumes only --dur/--ease; the
+       fade-delay wait lives in main's two-position hover timer, so bar CSS
+       never attaches a leave delay (spec §3: no double wait). */
+    :root { --dur: 0.24s; --ease: cubic-bezier(.22,1,.36,1); }
+    #bar {
+      margin: 0; box-sizing: border-box; height: 100vh;
+      background: rgba(0, 0, 0, 0.59);
+      border-radius: 10px;
+      border: 1px solid rgba(255, 255, 255, 0.31);
+      padding: 10px 14px;
+      font-family: "Microsoft YaHei UI", sans-serif;
+      color: #fff; user-select: none; position: relative;
+      /* Visibility is double-gated (spec §1): main holds setIgnoreMouseEvents
+         unless the bar is interactive, and this opacity is the renderer gate.
+         Both directions ride --dur/--ease with NO extra delay. */
+      opacity: 0; pointer-events: none;
+      transition: opacity var(--dur) var(--ease);
+    }
+    body.bar-on #bar, body.lock-on #bar { opacity: 1; pointer-events: auto; }
+    /* Title row (#226 §7): single line, ellipsis; drag-forward target. Only
+       meaningful in the controls state. */
+    #bar-title {
+      font-size: 13px; color: rgba(242, 244, 248, 0.85);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      margin-bottom: 8px;
+    }
+    #bar-controls { display: flex; align-items: center; gap: 10px; }
+    #bar-controls .zone { display: flex; gap: 6px; align-items: center; }
+    #bar-controls button {
+      width: 36px; height: 34px; border: none; border-radius: 9px; cursor: pointer;
+      background: rgba(255, 255, 255, 0.08); color: #fff;
+      display: flex; align-items: center; justify-content: center;
+      padding: 0;
+    }
+    #bar-controls button:hover { background: rgba(255, 255, 255, 0.16); }
+    #bar-controls button svg { width: 18px; height: 18px; fill: currentColor; }
+    #seekwrap { flex: 1; height: 22px; display: flex; align-items: center; cursor: pointer; }
+    #seektrack { width: 100%; height: 5px; border-radius: 3px; background: rgba(255, 255, 255, 0.18); position: relative; }
+    #seekfill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px; background: #4f8cff; }
+    #seekghost { position: absolute; top: -3px; bottom: -3px; width: 2px; background: rgba(255, 255, 255, 0.7); display: none; }
+    #timelabel { font-size: 11px; color: rgba(242, 244, 248, 0.6); font-variant-numeric: tabular-nums; }
+    /* Unlock lock (#226 §4): appears ONLY while passthrough + hover; clicking
+       it walks the existing unlock-through channel. Centered vertically since
+       in lock-on it is the only content. */
+    #bar-unlock {
+      position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+      width: 40px; height: 40px;
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer; border-radius: 8px;
+      opacity: 0; pointer-events: none;
+      transition: opacity var(--dur) var(--ease);
+    }
+    body.lock-on #bar-title, body.lock-on #bar-controls { visibility: hidden; }
+    body.bar-on #bar-unlock { visibility: hidden; }
+    body.lock-on #bar-unlock { opacity: 1; pointer-events: auto; background: rgba(255, 255, 255, 0.12); }
+  </style>
+</head>
+<body>
+  <div id="bar">
+    <div id="bar-title"></div>
+    <div id="bar-controls">
+      <div class="zone">
+        <button id="btn-back" title="后退 15 秒"><svg viewBox="0 0 24 24"><path d="M12 5V1L6 7l6 6V9c3.3 0 6 2.7 6 6s-2.7 6-6 6-6-2.7-6-6H4c0 4.4 3.6 8 8 8s8-3.6 8-8-3.6-8-8-8z"/></svg></button>
+        <button id="btn-play" title="播放/暂停"><svg id="i-play" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg><svg id="i-pause" viewBox="0 0 24 24" style="display:none"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg></button>
+        <button id="btn-fwd" title="前进 15 秒"><svg viewBox="0 0 24 24"><path d="M12 5V1l6 6-6 6V9c-3.3 0-6 2.7-6 6s2.7 6 6 6 6-2.7 6-6h2c0 4.4-3.6 8-8 8s-8-3.6-8-8 3.6-8 8-8z"/></svg></button>
+      </div>
+      <div id="seekwrap"><div id="seektrack"><div id="seekfill"></div><div id="seekghost"></div></div></div>
+      <div id="timelabel"></div>
+      <div class="zone">
+        <button id="btn-mute" title="静音切换"><svg id="i-vol" viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 7.97v8.05A4.5 4.5 0 0 0 16.5 12z"/></svg><svg id="i-muted" viewBox="0 0 24 24" style="display:none"><path d="M16.5 12A4.5 4.5 0 0 0 14 7.97v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51A8.8 8.8 0 0 0 21 12c0-4.28-3-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06a8.99 8.99 0 0 0 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/></svg></button>
+      </div>
+    </div>
+    <div id="bar-unlock"><svg viewBox="0 0 24 24" style="width:20px;height:20px;fill:#ffd166"><path d="M12 17a2 2 0 1 0 0-4 2 2 0 0 0 0 4zm6-9h-1V6a5 5 0 0 0-9.9-1h2.1A3 3 0 0 1 15 6v2H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10a2 2 0 0 0-2-2zm0 12H6V10h12v10z"/></svg></div>
+  </div>
+  <script src="bar.js"></script>
+</body>
+</html>

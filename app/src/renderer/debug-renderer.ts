@@ -274,7 +274,8 @@ function buildSettingsPage(root: HTMLElement, st: Record<string, unknown>): void
     c3.appendChild(g3);
     // card 4: WA prototype trial area (#220) - display-only: sends no
     // intents and attaches no user-event listeners; facts are published on
-    // window.__waProtoStatus / __waBfProbe for the E2E smoke and the ADR.
+    // window.__waProtoStatus for the E2E smoke. (The backdrop-filter probe
+    // that shared this card was removed: map #229 decision 5 / issue #233.)
     const c4 = el("div", "debugCard"); c4.id = "waProtoCard";
     const c4h = el("h3", "debugSection"); c4h.textContent = "WA 原型试验区（#220，只展示，不动任何设置）";
     c4.appendChild(c4h);
@@ -292,10 +293,7 @@ function buildSettingsPage(root: HTMLElement, st: Record<string, unknown>): void
     }
     waRow2.appendChild(waInput); waRow2.appendChild(waProtoSel);
     const waStatus = el("div"); waStatus.id = "waProtoStatus"; waStatus.textContent = "WA 自检中……";
-    const waBfWrap = el("div"); waBfWrap.id = "waBfWrap";
-    const waBfGlass = el("div"); waBfGlass.id = "waBfGlass"; waBfGlass.textContent = "backdrop-filter 磨砂探针";
-    waBfWrap.appendChild(waBfGlass);
-    c4.appendChild(waRow1); c4.appendChild(waRow2); c4.appendChild(waStatus); c4.appendChild(waBfWrap);
+    c4.appendChild(waRow1); c4.appendChild(waRow2); c4.appendChild(waStatus);
     root.appendChild(c1); root.appendChild(c2); root.appendChild(c3); root.appendChild(c4);
     // The instrumentation below may finish before the first state push
     // builds this card; refresh the status line now that it exists.
@@ -546,15 +544,13 @@ debugBridge.onDebugState(apply);
 // ---- #220 WA prototype instrumentation (display-only; zero intents) ----
 // The vendored autoloader is a deferred module script: this classic script
 // runs first, so the console.warn tap below catches its per-tag load
-// failures (the autoloader warns instead of throwing). Upgrade facts and
-// the backdrop-filter probe feed the E2E smoke (#220 acceptance 3) and the
-// ADR verdict (#220 acceptance 2). #216 migrated the real controls too; the
-// instance counting stays scoped to the prototype card so the E2E evidence
-// keeps measuring exactly what it always measured.
+// failures (the autoloader warns instead of throwing). Upgrade facts feed
+// the E2E smoke (#220 acceptance 3). #216 migrated the real controls too;
+// the instance counting stays scoped to the prototype card so the E2E
+// evidence keeps measuring exactly what it always measured.
 interface WaProtoGlobals {
   __waProtoStatus?: Record<string, unknown>;
   __waProtoRender?: () => void;
-  __waBfProbe?: { supported: boolean; fps: number | null };
   __waScriptError?: string;
 }
 const waGlobals = window as unknown as WaProtoGlobals;
@@ -593,18 +589,13 @@ function waRefreshUpgrades(): void {
 function waStatusText(): string {
   const tags = waProtoStatus.tags as Record<string, boolean>;
   const missing = WA_TAGS.filter((t) => !tags[t]);
-  const bf = waGlobals.__waBfProbe;
-  const bfText = bf
-    ? "；backdrop-filter " + (bf.supported ? "支持" : "不支持") +
-      "，磨砂层刷新实测 " + (bf.fps === null ? "…" : String(bf.fps)) + " fps（2s rAF 采样）"
-    : "";
   if (missing.length === 0) {
     return "WA 自检通过：5 个标签全部定义，" + String(waProtoStatus.upgraded) + "/" + String(waProtoStatus.total) +
-      " 实例已挂 shadowRoot" + (waProtoStatus.discoveryComplete ? "，autoloader 扫描完成" : "") + bfText;
+      " 实例已挂 shadowRoot" + (waProtoStatus.discoveryComplete ? "，autoloader 扫描完成" : "");
   }
   return "WA 自检未过：未定义 " + missing.join(", ") +
     (waAutoloadWarns.length ? "；autoloader 警告：" + waAutoloadWarns.join(" | ") : "") +
-    (waGlobals.__waScriptError ? "；模块加载失败：" + waGlobals.__waScriptError : "") + bfText;
+    (waGlobals.__waScriptError ? "；模块加载失败：" + waGlobals.__waScriptError : "");
 }
 function waRenderHook(): void {
   const line = document.getElementById("waProtoStatus");
@@ -632,20 +623,3 @@ function waSettled(): boolean {
   waRenderHook();
   if (!waProtoStatus.discoveryComplete) window.setTimeout(waPollUpgrades, 250);
 })();
-const waBfSupported = typeof CSS !== "undefined" &&
-  (CSS.supports("backdrop-filter", "blur(12px)") || CSS.supports("-webkit-backdrop-filter", "blur(12px)"));
-const waBf: { supported: boolean; fps: number | null } = waGlobals.__waBfProbe =
-  { supported: waBfSupported, fps: null };
-if (waBfSupported) {
-  const waBfT0 = performance.now();
-  let waBfFrames = 0;
-  const waBfStep = (t: number): void => {
-    waBfFrames++;
-    if (t - waBfT0 < 2000) { requestAnimationFrame(waBfStep); return; }
-    waBf.fps = Math.round(waBfFrames / ((t - waBfT0) / 1000));
-    waRenderHook();
-  };
-  requestAnimationFrame(waBfStep);
-} else {
-  waRenderHook();
-}

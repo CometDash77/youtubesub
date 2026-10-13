@@ -129,9 +129,9 @@ test("opacity is a slider and a number box that stay in sync", () => {
   // spec #161 字段表：背景不透明度 = 滑条 + 数字框（用户故事 18）。
   const [p, cfg] = page();
   const sliders = p.slider_controls();
-  // #222 起动效三项也是滑条（浮点步长），整表共 4 条，顺序随权威表。
+  // #222 起动效三项也是滑条（浮点步长）；#227 后整表共 3 条，顺序随权威表。
   assert.deepEqual(sliders, [
-    ["display", "bg_opacity"], ["anim", "fade_delay"], ["anim", "dur"], ["anim", "shrink"],
+    ["display", "bg_opacity"], ["anim", "fade_delay"], ["anim", "dur"],
   ]);
   const path = sliders[0]!;
   const view = p.control_view(path);
@@ -170,7 +170,6 @@ test("anim presets fill the two prototype fields and stay save-gated", () => {
   p.apply_anim_preset("fast");
   assert.equal(p.field_value(["anim", "dur"]), 0.18);
   assert.equal(p.field_value(["anim", "fade_delay"]), 0.6);
-  assert.equal(p.field_value(["anim", "shrink"]), 0.72, "预设不动缩小比");
   assert.equal(p.field_value(["anim", "ease"]), "cubic-bezier(.22,1,.36,1)");
   assert.equal(p.active_anim_preset(), "fast");
   assert.equal(p.count_dirty(), 2, "预设恰好改两个字段");

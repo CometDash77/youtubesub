@@ -49,6 +49,7 @@ export type PageName = (typeof PAGES)[number];
 export const PAGE_TITLES: Record<string, string> = {
   settings: "设置", tuning: "调参", diag: "排障",
 };
+
 // Design size (the prototype's 1120x760) and the short-screen fallback
 // (#180): page content goes to the outer scroll region, the window only
 // shrinks to the screen's available area, so the footer (Cancel / Save)
@@ -76,6 +77,65 @@ export function fit_to_screen(wanted_w: number, wanted_h: number,
   const width = Math.max(MIN_W, Math.min(Math.trunc(wanted_w), Math.trunc(avail_w) - margin));
   const height = Math.max(MIN_H, Math.min(Math.trunc(wanted_h), Math.trunc(avail_h) - margin));
   return [width, height];
+}
+
+// ---- #232: bounds persistence (pure; this file stays electron-free) ----
+
+export interface DebugRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface RestoredDebugBounds {
+  x: number | null;   // null axis = leave placement to the OS default
+  y: number | null;
+  width: number;
+  height: number;
+}
+
+// Parse + clamp a stored debug_window section (spec #230, section 3):
+//   - a non-object section (missing/null/array/garbage) falls back whole:
+//     OS placement at the model's current size (the #174 fallback pattern);
+//   - every field validates on its own: a finite number truncates, anything
+//     else degrades just that field (position -> null, size -> fallback);
+//   - the work area comes from pickWorkArea(probe), probe being the stored
+//     rect with degraded fields filled in (0 / fallback) - the Electron
+//     getDisplayMatching "nearest display to the stored rect" rule;
+//   - size first (never bigger than the work area, floored at min), then
+//     position (the whole rect back inside the work area, per non-null
+//     axis). The write side stores raw; only this restore path clamps.
+export function restore_debug_bounds(
+  stored: unknown,
+  pickWorkArea: (rect: DebugRect) => DebugRect,
+  minW: number, minH: number,
+  fallbackW: number, fallbackH: number,
+): RestoredDebugBounds {
+  if (stored === null || typeof stored !== "object" || Array.isArray(stored)) {
+    return { x: null, y: null, width: fallbackW, height: fallbackH };
+  }
+  const sec = stored as Record<string, unknown>;
+  const numOrNull = (v: unknown): number | null =>
+    typeof v === "number" && Number.isFinite(v) ? Math.trunc(v) : null;
+  const numOr = (v: unknown, fb: number): number =>
+    typeof v === "number" && Number.isFinite(v) ? Math.trunc(v) : fb;
+  let x = numOrNull(sec["x"]);
+  let y = numOrNull(sec["y"]);
+  const w = numOr(sec["w"], fallbackW);
+  const h = numOr(sec["h"], fallbackH);
+  const wa = pickWorkArea({ x: x ?? 0, y: y ?? 0, width: w, height: h });
+  // Size first: clamp(w, min, max(min, workArea.width)). When the work area
+  // is smaller than min, hi < lo and the clamp lands on hi - the window hugs
+  // the work area's right/bottom edge, the best a degenerate display allows.
+  const clamp = (v: number, lo: number, hi: number): number =>
+    Math.min(hi, Math.max(lo, v));
+  const width = clamp(w, minW, Math.max(minW, wa.width));
+  const height = clamp(h, minH, Math.max(minH, wa.height));
+  // Then position: fully visible inside the work area, per non-null axis.
+  if (x !== null) x = clamp(x, wa.x, wa.x + wa.width - width);
+  if (y !== null) y = clamp(y, wa.y, wa.y + wa.height - height);
+  return { x, y, width, height };
 }
 
 // Results of the close interception (ask_unsaved_changes).

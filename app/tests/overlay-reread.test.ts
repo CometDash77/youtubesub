@@ -58,7 +58,7 @@ test("anim vars fall back like the table and ride the paint plan", () => {
   const cfg = default_settings() as Settings;
   const w = new OverlayDisplay(cfg as { [k: string]: unknown });
   assert.deepEqual(w.anim_vars(), {
-    fade_delay: "1.2s", dur: "0.24s", shrink: "0.72",
+    fade_delay: "1.2s", dur: "0.24s",
     ease: "cubic-bezier(.22,1,.36,1)",
   });
   (cfg["anim"] as { [k: string]: unknown }).fade_delay = 0.6;
@@ -68,7 +68,7 @@ test("anim vars fall back like the table and ride the paint plan", () => {
   // alone carries the new values.
   const plan = w.paint_plan();
   assert.deepEqual(plan.anim, {
-    fade_delay: "0.6s", dur: "0.18s", shrink: "0.72", ease: "linear",
+    fade_delay: "0.6s", dur: "0.18s", ease: "linear",
   });
 });
 
@@ -77,7 +77,7 @@ test("anim vars survive an old config without the anim section", () => {
   delete cfg["anim"];
   const w = new OverlayDisplay(cfg as { [k: string]: unknown });
   assert.deepEqual(w.anim_vars(), {
-    fade_delay: "1.2s", dur: "0.24s", shrink: "0.72",
+    fade_delay: "1.2s", dur: "0.24s",
     ease: "cubic-bezier(.22,1,.36,1)",
   });
   assert.deepEqual(w.paint_plan().anim, w.anim_vars());

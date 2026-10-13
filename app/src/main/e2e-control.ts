@@ -10,6 +10,9 @@
 //   POST /provider {"provider": {...}}                      -> 202
 //   POST /command  {"type": "...", "source_id": "...", ...} -> 202 {"delivered": bool}
 //   POST /debug-open {}                                    -> 202 {"opened": bool} (#220)
+//   POST /debug-close {}                                   -> 202 {"closed": bool} (#232)
+//   GET  /debug-bounds                                     -> 200 {"bounds": {...}|null} (#232)
+//   POST /debug-bounds {"x","y","width","height"}          -> 202 {} (#232)
 //   unknown path -> 404; unparseable body or invalid value -> 400.
 // /command is the #219 addition (no e2e_app.py counterpart): it forwards the
 // body through WSServer.sendCommand so tests drive the downstream command
@@ -25,6 +28,12 @@ export interface E2EControlDeps {
   pushPlan: () => void;
   sendCommand?: (cmd: Record<string, unknown>) => boolean;
   debugOpen?: () => boolean;
+  // #232: the bounds persistence test reads and moves the debug window.
+  debugClose?: () => boolean;
+  debugBounds?: {
+    get(): { x: number; y: number; width: number; height: number } | null;
+    set(b: { x: number; y: number; width: number; height: number }): void;
+  };
   log?: (msg: string) => void;
 }
 
@@ -39,6 +48,24 @@ function section_of(settings: Record<string, unknown>, key: string): Record<stri
 }
 
 const OVERLAY_MODES: readonly string[] = ["orig", "trans", "bilingual"];
+
+// #232: GET /debug-bounds - the current debug window bounds (null = the
+// window has not been created yet).
+function handleGet(
+  deps: E2EControlDeps,
+  req: IncomingMessage,
+  res: ServerResponse,
+): void {
+  const path = (req.url ?? "").split("?")[0]!;
+  if (path === "/debug-bounds") {
+    const bounds = deps.debugBounds ? deps.debugBounds.get() : null;
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ bounds }));
+    return;
+  }
+  res.writeHead(404);
+  res.end();
+}
 
 function handlePost(
   deps: E2EControlDeps,
@@ -75,6 +102,40 @@ function handlePost(
     res.writeHead(202, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ opened }));
     deps.log?.("[e2e] debug-open");
+    return;
+  }
+  // #232: close the debug window through the same route the renderer's
+  // x/Esc uses (model confirm -> OS hide -> bounds persisted).
+  if (path === "/debug-close") {
+    const closed = deps.debugClose ? deps.debugClose() : false;
+    res.writeHead(202, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ closed }));
+    deps.log?.("[e2e] debug-close closed=" + closed);
+    return;
+  }
+  // #232: move/resize the debug window to a known rect before the hide step.
+  if (path === "/debug-bounds") {
+    let body = "";
+    req.on("data", (c: Buffer) => { body += c.toString("utf8"); });
+    req.on("end", () => {
+      let b: { x: number; y: number; width: number; height: number };
+      try {
+        const parsed = JSON.parse(body || "{}") as Record<string, unknown>;
+        const n = (v: unknown): number => {
+          if (typeof v !== "number" || !Number.isFinite(v)) throw new Error("bad number");
+          return v;
+        };
+        b = { x: n(parsed["x"]), y: n(parsed["y"]), width: n(parsed["width"]), height: n(parsed["height"]) };
+      } catch {
+        res.writeHead(400);
+        res.end();
+        return;
+      }
+      deps.debugBounds?.set(b);
+      res.writeHead(202, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({}));
+      deps.log?.("[e2e] debug-bounds set " + JSON.stringify(b));
+    });
     return;
   }
   if (path !== "/mode" && path !== "/provider") {
@@ -135,7 +196,10 @@ export function startE2EControl(deps: E2EControlDeps): Promise<number> {
   const port = parseInt(raw, 10);
   let server: Server | null = null;
   try {
-    server = createServer((req, res) => handlePost(deps, req, res));
+    server = createServer((req, res) => {
+      if (req.method === "GET") handleGet(deps, req, res);
+      else handlePost(deps, req, res);
+    });
   } catch (e) {
     return Promise.reject(e);
   }

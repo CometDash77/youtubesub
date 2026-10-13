@@ -124,11 +124,20 @@ export function default_settings(): Settings {
     display: { mode: "bilingual", order: "trans_first", history_lines: 2,
                font_size: 10, font_bold: "none", stroke: 1.5,
                bg_color: [0, 0, 0], bg_opacity: 150 },
-    // Animation tuning area (#222): the prototype's four parameters. The
+    // Animation tuning area (#222): the prototype's parameters. The
     // defaults are the prototype's mid feel; #214 owns the final numbers.
-    anim: { fade_delay: 1.2, dur: 0.24, shrink: 0.72,
+    // shrink died with #226/#227: the control bar is its own window, the
+    // overlay never scales its rows. Old files keep the dead key on disk
+    // (shallow merge, silent ignore).
+    anim: { fade_delay: 1.2, dur: 0.24,
             ease: "cubic-bezier(.22,1,.36,1)" },
     window: { x: null, y: null, w: 380, h: 64 },
+    // #232: the debug/settings window's own bounds - an independent section
+    // (never the overlay's `window`). All null = never persisted, a normal
+    // state: the window then opens at the model's fitted size. Written raw on
+    // hide/close by the debug host; clamped back into the work area only on
+    // restore (restore_debug_bounds). Shell keys stay out of TUNING_FIELDS.
+    debug_window: { x: null, y: null, w: null, h: null },
     server: { port: 9877 },
   };
 }
@@ -187,18 +196,15 @@ export const TUNING_FIELDS: readonly FieldSpec[] = [
   _tune(["display", "bg_opacity"], "display", "底板浓淡", "slider", 150,
         { min: 0, max: 255, step: 1, notify_overlay: true,
           hint: "越小越透，能看见后面的画面" }),
-  // ---- motion (#222): the animation tuning area, the prototype's four
-  // parameters. Float-step sliders keep decimals (only the integer pair
-  // rounds) - see _clamp_number and the tuning-page slider branches.
+  // ---- motion (#222/#227): the animation tuning area. Float-step sliders
+  // keep decimals (only the integer pair rounds) - see _clamp_number and
+  // the tuning-page slider branches. anim.shrink left the table (#226).
   _tune(["anim", "fade_delay"], "motion", "淡出延迟", "slider", 1.2,
         { min: 0.0, max: 3.0, step: 0.1, unit: "秒", notify_overlay: true,
           hint: "控制条弹出后，字幕等多久才开始淡出" }),
   _tune(["anim", "dur"], "motion", "动画时长", "slider", 0.24,
         { min: 0.05, max: 0.6, step: 0.01, unit: "秒", notify_overlay: true,
           hint: "淡出、恢复这一下用多长时间" }),
-  _tune(["anim", "shrink"], "motion", "字幕缩小比", "slider", 0.72,
-        { min: 0.5, max: 1.0, step: 0.01, notify_overlay: true,
-          hint: "控制条弹出时字幕缩到多大；1 = 不缩小" }),
   _tune(["anim", "ease"], "motion", "缓动曲线", "choice", "cubic-bezier(.22,1,.36,1)",
         { choices: ["cubic-bezier(.22,1,.36,1)", "ease-out", "ease", "linear"],
           labels: ["柔和收尾", "快速启动", "标准", "匀速"],
@@ -231,7 +237,7 @@ export const TUNING_FIELDS: readonly FieldSpec[] = [
 ];
 
 // Animation presets (#222): one click fills anim.dur + anim.fade_delay from
-// the prototype (shrink/ease stay untouched, same as the prototype). The
+// the prototype (ease stays untouched; #227: shrink is gone entirely). The
 // numbers mirror app/prototype/213-three-states; #214 owns the final values.
 export const ANIM_PRESETS = {
   fast: { label: "快", dur: 0.18, fade_delay: 0.6 },

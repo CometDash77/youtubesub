@@ -11,14 +11,14 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import * as S from "../lib/settings.ts";
 
-// The 20 authoritative paths, in page order (display.font_size joined per
+// The 19 authoritative paths, in page order (#227: shrink left the table) (display.font_size joined per
 // decision #167; the motion group joined per #222).
 const SPEC_PATHS: S.TuningPath[] = [
   ["display", "font_size"],
   ["display", "mode"], ["display", "order"], ["display", "history_lines"],
   ["display", "font_bold"], ["display", "stroke"], ["display", "bg_color"],
   ["display", "bg_opacity"],
-  ["anim", "fade_delay"], ["anim", "dur"], ["anim", "shrink"], ["anim", "ease"],
+  ["anim", "fade_delay"], ["anim", "dur"], ["anim", "ease"],
   ["provider", "timeout_s"], ["provider", "max_concurrent"], ["server", "port"],
   ["prefetch", "lead_s"], ["prefetch", "max_groups"],
   ["prefetch", "seek_debounce_ms"], ["batch", "max_groups"], ["batch", "max_chars"],
@@ -173,7 +173,7 @@ test("restart and uncalibrated flags match the spec", () => {
       ["display", "font_bold"], ["display", "stroke"], ["display", "bg_color"],
       ["display", "bg_opacity"],
       // #222: the animation values reach the overlay through the plan push.
-      ["anim", "fade_delay"], ["anim", "dur"], ["anim", "shrink"], ["anim", "ease"],
+      ["anim", "fade_delay"], ["anim", "dur"], ["anim", "ease"],
     ]));
   const groups = new Set(S.TUNING_FIELDS.map((f) => f.group));
   assert.deepEqual(groups, new Set(S.TUNING_GROUPS));
@@ -214,4 +214,6 @@ test("anim fields fall back to defaults on old or broken configs", () => {
   assert.equal(S.display_value(fade, { anim: { fade_delay: 2.5 } }), 2.5);
   const ease = S.field_by_path(["anim", "ease"]);
   assert.equal(S.display_value(ease, { anim: { ease: "nope" } }), "cubic-bezier(.22,1,.36,1)");
+  // #226 spec §6: anim.shrink left the table - the path is dead, not silent.
+  assert.throws(() => S.field_by_path(["anim", "shrink"]), /not tunable/);
 });

@@ -1,0 +1,1081 @@
+[assistant]
+The user is asking me to execute issue #227 from CometDash77/youtubesub, following the wayfinder skill rules. Let me start by reading the current state of the issue.
+
+First steps per the wayfinder checklist:
+1. Read the issue fully (body / comments / labels / assignee / parent-child and blocking edges)
+2. Check if it's claimed; if not, claim it
+3. Determine what stage it's in
+
+The tools available: deck_* tools (deck_context, deck_issue_get, etc.). The AGENTS.md says issues live as GitHub issues in CometDash77/youtubesub driven by gh CLI, but the user's checklist says "issue 相关操作优先使用 deck_ 开头的工具处理" — prefer deck_ tools. Also there's the mandatory capability selection: call deck_context first.
+
+Let me start:
+1. deck_context — confirm workspace and backend
+2. deck_issue_get for #227 with blocking edges
+3. Then decide the stage
+
+Let me do that. deck_context first (required before other deck tools).
+
+[assistant • run_code]
+{"code":"const ctx = await tools.deck_context({});\nconsole.log(\"=== deck_context ===\");\nconsole.log(ctx.status);\nconsole.log(ctx.text);\n","description":"Read deck context for workspace and backend"}
+
+[tool • run_code]
+=== deck_context ===
+ok
+这里是 d:\documents\vibe\youtubesub，后端 github（explicit，用户手动选择 > 锚文件 > 自动识别），仓库 CometDash77/youtubesub，地图 16 张。
+
+[assistant]
+Backend is github, repo CometDash77/youtubesub. Now read issue #227 fully: deck_issue_get with blocking=true to get all edges.
+
+[assistant • run_code]
+{"code":"const issue = await tools.deck_issue_get({ key: \"227\", blocking: true });\nconsole.log(issue.status);\nconsole.log(issue.text);\n","description":"Read issue #227 full details"}
+
+[tool • run_code]
+ok
+票 227 读回来了：状态 open，父票 225，被阻塞 1 条，阻塞别人 0 条。
+
+[assistant]
+The text summary is thin. I need the full body. deck_issue_get returned just a summary text? The tool output format is { status, text }. Hmm, the text says "票 227 读回来了：状态 open，父票 225，被阻塞 1 条，阻塞别人 0 条。" That's not the full body. Maybe I need to check if there's more detail. The ToolOutputMap for deck_issue_get is { status: string; text: string; } & Record<string, JsonValue> — maybe there are extra fields. Let me print the whole JSON object.
+
+[assistant • run_code]
+{"code":"const issue = await tools.deck_issue_get({ key: \"227\", blocking: true });\nconsole.log(JSON.stringify(issue, null, 2));\n","description":"Read issue #227 raw JSON output"}
+
+[tool • run_code]
+{
+  "ok": true,
+  "status": "ok",
+  "tool": "deck_issue_get",
+  "reason": "",
+  "text": "票 227 读回来了：状态 open，父票 225，被阻塞 1 条，阻塞别人 0 条。",
+  "workspace": {
+    "root": "d:\\documents\\vibe\\youtubesub",
+    "key": "753a1cc6"
+  },
+  "backend": {
+    "id": "github",
+    "source": "explicit"
+  },
+  "repo": {
+    "backend": "github",
+    "refId": "CometDash77/youtubesub",
+    "name": "CometDash77/youtubesub",
+    "url": "https://github.com/CometDash77/youtubesub"
+  },
+  "cost": {
+    "estimated": {
+      "points": 6,
+      "requests": 3,
+      "withinCallCap": true,
+      "shards": 1,
+      "perShard": 1,
+      "text": "这次 deck_issue_get 预计花 6 点、3 条出站请求，在硬顶之内。"
+    },
+    "actual": {
+      "requests": 6,
+      "points": 6,
+      "remaining": 1626,
+      "tier": "green"
+    }
+  },
+  "data": {
+    "ticket": {
+      "key": "227",
+      "title": "浮窗控制条外置实施：第二控制条窗口、跟随联动、状态机与渲染层改造、测试改写（既有功能零丢失）",
+      "state": "open",
+      "type": "issue",
+      "labels": [
+        "wayfinder:task"
+      ],
+      "assignees": [],
+      "updatedAt": "2026-10-13T07:21:41Z",
+      "closedAt": "",
+      "url": "https://github.com/CometDash77/youtubesub/issues/227",
+      "body": "<!-- DSH-IDEMPOTENCY-KEY: deck-plan-controls-externalize-map-child-impl -->\n## Question\n\n浮窗控制条外置实施：第二控制条窗口、跟随联动、状态机/渲染层/设置面板改造、测试改写与真人眼验，既有浮窗功能零丢失。\n\n## 输入\n\n- 上游：外置规格票（本图子票，原生 blocked-by 边）。\n\n## 验收标准\n\n- tsc --noEmit 0 error；app 全套测试通过（overlay-states.test.ts 按外置语义改写）；userscript 53/53 不动；npm run build 净。\n- MANUAL-ACCEPTANCE 新增外置控制条真人眼验节并走查；#212 性能闸（悬停淡入 ≤200ms、rAF p95 ≤18ms、CPU ≤+5%、内存 ≤+50MB）跨窗悬停沿用。\n- /status overlay_state 三值不变；四语义与命令通道零改动。\n\n## 进度\n\n- (2026-10-13) 建图会话立票，被规格票阻塞。\n\n**真实状态（2026-10-13）：blocked（等规格票）。**"
+    },
+    "excerpt": "<!-- DSH-IDEMPOTENCY-KEY: deck-plan-controls-externalize-map-child-impl -->\n## Question\n\n浮窗控制条外置实施：第二控制条窗口、跟随联动、状态机/渲染层/设置面板改造、测试改写与真人眼验，既有浮窗功能零丢失。\n\n## 输入\n\n- 上游：外置规格票（本图子票，原生 blocked-by 边）。\n\n## 验收标准\n\n- tsc --noEmit 0 error；app 全套测试通过（overlay-states.test.ts 按外置语义改写）；userscript 53/53 不动；npm run build 净。\n- MANUAL-ACCEPTANCE 新增外置控制条真人眼验节并走查；#212 性能闸（悬停淡入 ≤200ms、rAF p95 ≤18ms、CPU ≤+5%、内存 ≤+50MB）跨窗悬停沿用。\n- /status overlay_state 三值不变；四语义与命令通道零改动。\n\n## 进度\n\n- (2026-10-13) 建图会话立票，被规格票阻塞。\n\n**真实状态（2026-10-13）：blocked（等规格票）。**",
+    "section": null,
+    "relations": {
+      "parentKey": "225",
+      "blockedBy": [
+        "226"
+      ],
+      "blocking": []
+    },
+    "landings": {
+      "parent": "契约的父子列（分不出是原生层级还是平级链接，别把它当成原生层级）",
+      "blockedBy": "契约的依赖列（分不出是原生边还是正文行）",
+      "caveat": "这两个落点是从契约返回的字段读出来的；要精确知道这个后端把父子放在原生层级还是平级链接，看返回里本次写操作留下的 evidence（deck_map_link 会写）。"
+    },
+    "comments": [],
+    "dependenciesRaw": {
+      "blockedBy": [
+        {
+          "key": "226",
+          "title": "浮窗控制条外置规格：第二窗口拓扑、跟随翻转、悬停桥接、穿透态外置区与动效收缩（spec）",
+          "state": "closed"
+        }
+      ],
+      "blocking": []
+    }
+  },
+  "items": [],
+  "notes": [],
+  "readBack": null,
+  "touched": []
+}
+
+[assistant]
+Now I have the full picture:
+
+**Issue #227**: "浮窗控制条外置实施：第二控制条窗口、跟随联动、状态机与渲染层改造、测试改写（既有功能零丢失）"
+- State: open
+- Labels: `wayfinder:task`
+- Assignees: [] (unclaimed — need to claim first per wayfinder rules)
+- Parent: #225 (map)
+- Blocked by: #226 — "浮窗控制条外置规格：第二窗口拓扑、跟随翻转、悬停桥接、穿透态外置区与动效收缩（spec）" — state: **closed**
+- Comments: []
+- Body says: "真实状态（2026-10-13）：blocked（等规格票）" — but #226 is now closed, so the blocker is satisfied.
+
+Wayfinder rules: 
+1. Claim first (assign to self) before any work.
+2. This is a `wayfinder:task` type — Task tickets "does rather than decides". This one is clearly an execution ticket (实施).
+3. The user's checklist has 阶段闸门: read issue state first, if it has needs-triage label it must be diagnosed first. This ticket has only `wayfinder:task` label, no `needs-triage`. So no triage prerequisite.
+4. The upstream spec ticket #226 is closed — I should read it to get the spec (zoom as needed: fetch full body of related closed tickets).
+
+Plan:
+1. Claim #227 (assign to self). Who is "self"? The wayfinder says "assign it to the dev driving the map". I need to know the assignee identity. Let me check who I am on GitHub — probably via gh CLI. The AGENTS.md says issues driven by gh CLI. deck tools assignees. I could use `gh api user` to get my login.
+
+Actually let me first read #226 (the spec) and the map #225 to understand the whole context. Then claim.
+
+2. Read map #225 for the Notes (domain, skills to consult).
+
+3. Then implement: this is a real implementation task — second control-bar window, follow linkage, state machine/render layer/settings panel changes, test rewrites. Big task. Acceptance criteria:
+   - tsc --noEmit 0 errors
+   - app full test suite passes (overlay-states.test.ts rewritten per external semantics)
+   - userscript 53/53 unchanged
+   - npm run build clean
+   - MANUAL-ACCEPTANCE new external control bar human-eye-verification section and walkthrough
+   - #212 performance gates (hover fade-in ≤200ms, rAF p95 ≤18ms, CPU ≤+5%, memory ≤+50MB) cross-window hover
+   - /status overlay_state three values unchanged; four semantics and command channel zero changes
+
+Let me get my identity, read #225 and #226 in parallel.
+
+[assistant • run_code]
+{"code":"const [map, spec] = await Promise.all([\n  tools.deck_issue_get({ key: \"225\", blocking: false }),\n  tools.deck_issue_get({ key: \"226\", blocking: false }),\n]);\nconsole.log(\"=== MAP #225 ===\");\nconsole.log(JSON.stringify(map.data?.ticket ? {\n  title: map.data.ticket.title,\n  labels: map.data.ticket.labels,\n  body: map.data.ticket.body,\n  relations: map.data.ticket.relations,\n  comments: map.data.comments?.length ?? 0,\n} : map, null, 2));\nconsole.log(\"=== SPEC #226 (closed) ===\");\nconsole.log(JSON.stringify(spec.data?.ticket ? {\n  title: spec.data.ticket.title,\n  labels: spec.data.ticket.labels,\n  state: spec.data.ticket.state,\n  body: spec.data.ticket.body,\n} : spec, null, 2));\nconsole.log(\"=== SPEC #226 comments count:\", spec.data?.comments?.length ?? 0, \"===\");\nif (spec.data?.comments?.length) {\n  for (const c of spec.data.comments) console.log(\"--- comment:\", (c.body || c.text || JSON.stringify(c)).slice(0, 4000));\n}\n","description":"Read map #225 and spec ticket #226"}
+
+[tool • run_code]
+=== MAP #225 ===
+{
+  "title": "浮窗控制条外置",
+  "labels": [
+    "wayfinder:map"
+  ],
+  "body": "<!-- DSH-IDEMPOTENCY-KEY: deck-plan-controls-externalize-map-map -->\n## Destination\n\n鼠标悬停浮窗时，标题区 + 四语义控制条（含穿透解锁锁）出现在浮窗可见框**之外**（第二控制条窗口承载，正下贴边、屏幕边缘放不下时自动翻转到上方），浮窗内恢复纯字幕；既有四语义、命令通道、三态状态机语义保留，字幕缩小动效取消。\n\n## Notes\n\n- 领域：Electron 桌面浮窗（app/，TS）。既有事实锚点：无头状态机 app/src/main/overlay.ts（OverlayDisplay / overlay_recompute / paint_plan / anim_vars）；窗口与 IPC app/src/main/main.ts（overlay-mouse 拖拽/8 边 resize 机、setClickThrough、5s topmost 脉冲）；渲染层 app/src/renderer/index.html + renderer.ts（哑渲染）。\n- 硬约束：Electron 窗口内容画不出窗口边界 → 外置必须第二窗口承载（定案 Q2）。\n- 本图推翻 #221/#214 中「控制条在窗内」的放置决议；四语义严格锁定（播放/暂停、±15s、进度条 seek、静音）、命令通道、/status overlay_state 三值**原样保留**。\n- 技能：spec/实施会话按需 grilling + domain-modeling；术语节 CONTEXT.md「浮窗三态（#211）」随 spec 同步修订。\n- 已定案七项（2026-10-13）：正下贴边+边缘翻转、标题区随迁；第二窗承载；解锁锁外置；沿用 anim.fade_delay 作悬停桥接容差；取消字幕缩小（shrink 参数与设置面板滑杆下线，动效降为时长+延迟两参数）；直接替换窗内控制条不留开关；范围只 Electron 桌面端（userscript/协议/WS 零改动），验收沿用 tsc 0 error + app 全套测试 + MANUAL-ACCEPTANCE 真人眼验 + #212 性能闸。细节以 Decisions so far 定案票为准。\n\n## Decisions so far\n\n- [浮窗控制条外置交互定案（grilling）](https://github.com/CometDash77/youtubesub/issues/228): 七问定案——正下贴边+边缘翻转、标题区随迁、第二窗承载、解锁锁外置、沿用 fade_delay 作悬停桥接、取消字幕缩小（动效降两参数）、直接替换不留开关、范围只桌面端\n- [浮窗控制条外置规格（spec）](https://github.com/CometDash77/youtubesub/issues/226): 十项规格定案——bar 窗拓扑（focusable=false、常驻 opacity+ignore 双门控）、bar_geometry 纯函数正贴/翻转/双屏 clamp、宽限计时器在 main（fade_delay 容差）、穿透锁外置 + plan.overlay_hover、shrink 静默忽略不迁移（ease 保留）、标题区随迁 + 拖拽转发、零丢失核对表、测试改写面与 MANUAL-ACCEPTANCE 外置节、CONTEXT.md 增量修订文案\n\n## Not yet specified\n\n- 外置控制条视觉规格：宽度/圆角/配色/与浮窗间距（#213 原型是窗内版，外置版观感待实施后真人眼验对齐）。\n\n## Out of scope\n\n- userscript / 协议 / WS 服务端任何改动（定案 Q7 零改动）。\n- 新控制语义（爱心/音量条/关闭/设置按钮，#221 严格排除延续）。\n- 窗内控制条模式开关或回退路径（定案 Q6 直接替换）。\n- prefers-reduced-motion（#214 已裁出，延续）。\n\n## 进度\n\n- (2026-10-13) 建图：grilling 七问定案（定案票随建随闭），规格票与实施票已立，实施 blocked-by 规格（原生边）。\n- (2026-10-13) 规格票完成关闭：翻转几何与 anim.shrink 兼容策略毕业为规格决议；Not yet specified 仅剩外置视觉规格（实施后眼验）。\n- **真实状态：图已立；frontier = 实施票 #227（规格关闭后已解锁）。**",
+  "comments": 0
+}
+=== SPEC #226 (closed) ===
+{
+  "title": "浮窗控制条外置规格：第二窗口拓扑、跟随翻转、悬停桥接、穿透态外置区与动效收缩（spec）",
+  "labels": [
+    "ready-for-agent",
+    "wayfinder:task"
+  ],
+  "state": "closed",
+  "body": "<!-- DSH-IDEMPOTENCY-KEY: deck-plan-controls-externalize-map-child-spec -->\n## Question\n\n把外置定案固化为可实施规格：第二控制条窗口拓扑、跟随与翻转规则、悬停桥接、穿透态外置区行为、状态机与动效参数收缩、既有功能零丢失安置。\n\n## 输入\n\n- 上游：外置交互定案票（七问决议，见地图 Decisions so far 首行）。\n- 既有事实：app/src/main/overlay.ts 无头状态机（OverlayDisplay / overlay_recompute / paint_plan / anim_vars）；app/src/main/main.ts 窗口与 IPC（overlay-mouse 拖拽与 8 边 resize 机、setClickThrough、5s topmost 脉冲）；app/src/renderer 渲染层三块 DOM。\n\n## 待固化清单\n\n1. 第二窗口拓扑：BrowserWindow 参数（frameless / transparent / alwaysOnTop / skipTaskbar / focusable=false）、与主窗 z 序同步、显示/隐藏时机；\n2. 跟随几何：浮窗移动 / resize / 托盘重置时控制条窗口重定位策略（事件源与节流）、正下贴边偏移量、workArea 边缘翻转规则（含多显示器/负坐标）；\n3. 悬停桥接：离浮窗→等 fade_delay→移入外置条取消淡出的完整事件流（两窗 mouseenter/leave 次序竞态、穿透 forward:true 路径）；\n4. 穿透态外置区：悬停浮窗→外置区仅浮现解锁锁（播放控制隐藏），点击解锁落字幕态（不落控制态，#211 决议延续）；\n5. 状态机改动：OverlayDisplay 三态语义保留；shrink 下线后 anim_vars / paint_plan / 渲染 CSS 的收缩路径删除；\n6. anim.shrink 键下线的 setting.json 兼容策略（静默忽略 or 迁移）；\n7. 标题区外置后的渲染安置（随控制条窗口，单行 ellipsis 语义不变）；\n8. 零丢失核对：右键菜单（浮窗内唤出不变）、拖拽 / 8 边 resize、Ctrl+Alt+U、失败红行/占位行/分割线/外观键逐项安置；\n9. 测试与验收口径：overlay-states.test.ts 改写面、MANUAL-ACCEPTANCE 外置节、#212 性能闸跨窗适用性；\n10. CONTEXT.md「浮窗三态」术语节修订文案。\n\n## Out of Scope\n\n- 实施改动（下游实施票）；userscript / 协议 / WS（定案零改动）；新控制语义（严格排除）。\n\n## 进度\n\n- (2026-10-13) 建图会话立票，未认领。\n- (2026-10-13) 本会话认领（@me）；以定案七问 + 代码事实（overlay.ts / main.ts / renderer / preload / settings.ts TUNING_FIELDS、#212 微基准）固化十项规格于 resolution 评论，逐项对抗式自查。\n\n**真实状态（2026-10-13）：规格完成并关闭；实施票 #227 解锁。**"
+}
+=== SPEC #226 comments count: 1 ===
+--- comment: ## 外置控制条实施规格（#228 七问 → #227 实施输入）
+
+规格按待固化清单 1–10 逐项落定。除注明外，坐标一律 DIP（Electron bounds 原生口径，负坐标天然成立）。
+
+### 1. 第二控制条窗口（bar）拓扑
+
+- 新增 `barWin = new BrowserWindow({ frame:false, transparent:true, alwaysOnTop:true, skipTaskbar:true, resizable:false, hasShadow:false, focusable:false, show:false })`；`ready-to-show` 后定一次几何再 show，此后**常驻，不再 show/hide**。webPreferences 与主浮窗同口径（preload `dist/preload/preload.cjs`、contextIsolation:true、nodeIntegration:false；preload 零改动复用）。
+- **focusable=false 定案**：点击 bar 不抢焦点（不激活窗口、仍收鼠标），播放控制不打断看片；主浮窗 focusable 维持现状（零行为差异）。
+- 装载 `dist/renderer/bar.html + bar.js`（经典脚本、import-free，同 renderer.ts 约束；tsconfig.build `src/**/*` 自动发出；build.mjs 增一行 bar.html 拷贝）。
+- 创建时机：随 `startProductStack()`；scene 骨架模式（SKELETON_SCENE）不创建；`YOUTUBESUB_E2E_OFFSCREEN=1` 时与主浮窗同门控 `show:false`。
+- **显隐 = opacity + ignore 双门控**：不可见态由 ① renderer `opacity:0` 过渡 + ② main 侧 `barWin.setIgnoreMouseEvents(true,{forward:true})`。理由：淡出宽限期需要窗在场，show/hide 会掐掉过渡；ignore+forward 让不可见态对桌面零干扰（forward 合成 enter/leave 正是桥接依赖的路径）。
+- z 序：与主浮窗同为 alwaysOnTop；5s topmost 脉冲改双窗（先浮窗后 bar，各 `setAlwaysOnTop(true)+moveTop()`）。bar 与浮窗不重叠（GAP=8，正贴/翻转两种位形都不叠），相对 z 序无感。
+
+### 2. 跟随几何（移动 / resize / 翻转 / 多显示器 / 负坐标）
+
+- **事件源（单一）**：监听主浮窗 `move` + `resize`（拖拽 / 8 边 resize 循环里的 setPosition/setBounds 天然发出；persistGeometry 落盘不变），加 `screen.on('display-metrics-changed')` 兜底（拔插显示器 / 改分辨率 / 托盘重显后重定位）。**不节流**：实测 setPosition 492µs，与浮窗拖拽同频各一次在 #212 CPU 预算内；复测超闸的升级路径 = rAF 合帧，先不做。
+- 计算收敛为 overlay.ts 导出纯函数（零相对导入口径不变，node --test 直测）：
+  `bar_geometry(overlay: Rect, workArea: Rect, opts {gap, minW, barH}) -> Rect`
+  1. `w = max(overlay.w, 260)`；`x = overlay.x + (overlay.w - w)/2`，再 clamp 进 `[wa.x, wa.x+wa.width-w]`；
+  2. 正贴 `y = overlay.y + overlay.h + GAP(=8)`；若 `y + barH > wa.y + wa.height` → 翻转 `y = overlay.y - GAP - barH`；
+  3. 翻转后再 clamp y 进 workArea（浮窗自身跨上下边缘时正贴优先）。
+- 多显示器归属：`screen.getDisplayMatching(浮窗 bounds)` 取 workArea 判定（Electron 取最大交集屏）；拖拽途中跨屏幕下边缘实时翻转（期望行为）。
+- bar 高度常量 `BAR_HEIGHT=96`（标题行 + 控制行 + 上下留白），实施期可微调，只动常量与入参。
+
+### 3. 悬停桥接（两窗 enter/leave 竞态与穿透路径）
+
+- 通道复用：仍只有 `overlay-hover` 一个 IPC 通道；main 按 `e.sender` 区分浮窗位 / bar 位两个 hover 位。
+- **宽限计时器在 main**（时机不归状态机原则）：任一位 hover(true) → 清计时器 + `set_overlay_hover(true)`；位转 false 且另一位仍 true → 不动；否则起 `settings.anim.fade_delay` 秒计时器 → 到点 `set_overlay_hover(false)`。期间任一位转 true 即取消。不另立参数（228④）。
+- OverlayDisplay 状态机零改动：瞬时翻转 + frozen 冻结 + click_through 优先；`overlay-states.test.ts` 转移断言原样成立（计时器在 main，单测不经过）。视觉结果与旧窗内版一致：进（任一窗）立即显示，离（两窗都离）等 fade_delay 再淡出。
+- CSS：bar 淡入淡出都用 `--dur/--ease`，**离开声明不再挂 CSS 延迟**（延迟被 main 计时器消费）。
+- 竞态：浮窗 leave → 计时器起 → bar enter → 取消，跨两窗 IPC（实测 RTT 0.1ms）最坏闪一帧 subtitles，bar 进入声明无延迟即恢复；两窗几何相邻（GAP=8），中间缝隙短暂无归属即宽限期本义。
+- 已知边界：forward:true 的 leave 合成缺失风险与主浮窗同源；main 计时器即兜底（漏掉的 leave 最迟 fade_delay 后落 subtitles）。
+- **/status 语义变化（记录在案）**：出窗后 `overlay_state` 保持 `controls` 至宽限到点（三值不变，时机后移 fade_delay）。
+
+### 4. 穿透态外置区（解锁锁）
+
+- 浮窗 renderer：`#unlock`/`.hot` 全部移除；ct 模式 mousemove 热点分支（elementFromPoint / closest('.hot') / 'set-ignore' 切换）整体删除；浮窗 passthrough 恒 `ignore(true,{forward:true})`（setClickThrough 已做），body.ct 只留状态行提示文案。
+- bar：`plan.state=='passthrough' && plan.overlay_hover==true` 时浮现**仅解锁锁**（播放控制隐藏，同一窗口两种内容形态）；点击走既有 `unlock-through` 通道（main setClickThrough(false) 完整翻转 → subtitles）。
+- presence 信号：`PaintPlan` 增 **additive** 字段 `overlay_hover: boolean`（OverlayDisplay 私有位公开进 plan；进程内 IPC，非 wire 协议，/status 不动）。ct 态浮窗 renderer 在 mousemove 时发 hover ping（≥50ms 节流，重挂 main 计时器）；cursor 离开浮窗 = ping 停止 → 计时器到点 presence 消失，bar 淡出（容差同为 fade_delay，228④ 同源）。
+- 解锁落 subtitles 不落 controls（#211）不变：`set_overlay_click_through(false)` 清 hover 位，原断言成立。
+
+### 5. 状态机与渲染层改动面（shrink 收缩路径删除）
+
+- overlay.ts：三态语义零改动；`AnimVars`/`anim_vars()`/`FALLBACK_ANIM_NUMS` 删 `shrink`（fade_delay/dur/ease 保留）；`PaintPlan` 增 `overlay_hover`；新增 `bar_geometry` 纯函数。
+- **ease 保留的边界澄清**：228⑤「动效降为两参数」指可调核心 = 时长 + 淡出延迟（快中慢预设只动这两值，语义不变）；缓动键七问未点名下线，且 bar 过渡仍消费 `--ease`，故 `anim.ease` 保留在动效组。
+- index.html（浮窗）：删 `--shrink` 变量与 `body.state-controls #rows scale` 规则；删 `#ctl`/`#ctl-title`/`#unlock` DOM
+
+[assistant]
+The spec comment is truncated at 4000 chars. I need the rest of the spec comment (items 5-10 continue). Let me get the full comment. Also I should check who I am on GitHub for claiming.
+
+Let me fetch the full comment text without truncation, and also check gh identity.
+
+[assistant]
+<acp tokens="24" type="text">m00016</acp>
+规格评论被截断了，取全文，同时确认 GitHub 身份用于认领。
+
+[assistant • run_code]
+{"code":"const spec = await tools.deck_issue_get({ key: \"226\", blocking: false });\nconst comments = spec.data?.comments ?? [];\nfor (let i = 0; i < comments.length; i++) {\n  const c = comments[i];\n  console.log(`=== comment ${i} (author=${c.author ?? \"?\"}) len=${(c.body || \"\").length} ===`);\n  console.log(c.body);\n}\n","description":"Read full spec comment from #226"}
+
+[assistant • run_code]
+{"code":"const { execSync } = await import(\"node:child_process\");\nconst login = execSync(\"gh api user --jq .login\", { encoding: \"utf8\" }).trim();\nconsole.log(\"login:\", login);\n","description":"Get GitHub identity via gh CLI"}
+
+[tool • run_code]
+=== comment 0 (author=[object Object]) len=6975 ===
+## 外置控制条实施规格（#228 七问 → #227 实施输入）
+
+规格按待固化清单 1–10 逐项落定。除注明外，坐标一律 DIP（Electron bounds 原生口径，负坐标天然成立）。
+
+### 1. 第二控制条窗口（bar）拓扑
+
+- 新增 `barWin = new BrowserWindow({ frame:false, transparent:true, alwaysOnTop:true, skipTaskbar:true, resizable:false, hasShadow:false, focusable:false, show:false })`；`ready-to-show` 后定一次几何再 show，此后**常驻，不再 show/hide**。webPreferences 与主浮窗同口径（preload `dist/preload/preload.cjs`、contextIsolation:true、nodeIntegration:false；preload 零改动复用）。
+- **focusable=false 定案**：点击 bar 不抢焦点（不激活窗口、仍收鼠标），播放控制不打断看片；主浮窗 focusable 维持现状（零行为差异）。
+- 装载 `dist/renderer/bar.html + bar.js`（经典脚本、import-free，同 renderer.ts 约束；tsconfig.build `src/**/*` 自动发出；build.mjs 增一行 bar.html 拷贝）。
+- 创建时机：随 `startProductStack()`；scene 骨架模式（SKELETON_SCENE）不创建；`YOUTUBESUB_E2E_OFFSCREEN=1` 时与主浮窗同门控 `show:false`。
+- **显隐 = opacity + ignore 双门控**：不可见态由 ① renderer `opacity:0` 过渡 + ② main 侧 `barWin.setIgnoreMouseEvents(true,{forward:true})`。理由：淡出宽限期需要窗在场，show/hide 会掐掉过渡；ignore+forward 让不可见态对桌面零干扰（forward 合成 enter/leave 正是桥接依赖的路径）。
+- z 序：与主浮窗同为 alwaysOnTop；5s topmost 脉冲改双窗（先浮窗后 bar，各 `setAlwaysOnTop(true)+moveTop()`）。bar 与浮窗不重叠（GAP=8，正贴/翻转两种位形都不叠），相对 z 序无感。
+
+### 2. 跟随几何（移动 / resize / 翻转 / 多显示器 / 负坐标）
+
+- **事件源（单一）**：监听主浮窗 `move` + `resize`（拖拽 / 8 边 resize 循环里的 setPosition/setBounds 天然发出；persistGeometry 落盘不变），加 `screen.on('display-metrics-changed')` 兜底（拔插显示器 / 改分辨率 / 托盘重显后重定位）。**不节流**：实测 setPosition 492µs，与浮窗拖拽同频各一次在 #212 CPU 预算内；复测超闸的升级路径 = rAF 合帧，先不做。
+- 计算收敛为 overlay.ts 导出纯函数（零相对导入口径不变，node --test 直测）：
+  `bar_geometry(overlay: Rect, workArea: Rect, opts {gap, minW, barH}) -> Rect`
+  1. `w = max(overlay.w, 260)`；`x = overlay.x + (overlay.w - w)/2`，再 clamp 进 `[wa.x, wa.x+wa.width-w]`；
+  2. 正贴 `y = overlay.y + overlay.h + GAP(=8)`；若 `y + barH > wa.y + wa.height` → 翻转 `y = overlay.y - GAP - barH`；
+  3. 翻转后再 clamp y 进 workArea（浮窗自身跨上下边缘时正贴优先）。
+- 多显示器归属：`screen.getDisplayMatching(浮窗 bounds)` 取 workArea 判定（Electron 取最大交集屏）；拖拽途中跨屏幕下边缘实时翻转（期望行为）。
+- bar 高度常量 `BAR_HEIGHT=96`（标题行 + 控制行 + 上下留白），实施期可微调，只动常量与入参。
+
+### 3. 悬停桥接（两窗 enter/leave 竞态与穿透路径）
+
+- 通道复用：仍只有 `overlay-hover` 一个 IPC 通道；main 按 `e.sender` 区分浮窗位 / bar 位两个 hover 位。
+- **宽限计时器在 main**（时机不归状态机原则）：任一位 hover(true) → 清计时器 + `set_overlay_hover(true)`；位转 false 且另一位仍 true → 不动；否则起 `settings.anim.fade_delay` 秒计时器 → 到点 `set_overlay_hover(false)`。期间任一位转 true 即取消。不另立参数（228④）。
+- OverlayDisplay 状态机零改动：瞬时翻转 + frozen 冻结 + click_through 优先；`overlay-states.test.ts` 转移断言原样成立（计时器在 main，单测不经过）。视觉结果与旧窗内版一致：进（任一窗）立即显示，离（两窗都离）等 fade_delay 再淡出。
+- CSS：bar 淡入淡出都用 `--dur/--ease`，**离开声明不再挂 CSS 延迟**（延迟被 main 计时器消费）。
+- 竞态：浮窗 leave → 计时器起 → bar enter → 取消，跨两窗 IPC（实测 RTT 0.1ms）最坏闪一帧 subtitles，bar 进入声明无延迟即恢复；两窗几何相邻（GAP=8），中间缝隙短暂无归属即宽限期本义。
+- 已知边界：forward:true 的 leave 合成缺失风险与主浮窗同源；main 计时器即兜底（漏掉的 leave 最迟 fade_delay 后落 subtitles）。
+- **/status 语义变化（记录在案）**：出窗后 `overlay_state` 保持 `controls` 至宽限到点（三值不变，时机后移 fade_delay）。
+
+### 4. 穿透态外置区（解锁锁）
+
+- 浮窗 renderer：`#unlock`/`.hot` 全部移除；ct 模式 mousemove 热点分支（elementFromPoint / closest('.hot') / 'set-ignore' 切换）整体删除；浮窗 passthrough 恒 `ignore(true,{forward:true})`（setClickThrough 已做），body.ct 只留状态行提示文案。
+- bar：`plan.state=='passthrough' && plan.overlay_hover==true` 时浮现**仅解锁锁**（播放控制隐藏，同一窗口两种内容形态）；点击走既有 `unlock-through` 通道（main setClickThrough(false) 完整翻转 → subtitles）。
+- presence 信号：`PaintPlan` 增 **additive** 字段 `overlay_hover: boolean`（OverlayDisplay 私有位公开进 plan；进程内 IPC，非 wire 协议，/status 不动）。ct 态浮窗 renderer 在 mousemove 时发 hover ping（≥50ms 节流，重挂 main 计时器）；cursor 离开浮窗 = ping 停止 → 计时器到点 presence 消失，bar 淡出（容差同为 fade_delay，228④ 同源）。
+- 解锁落 subtitles 不落 controls（#211）不变：`set_overlay_click_through(false)` 清 hover 位，原断言成立。
+
+### 5. 状态机与渲染层改动面（shrink 收缩路径删除）
+
+- overlay.ts：三态语义零改动；`AnimVars`/`anim_vars()`/`FALLBACK_ANIM_NUMS` 删 `shrink`（fade_delay/dur/ease 保留）；`PaintPlan` 增 `overlay_hover`；新增 `bar_geometry` 纯函数。
+- **ease 保留的边界澄清**：228⑤「动效降为两参数」指可调核心 = 时长 + 淡出延迟（快中慢预设只动这两值，语义不变）；缓动键七问未点名下线，且 bar 过渡仍消费 `--ease`，故 `anim.ease` 保留在动效组。
+- index.html（浮窗）：删 `--shrink` 变量与 `body.state-controls #rows scale` 规则；删 `#ctl`/`#ctl-title`/`#unlock` DOM 与全部相关 CSS；保留 `#rows`/`#status`/`#ctxmenu` 与 ct 提示。
+- renderer.ts：删 `--shrink` setProperty、四命令 / seek / 解锁逻辑（迁 bar.ts）、ct 热点分支；保留 rows/status/ctxmenu 渲染、hover 上报、鼠标转发。
+- 新 bar.html/bar.ts：标题行（单行 ellipsis，`plan.title`）+ 控制行（四语义布局照搬旧 #ctl）+ 解锁锁；seek 本地预览松手一发、四命令与 `mousedown stopPropagation` 原样迁移。
+- main.ts：bar 创建 / 几何跟随 / ignore 门控 / hover 双位计时器 / topmost 双窗脉冲；`overlay-command`、`unlock-through`、`set-ignore`（浮窗自用）、右键菜单模型与托盘**零改动**。
+
+### 6. anim.shrink 下线的 setting.json 兼容
+
+- **定案：静默忽略，不迁移**。`default_settings()` 删 shrink 键；`TUNING_FIELDS` 删该行（调参页表格驱动，动效组自动剩 延迟 / 时长 / 缓动 三键；快中慢预设只动前两）；老文件里的 `anim.shrink` 经 shallow merge 原样留盘，无读取方即死键；不做 load 时写回（死键无害，避免滥用 _normalize_prompt 式写放大先例）。
+- `field_by_path(['anim','shrink'])` 变 KeyError（not tunable），nudgeTuned / 调参页 / apply_edits 天然够不到。
+
+### 7. 标题区外置
+
+- 标题随 bar 渲染：`plan.title` 原字段、单行 ellipsis 不变、只在 controls 态（228①「标题区随迁」）；浮窗内不再出现标题；controls 态浮窗观感 = 纯字幕（与 subtitles 同）。
+- **标题区拖拽零丢失**：bar 标题行按下 → `overlay-mouse` press/move/release 转发（gx/gy 全局 + px/py 相对浮窗坐标，py≥h）→ 主拖拽机 `edge_at` 对越界返回 null → 天然走拖拽路径，浮窗本体被拖、bar 随 move 事件跟随。
+
+### 8. 零丢失核对表
+
+| 既有项 | 安置 |
+|---|---|
+| 右键菜单 10 项 | 浮窗内唤出不变（overlay-menu.ts 模型 / 文案字节不动）；bar contextmenu no-op（不建菜单） |
+| 拖拽 + 8 边 resize | 浮窗机不变；bar 标题区转发拖拽浮窗（见 7） |
+| Ctrl+Alt+U | main 层不变 |
+| 失败红行 / 占位行 / 分割线 / 外观键 / 历史行 | `#rows` 原样，与 bar 无关 |
+| 四语义 + 命令通道 | 逻辑迁 bar，COMMAND_TYPES 白名单零改动 |
+| /status `overlay_state` | 三值不变；宽限期语义见 3（已记录） |
+| E2E 12 条 | 黑盒 /status 口径不变；bar 在 E2E（产品栈 offscreen）下创建但不显示不交互 |
+| 调参页 | 动效组三键 + 预设；表格驱动自动生效 |
+
+### 9. 测试与验收口径
+
+- **新增**：`bar_geometry` 纯函数测试（正贴 / 翻转 / 双屏 clamp / 最小宽 / 负坐标）+ plan `overlay_hover` 位断言。
+- **改写**：`overlay-reread.test.ts` L57–83 anim deepEqual 去 shrink（L61/71/80 三处）；`settings-tuning.test.ts` L21/L176、`debug-tuning-page.test.ts` L134/L173 字段清单去 `["anim","shrink"]`（L173 预设断言改「预设不动缓动」）。`overlay-states.test.ts` 转移 / 载荷断言主体不动。
+- **验收 = #227 票面四条**：tsc 0 error；app 全套测试；userscript 53/53 不动；build 净。外加 MANUAL-ACCEPTANCE 外置节走查 + #212 闸（悬停淡入 ≤200ms、rAF p95 ≤18ms、CPU ≤+5%、内存 ≤+50MB）**跨窗悬停计入**（浮窗 → bar 往返路径纳入采样）。
+- MANUAL-ACCEPTANCE 改写：L1e 删「字幕缩小」条目、四动效参数改三、控制条措辞改外置；新增外置节：正贴 / 翻转（拖浮窗到屏幕下缘）、两窗桥接（浮窗 ↔ bar 往返不闪断）、穿透锁外置浮现、标题区拖拽、fade_delay 调参联动、E2E offscreen 下 bar 不干扰。
+
+### 10. CONTEXT.md「浮窗三态」修订文案（增量并列，既有行零改写）
+
+三态节末尾追加一行（实施票落地）：
+
+> - **外置更新（#226 spec）**: 控制条与标题区外置到浮窗外的第二控制条窗口（正下贴边、屏幕下边缘放不下翻转到上方）；浮窗恢复纯字幕，`controls` 态不再缩小字幕——**缩小比（anim.shrink）废止**，动效参数 = 淡出延迟 / 时长 / 缓动（预设只动前两）；悬停桥接容差 = 淡出延迟（离窗先等延迟，期间移入外置条或重进浮窗即取消淡出）；解锁锁外置，浮窗内零控件。三态名与 `/status overlay_state` 三值不变。
+
+### 对抗式自查（按验收标准）
+
+- 228 七问逐条核对：①正贴+翻转+标题随迁（§2/§7）；②第二窗承载（§1）；③锁外置、浮窗零控件（§4）；④fade_delay 容差不另立参数（§3）；⑤shrink 全链下线 + 预设两参数语义不变（§5/§6）；⑥直接替换不留开关——浮窗 `#ctl` 删除而非隐藏（§5）；⑦范围与验收（§9）。
+- Out of Scope 尊重：无 userscript / 协议 / WS 触碰；无新控制语义；新增面（bar_geometry / 计时器 / plan 字段）全部进程内。
+- 最大风险两处，均已写明：/status 宽限期时机后移（§3 记录在案，三值不变）；forward:true leave 缺失（§3 计时器兜底）。
+- #212 微基准引用：setPosition 492µs（不节流依据）、IPC RTT 0.1ms（双窗桥接依据）、动效帧源走 CSS / compositor（帧源禁令延续）。
+
+**真实状态（2026-10-13）：十项规格全部固化，票关闭；实施票 #227 解锁。**
+
+[tool • run_code]
+Error: code run failed (exception): Error: Command failed: gh api user --jq .login
+To get started with GitHub CLI, please run:  gh auth login
+Alternatively, populate the GH_TOKEN environment variable with a GitHub API authentication token.
+
+    at genericNodeError (node:internal/errors:985:15)
+    at wrappedFn (node:internal/errors:539:14)
+    at checkExecSyncError (node:child_process:939:11)
+    at execSync (node:child_process:1011:15)
+    at eval (eval at runProgram (file:///C:/Users/Administrator/AppData/Local/Programs/DeepSeek%20Harness/resources/app/dsh/node_modules/@deepseek-ai/dsh-ptc-runtime-node/lib/process.js:1030:31), <anonymous>:5:15)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async runProgram (file:///C:/Users/Administrator/AppData/Local/Programs/DeepSeek%20Harness/resources/app/dsh/node_modules/@deepseek-ai/dsh-ptc-runtime-node/lib/process.js:1030:25)
+    at async runNodeMain (file:///C:/Users/Administrator/AppData/Local/Programs/DeepSeek%20Harness/resources/app/dsh/node_modules/@deepseek-ai/dsh-ptc-runtime-node/lib/process.js:1113:3)
+Captured output:
+To get started with GitHub CLI, please run:  gh auth login
+Alternatively, populate the GH_TOKEN environment variable with a GitHub API authentication token.
+
+File sandbox: danger-full-access.
+
+[assistant]
+gh CLI isn't authed in my direct shell env, but the deck tools work (they use some other auth path). The spec ticket's progress note says "本会话认领（@me）" — deck tools use "@me" as assignee. So for claiming #227, I can use deck_issue_patch with assignees: ["@me"].
+
+Status check against the user's checklist:
+- 已认领？未认领（assignees: []）→ 先认领
+- 票已读全 ✓
+- 阶段闸门：票只有 wayfinder:task 标签，没有 needs-triage → 不需要诊断前置。票面进度说 "blocked（等规格票）" 但 #226 已关闭，#227 已解锁（地图进度行确认 "frontier = 实施票 #227（规格关闭后已解锁）"）。
+- 未动工 → 正常进入实施。
+
+Now claim #227 with deck_issue_patch assignees ["@me"], and also use deck_issue_report to report that I'm working on 227.
+
+Then the implementation. This is a big task. Let me now read the actual code:
+- app/src/main/overlay.ts — headless state machine
+- app/src/main/main.ts — windows & IPC
+- app/src/renderer/index.html + renderer.ts
+- app/src/preload
+- app/src/settings.ts (TUNING_FIELDS, default_settings)
+- tests: overlay-states.test.ts, overlay-reread.test.ts, settings-tuning.test.ts, debug-tuning-page.test.ts
+- MANUAL-ACCEPTANCE file
+- CONTEXT.md 浮窗三态 section
+- build.mjs
+- tsconfig.build
+
+Let me claim first, then explore the repo structure.
+
+[assistant]
+<acp tokens="52" type="text">m00022</acp>
+
+规格十项全文已拿到，gh 未直接登录但 deck 走自己的通道（规格票就是用 `@me` 认领的）。现在认领 #227 并上报，然后开始读代码。
+
+[assistant • run_code]
+{"code":"const r = await tools.deck_issue_patch({ key: \"227\", assignees: [\"@me\"] });\nconsole.log(r.status, \"|\", r.text);\n","description":"Claim issue #227 (assign @me)"}
+
+[assistant • run_code]
+{"code":"const { execSync } = await import(\"node:child_process\");\n// repo tree overview\nconsole.log(execSync(\"cmd /c dir /b app\\\\src\\\\main app\\\\src\\\\renderer app\\\\src\\\\preload 2>nul\", { encoding: \"utf8\", cwd: \"D:\\\\Documents\\\\vibe\\\\youtubesub\" }));\n","description":"List app source tree overview"}
+
+[tool • run_code]
+ok | 票 227：这次点了 1 步，成了 1 步。
+
+[tool • run_code]
+clock.ts
+connection-test.ts
+debug
+debug-window-host.ts
+e2e-control.ts
+engine.ts
+main.ts
+overlay-menu.ts
+overlay.ts
+protocol.ts
+provider.ts
+queue-cache.ts
+sentences.ts
+settings.ts
+ws-server.ts
+debug-renderer.ts
+debug.html
+index.html
+renderer.ts
+vendor
+preload.cts
+
+
+[assistant]
+Claimed. Now read the key files. Let me read them in parallel:
+1. app/src/main/overlay.ts
+2. app/src/main/main.ts
+3. app/src/renderer/renderer.ts
+4. app/src/renderer/index.html
+5. app/src/settings.ts (relevant parts)
+6. tests
+
+Let me start with overlay.ts and main.ts (the biggest ones probably).
+
+[assistant • run_code]
+{"code":"const o = await tools.read({ file_path: \"D:\\\\Documents\\\\vibe\\\\youtubesub\\\\app\\\\src\\\\main\\\\overlay.ts\" });\nconsole.log(\"overlay.ts totalLines:\", o.totalLines);\nconsole.log(o.lines.map(l => `${l.number}\\t${l.text}`).join(\"\\n\"));\n","description":"Read overlay.ts state machine"}
+
+[tool • run_code]
+overlay.ts totalLines: 639
+1	// Port of desktop/suboverlay/overlay.py - the subtitle overlay DISPLAY layer
+2	// (ticket #204). Headless by design: the Qt widget's state machine, row
+3	// contract, status copy, history, nudges, wrap algorithm and resize math live
+4	// here as pure TS; the Electron renderer only applies the resulting paint
+5	// plan to the DOM (main process owns the instance and pushes plans).
+6	//
+7	// Conversion register (pytest/Qt -> TS, per the #191 equivalence criteria):
+8	// - QWidget paintEvent -> paint_plan(): the same decisions paintEvent makes
+9	//   (rows, colors, bold, font size, divider placement, status line, bg box),
+10	//   returned as an event list so the PaintLog-style pytest assertions port
+11	//   1:1. Actual pixels are the renderer's DOM/CSS job.
+12	// - QPainterPath stroke/wrapped drawing -> wrap_text() with an injected
+13	//   Measurer (QFontMetrics.horizontalAdvance/height seam). The draw loop's
+14	//   vertical budget (break past area.bottom() + 8) is preserved. Production
+15	//   line breaking is delegated to CSS overflow-wrap (spaces break, long
+16	//   unspaced runs break per character) - the pure function stays as the
+17	//   algorithm authority and the equivalence anchor.
+18	// - _draw_divider -> divider event between the two rows of a two-row plan.
+19	// - Qt update() -> nothing here: the owner (main process) pushes a fresh
+20	//   plan after every mutating call; tests read paint_plan() on demand.
+21	// - self.settings dict access -> the constructor takes the live settings
+22	//   object by reference (mutations visible to the owner), like Python.
+23	// - S.field_by_path / S.save seams -> injected deps (fieldSpec / save), the
+24	//   established monkeypatch -> deps-injection rewrite (#202/#203 precedent).
+25	//   This file has ZERO relative imports so the node --test strip runner can
+26	//   load it through the lib re-export shim.
+27	// - set_display string coercion: Python d.get() may store None; the row
+28	//   contract treats None and "" identically (both falsy, both != any real
+29	//   string), so non-string wire values coerce to "" at the boundary -
+30	//   behaviorally identical for every assertion.
+31	// - _nudge_tuned int() semantics -> Math.trunc; garbage mode/order coerce to
+32	//   the default instead of Python's ValueError crash (robustness deviation,
+33	//   no assertion relied on the crash; swap_order keeps the exact ternary so
+34	//   a garbage order falls back to trans_first like Python).
+35	// - Qt point sizes -> CSS px is * 4/3 at the renderer (registered there);
+36	//   plan carries the Qt-semantic integer size.
+37	// - Drag/press bookkeeping (_press_pos/_press_global) is windowing, not
+38	//   display state: it lives in the main-process drag machine. The pytest-
+39	//   covered math (_edge_at, _apply_resize) is ported as pure functions below.
+40	// - pulse_topmost / SetProcessDpiAwarenessContext are windowing concerns
+41	//   (skeleton main already sets alwaysOnTop; DPI comes with the OS process) -
+42	//   not part of this port; topmost re-arm timer lands with the App shell #206.
+43	// - sys_has_windows() -> always true on the Electron win32 runtime; the
+44	//   WS_EX_TRANSPARENT bit fiddling is replaced by setIgnoreMouseEvents
+45	//   (already proven by the #193/#195 skeleton work).
+46	
+47	export const RESIZE_MARGIN = 10;
+48	export const ROW_LABELS = { orig: "\u3010\u539f\u3011", trans: "\u3010\u8bd1\u3011" } as const; // 【原】/【译】
+49	export const OVERLAY_MODES = ["bilingual", "trans", "orig"] as const;
+50	// Divider color DIVIDER_RGBA (255, 255, 255, 80); the renderer uses the
+51	// fraction form. Kept here as the constant's authority.
+52	export const DIVIDER_RGB = [255, 255, 255] as const;
+53	export const DIVIDER_ALPHA = 80;
+54	
+55	// Animation tuning area fallbacks (#222): local mirrors of the anim.*
+56	// authority defaults in settings.ts (#214 owns the final numbers). This file
+57	// keeps zero relative imports (conversion register), so they live here.
+58	const FALLBACK_ANIM_NUMS = { fade_delay: 1.2, dur: 0.24, shrink: 0.72 } as const;
+59	const FALLBACK_ANIM_EASE = "cubic-bezier(.22,1,.36,1)";
+60	const ANIM_EASES = [FALLBACK_ANIM_EASE, "ease-out", "ease", "linear"] as const;
+61	
+62	export type RowRole = "orig" | "trans";
+63	
+64	// Wire display payload (engine.ts _tick_locked / status contract). Values
+65	// arrive as arbitrary JSON; every read is defensive like the Python .get().
+66	export interface DisplayData {
+67	  state?: unknown;
+68	  orig?: unknown;
+69	  trans?: unknown;
+70	  trans_available?: unknown;
+71	  trans_state?: unknown;
+72	  playing?: unknown;
+73	  title?: unknown;
+74	  hook_error?: unknown;
+75	  capture_error?: unknown;
+76	  [key: string]: unknown;
+77	}
+78	
+79	export interface NudgeFieldSpec {
+80	  min: number;
+81	  max: number;
+82	  default: number;
+83	}
+84	
+85	export interface OverlayDeps {
+86	  // Python: try S.save(self.settings) except OSError: pass. Default when
+87	  // omitted: no-op (tests inject a spy; main injects the real save).
+88	  save?: (cfg: { [key: string]: unknown }) => void;
+89	  // Python: S.field_by_path(("display", key))["min"|"max"|"default"].
+90	  // Main injects field_by_path from settings.ts; tests inject stubs.
+91	  fieldSpec?: (key: string) => NudgeFieldSpec;
+92	}
+93	
+94	export interface JsonRecord {
+95	  [key: string]: unknown;
+96	}
+97	
+98	export function asText(v: unknown): string {
+99	  return typeof v === "string" ? v : "";
+100	}
+101	
+102	function dispSection(settings: JsonRecord): JsonRecord {
+103	  const d = settings["display"];
+104	  return d !== null && typeof d === "object" && !Array.isArray(d) ? (d as JsonRecord) : {};
+105	}
+106	
+107	function num(v: unknown, fallback: number): number {
+108	  return typeof v === "number" ? v : fallback;
+109	}
+110	
+111	// ---------------------------------------------------------------------------
+112	// #174 appearance keys, read with fallback-compatible semantics
+113	// (decision #174: the six display.* keys may be absent from any settings
+114	// file - the overlay then falls back to the values overlay.py hardcodes
+115	// today. Python has not landed these keys yet, so the display layer only
+116	// CONSUMES them defensively; adding them to the authority table is the
+117	// settings-window ticket's business. Failure red stays hardcoded.)
+118	// ---------------------------------------------------------------------------
+119	
+120	// QColor(.name()) shape: lowercase #rrggbb, channels clamped to 0-255.
+121	function rgb_to_hex(c: [number, number, number]): string {
+122	  const h = (v: number) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, "0");
+123	  return "#" + h(c[0]) + h(c[1]) + h(c[2]);
+124	}
+125	
+126	// _clamp_channels-equivalent shape check: exactly three numbers, else null.
+127	function rgb_list(v: unknown, fallback: [number, number, number]): [number, number, number] {
+128	  if (Array.isArray(v) && v.length === 3
+129	    && typeof v[0] === "number" && typeof v[1] === "number" && typeof v[2] === "number") {
+130	    return [v[0], v[1], v[2]];
+131	  }
+132	  return fallback;
+133	}
+134	
+135	const FALLBACK_FONT_FAMILY = "Microsoft YaHei UI";
+136	const FALLBACK_ORIG_TEXT: [number, number, number] = [255, 255, 255];
+137	const FALLBACK_ORIG_STROKE: [number, number, number] = [0, 0, 0];
+138	const FALLBACK_TRANS_TEXT: [number, number, number] = [255, 224, 130];
+139	const FALLBACK_TRANS_STROKE: [number, number, number] = [0, 0, 0];
+140	
+141	// ---------------------------------------------------------------------------
+142	// Display state machine (OverlayWindow minus windowing)
+143	// ---------------------------------------------------------------------------
+144	
+145	export interface PlanTextEvent {
+146	  kind: "text";
+147	  role: RowRole;
+148	  text: string;
+149	  color: string;
+150	  bold: boolean;
+151	  font_size: number;
+152	  // _draw_wrapped's stroke pen (display.stroke, paint fallback 2.0); 0 = none.
+153	  stroke_width: number;
+154	  // Per-role stroke color (display.orig_stroke_color / display.trans_stroke_color).
+155	  stroke_color: string;
+156	  // Global font family (display.font_family, fallback "Microsoft YaHei UI").
+157	  font_family: string;
+158	}
+159	
+160	export interface PlanDividerEvent {
+161	  kind: "divider";
+162	  y: number;
+163	}
+164	
+165	export type PlanEvent = PlanTextEvent | PlanDividerEvent;
+166	
+167	export interface AnimVars {
+168	  fade_delay: string;
+169	  dur: string;
+170	  shrink: string;
+171	  ease: string;
+172	}
+173	
+174	// Three overlay states in ONE window (#211 decision block): subtitles (rest),
+175	// controls (pointer over the window), passthrough (click-through). The
+176	// machine below is the headless authority; the renderer is a dumb applier
+177	// that maps plan.state onto body classes and lets CSS transitions (fed by
+178	// anim_vars) do every visual step (#214: no plan pushes as animation frames).
+179	export type OverlayState = "subtitles" | "controls" | "passthrough";
+180	
+181	export interface PaintPlan {
+182	  events: PlanEvent[];
+183	  status_text: string;
+184	  bg: { r: number; g: number; b: number; a: number };
+185	  // Animation tuning area (#222): CSS-ready values the renderer writes onto
+186	  // :root; #217's three-state transitions consume them.
+187	  anim: AnimVars;
+188	  // #217 three-state + control-bar payload. state drives the renderer's
+189	  // state classes; the playback fields feed the control bar (null = unknown,
+190	  // the bar degrades: seek hidden, buttons render their default face).
+191	  state: OverlayState;
+192	  title: string;
+193	  playing: boolean | null;
+194	  position_ms: number | null;
+195	  duration_ms: number | null;
+196	  muted: boolean | null;
+197	}
+198	
+199	export class OverlayDisplay {
+200	  settings: JsonRecord;
+201	  private readonly saveImpl: (cfg: JsonRecord) => void;
+202	  private readonly fieldSpec: (key: string) => NudgeFieldSpec;
+203	  mode: string;
+204	  order: string;
+205	  history: Array<[string, string]>;
+206	  orig_text: string;
+207	  trans_text: string;
+208	  trans_state: string;
+209	  status_text: string;
+210	  trans_available: boolean;
+211	  // #217 three-state machine + control-bar payload. The machine inputs
+212	  // (hover/frozen/click_through) are private; only the derived state is
+213	  // public - callers mutate through the setters and re-push the plan.
+214	  overlay_state: OverlayState;
+215	  private overlay_hover: boolean;
+216	  private overlay_frozen: boolean;
+217	  private overlay_click_through: boolean;
+218	  title_text: string;
+219	  playing: boolean | null;
+220	  position_ms: number | null;
+221	  duration_ms: number | null;
+222	  muted: boolean | null;
+223	
+224	  constructor(settings: JsonRecord, deps: OverlayDeps = {}) {
+225	    this.settings = settings;
+226	    this.saveImpl = deps.save ?? (() => {});
+227	    this.fieldSpec = deps.fieldSpec ?? ((_key) => { throw new Error("fieldSpec not provided"); });
+228	    // _sync_display_choices: snapshot display.mode / display.order here (not
+229	    // read per paint), so a settings change needs reread_settings().
+230	    const disp = dispSection(settings);
+231	    this.mode = asText(disp["mode"]) || "bilingual";
+232	    this.order = asText(disp["order"]) || "trans_first";
+233	    this.history = [];
+234	    this.orig_text = "";
+235	    this.trans_text = "";
+236	    this.trans_state = "idle";
+237	    this.status_text = "";
+238	    // Engine's word on whether this run can translate at all; see display_rows().
+239	    this.trans_available = false;
+240	    // #217: rest state is subtitles; every overlay window starts there.
+241	    this.overlay_state = "subtitles";
+242	    this.overlay_hover = false;
+243	    this.overlay_frozen = false;
+244	    this.overlay_click_through = false;
+245	    this.title_text = "";
+246	    this.playing = null;
+247	    this.position_ms = null;
+248	    this.duration_ms = null;
+249	    this.muted = null;
+250	  }
+251	
+252	  // ---- text API (set_display) ----
+253	  set_display(d: DisplayData): void {
+254	    // One default for an absent field everywhere: nothing has said a
+255	    // translation is possible, so don't assume one is.
+256	    this.trans_available = Boolean(d.trans_available ?? false);
+257	    this.trans_state = asText(d.trans_state) || "idle";
+258	    // #217 control-bar feed: stored on both branches (the controls state can
+259	    // show up with no cues on screen yet); nulls mean "unknown", the renderer
+260	    // degrades (seek bar hidden, default button faces).
+261	    this.title_text = asText(d.title);
+262	    this.playing = typeof d.playing === "boolean" ? d.playing : null;
+263	    this.position_ms = typeof d.position_ms === "number" && Number.isFinite(d.position_ms)
+264	      ? d.position_ms : null;
+265	    this.duration_ms = typeof d.duration_ms === "number" && Number.isFinite(d.duration_ms)
+266	      ? d.duration_ms : null;
+267	    this.muted = typeof d.muted === "boolean" ? d.muted : null;
+268	    if (d.state === "no_cues") {
+269	      const hook_error = asText(d.hook_error);
+270	      const capture_error = asText(d.capture_error);
+271	      if ((hook_error || capture_error) && this.trans_state === "waiting") {
+272	        // Subtitle capture diagnostics take precedence over a healthy
+273	        // provider's waiting state; keep them in the existing status line.
+274	        this.trans_state = "idle";
+275	      }
+276	      this.orig_text = "";
+277	      this.trans_text = "";
+278	      if (hook_error) {
+279	        this.status_text = "page hook NOT installed - the script is connected but cannot see captions";
+280	      } else if (capture_error) {
+281	        this.status_text = "caption body was empty - connected, but YouTube returned no caption data";
+282	      } else {
+283	        const title = asText(d.title);
+284	        this.status_text = "waiting for subtitles..." + (title ? "  [" + title + "]" : "");
+285	      }
+286	      return;
+287	    }
+288	    this.status_text = d.playing ? "" : "[Paused]";
+289	    const o = asText(d.orig);
+290	    const t = asText(d.trans);
+291	    if (o && (o !== this.orig_text || t !== this.trans_text)) {
+292	      if (this.orig_text && this.trans_text) {
+293	        this.history.push([this.orig_text, this.trans_text]);
+294	        const maxh = Math.trunc(num(dispSection(this.settings)["history_lines"], 2));
+295	        while (this.history.length > maxh) this.history.shift();
+296	      }
+297	    }
+298	    this.orig_text = o;
+299	    this.trans_text = t;
+300	  }
+301	
+302	  // ---- the row contract (display_rows) ----
+303	  display_rows(): Array<{ role: RowRole; text: string }> {
+304	    // The single place that decides what a mode shows when there is no
+305	    // translation to show (issue #1): a missing translation must not blank
+306	    // the overlay, so trans mode falls back to the original instead of
+307	    // drawing nothing. trans_available is the engine's word on whether this
+308	    // run can translate at all - the display layer never infers it from
+309	    // provider config, and an empty translation row is not evidence that none
+310	    // is coming. Two rows mean a divider goes between them; with every row
+311	    // empty (between cues) nothing is drawn at all.
+312	    const orig = this.orig_text || "";
+313	    let trans = this.trans_text || "";
+314	    const trans_status = this.translation_status_text();
+315	    if (trans_status) trans = trans_status;
+316	    let rows: Array<{ role: RowRole; text: string }>;
+317	    if (this.mode === "orig") {
+318	      rows = [{ role: "orig", text: orig }];
+319	    } else if (this.mode === "trans" && !trans && !this.trans_available) {
+320	      rows = [{ role: "orig", text: orig }];
+321	    } else if (this.mode === "trans") {
+322	      rows = [{ role: "trans", text: trans }];
+323	    } else {
+324	      rows = [{ role: "trans", text: trans }, { role: "orig", text: orig }];
+325	      if (this.order === "orig_first") rows.reverse();
+326	    }
+327	    if (!rows.some((r) => r.text)) return []; // between cues: no floating labels, no divider
+328	    return rows.map((r) => ({ role: r.role, text: this.labelled(r.role, r.text) }));
+329	  }
+330	
+331	  translation_status_text(): string {
+332	    // The map's fixed status copy, displayed inside the translation row.
+333	    const state = this.trans_state || "idle";
+334	    const labels: Record<string, string> = {
+335	      "waiting": "\uff08\u7b49\u5f85\u539f\u5b57\u5e55\u4e2d\uff09",       // （等待原字幕中）
+336	      "translating": "\uff08\u7ffb\u8bd1\u4e2d\uff09",                        // （翻译中）
+337	      "unconfigured": "\uff08\u672a\u914d\u7f6e\u7ffb\u8bd1\uff09",         // （未配置翻译）
+338	    };
+339	    const known = labels[state];
+340	    if (known !== undefined) return known;
+341	    if (state.startsWith("failed:")) {
+342	      let reason = state.slice("failed:".length);
+343	      if (!reason) reason = "\u7ffb\u8bd1\u5185\u90e8\u9519\u8bef";           // 翻译内部错误
+344	      if (reason.length > 16) reason = reason.slice(0, 16) + "\u2026";           // …
+345	      return "\uff08\u7ffb\u8bd1\u5931\u8d25\uff1a" + reason + "\uff09";    // （翻译失败：…）
+346	    }
+347	    return "";
+348	  }
+349	
+350	  labelled(role: RowRole, text: string): string {
+351	    // Row text with its constant label. Text that already carries it (the
+352	    // mock translator writes 【译】 into its own output) is left alone, so the
+353	    // label never doubles up on itself.
+354	    const label = ROW_LABELS[role];
+355	    return text.startsWith(label) ? text : label + text;
+356	  }
+357	
+358	  // ---- paint plan (paintEvent decisions without pixels) ----
+359	  paint_plan(): PaintPlan {
+360	    const disp = dispSection(this.settings);
+361	    const bgRaw = disp["bg_color"];
+362	    const bgArr = Array.isArray(bgRaw) ? bgRaw : [];
+363	    const bg = {
+364	      r: Math.trunc(num(bgArr[0], 0)),
+365	      g: Math.trunc(num(bgArr[1], 0)),
+366	      b: Math.trunc(num(bgArr[2], 0)),
+367	      a: Math.trunc(num(disp["bg_opacity"], 150)),
+368	    };
+369	    const rows = this.display_rows();
+370	    const has_status = this.translation_status_text() !== "";
+371	    const events: PlanEvent[] = [];
+372	    // Stroke pen: one width for every row (paintEvent's float(disp.get("stroke", 2.0))),
+373	    // per-role stroke colors (#174). 0 means no stroke path in Python.
+374	    const stroke_width = num(disp["stroke"], 2.0);
+375	    const strokeColors: Record<RowRole, string> = {
+376	      orig: rgb_to_hex(rgb_list(disp["orig_stroke_color"], FALLBACK_ORIG_STROKE)),
+377	      trans: rgb_to_hex(rgb_list(disp["trans_stroke_color"], FALLBACK_TRANS_STROKE)),
+378	    };
+379	    const textColors: Record<RowRole, string> = {
+380	      orig: rgb_to_hex(rgb_list(disp["orig_text_color"], FALLBACK_ORIG_TEXT)),
+381	      trans: rgb_to_hex(rgb_list(disp["trans_text_color"], FALLBACK_TRANS_TEXT)),
+382	    };
+383	    const font_family = asText(disp["font_family"]) || FALLBACK_FONT_FAMILY;
+384	    // Divider y values mirror the PaintLog stub geometry (rows 20 units tall);
+385	    // no assertion depends on the value, only on placement/shape.
+386	    rows.forEach((row, i) => {
+387	      let size = num(disp["font_size"], 15);
+388	      if (row.role === "trans") size = size * 1.25;
+389	      const font_size = Math.trunc(size);
+390	      const boldSetting = asText(disp["font_bold"]);
+391	      const bold = boldSetting === "both" ||
+392	        (row.role === "trans" && boldSetting === "trans_only") ||
+393	        (row.role === "orig" && boldSetting === "sub_only");
+394	      let color: string;
+395	      if (row.role === "orig") {
+396	        color = textColors.orig;
+397	      } else if (has_status && this.trans_state.startsWith("failed:")) {
+398	        // Failure red is a fixed contract (#174): it never reads trans_text_color.
+399	        color = "#ff5a5a";
+400	      } else {
+401	        color = textColors.trans;
+402	      }
+403	      events.push({ kind: "text", role: row.role, text: row.text, color, bold, font_size,
+404	        stroke_width, stroke_color: strokeColors[row.role], font_family });
+405	      // Issue #1 Q2a: two rows (bilingual) always get the divider between
+406	      // them, even while one of them is still empty.
+407	      if (i === 0 && rows.length === 2) events.push({ kind: "divider", y: 20 * i + 2 });
+408	    });
+409	    return { events, status_text: this.status_text, bg, anim: this.anim_vars(),
+410	      state: this.overlay_state, title: this.title_text,
+411	      playing: this.playing, position_ms: this.position_ms,
+412	      duration_ms: this.duration_ms, muted: this.muted };
+413	  }
+414	
+415	  // CSS custom properties for the animation tuning area (#222): read per
+416	  // paint from the anim.* section, garbage values fall back to the defaults
+417	  // the same way the tuning table does (old configs without the keys are
+418	  // normal, like the #174 appearance keys).
+419	  anim_vars(): AnimVars {
+420	    const a = this.settings["anim"];
+421	    const node = (a !== null && typeof a === "object" && !Array.isArray(a)
+422	      ? a : {}) as { [k: string]: unknown };
+423	    const numOr = (key: "fade_delay" | "dur" | "shrink"): number => {
+424	      const v = node[key];
+425	      return typeof v === "number" && Number.isFinite(v) ? v : FALLBACK_ANIM_NUMS[key];
+426	    };
+427	    const cssNum = (v: number): string => String(Math.round(v * 1000) / 1000);
+428	    const ease = node["ease"];
+429	    return {
+430	      fade_delay: cssNum(numOr("fade_delay")) + "s",
+431	      dur: cssNum(numOr("dur")) + "s",
+432	      shrink: cssNum(numOr("shrink")),
+433	      ease: typeof ease === "string" && (ANIM_EASES as readonly string[]).includes(ease)
+434	        ? ease : FALLBACK_ANIM_EASE,
+435	    };
+436	  }
+437	
+438	  // ---- three-state machine (#211 decision block, #217) ----
+439	  //
+440	  // Derived state, recomputed after every input change:
+441	  //   click_through ? passthrough : frozen ? keep : hover ? controls : subtitles.
+442	  // freeze (drag/8-edge resize in progress, context menu open) gates ONLY the
+443	  // automatic enter/leave transitions; explicit passthrough flips are user
+444	  // actions and always land. Unlock (click-through off) clears hover so the
+445	  // overlay falls back to subtitles, never straight into controls (#211:
+446	  // 解锁图标点击 → subtitles，不落 controls). Timing is NOT this machine's
+447	  // business: a state flip is instant here, and the fade-delay/shrink numbers
+448	  // ride anim_vars into CSS transitions (#214 matrix).
+449	  private overlay_recompute(): void {
+450	    this.overlay_state = this.overlay_click_through
+451	      ? "passthrough"
+452	      : this.overlay_frozen
+453	        ? this.overlay_state
+454	        : (this.overlay_hover ? "controls" : "subtitles");
+455	  }
+456	
+457	  set_overlay_hover(hovering: boolean): void {
+458	    this.overlay_hover = hovering;
+459	    this.overlay_recompute();
+460	  }
+461	
+462	  set_overlay_frozen(frozen: boolean): void {
+463	    this.overlay_frozen = frozen;
+464	    this.overlay_recompute();
+465	  }
+466	
+467	  set_overlay_click_through(on: boolean): void {
+468	    this.overlay_click_through = on;
+469	    if (!on) this.overlay_hover = false; // unlock lands on subtitles
+470	    this.overlay_recompute();
+471	  }
+472	
+473	  // ---- settings reread (#152 / spec #161) ----
+474	  reread_settings(): void {
+475	    // Re-read the two snapshotted display choices: the tuning page calls this
+476	    // after 确定 so the overlay changes face without a restart. History,
+477	    // texts, geometry and click-through are left alone. Never saves.
+478	    const disp = dispSection(this.settings);
+479	    this.mode = asText(disp["mode"]) || "bilingual";
+480	    this.order = asText(disp["order"]) || "trans_first";
+481	  }
+482	
+483	  // ---- menu-driven mutations ----
+484	  cycle_mode(): void {
+485	    // Garbage mode coerced to the first slot instead of Python's ValueError.
+486	    const i = Math.max(0, OVERLAY_MODES.indexOf(this.mode as (typeof OVERLAY_MODES)[number]));
+487	    this.mode = OVERLAY_MODES[(i + 1) % OVERLAY_MODES.length]!;
+488	    dispSection(this.settings)["mode"] = this.mode; // in-memory only, like Python (no save)
+489	  }
+490	
+491	  swap_order(): void {
+492	    // Exact Python ternary: anything but trans_first lands back on trans_first.
+493	    this.order = this.order === "trans_first" ? "orig_first" : "trans_first";
+494	    dispSection(this.settings)["order"] = this.order; // in-memory only, like Python (no save)
+495	  }
+496	
+497	  private nudgeTuned(key: string, delta: number): number {
+498	    // 菜单里的 ± 快捷方式：范围取权威表（TUNING_FIELDS），**改完即落盘** ——
+499	    // 这两项是从外面改浮窗外观的唯一途径，不能等下次挪窗口才顺手存进去
+500	    // （#167 决议）。
+501	    const field = this.fieldSpec(key);
+502	    const low = Math.trunc(field.min);
+503	    const high = Math.trunc(field.max);
+504	    const disp = dispSection(this.settings);
+505	    const current = Math.trunc(num(disp[key], field.default));
+506	    const value = Math.max(low, Math.min(high, current + delta));
+507	    disp[key] = value;
+508	    try {
+509	      this.saveImpl(this.settings);
+510	    } catch {
+511	      // OSError: pass (Python semantics)
+512	    }
+513	    return value;
+514	  }
+515	
+516	  nudge_font(d: number): number {
+517	    return this.nudgeTuned("font_size", d);
+518	  }
+519	
+520	  nudge_opacity(d: number): number {
+521	    return this.nudgeTuned("bg_opacity", d);
+522	  }
+523	}
+524	
+525	// ---------------------------------------------------------------------------
+526	// Wrap algorithm (draw_wrapped, measurer-injected)
+527	// ---------------------------------------------------------------------------
+528	
+529	export interface Measurer {
+530	  // QFontMetrics.horizontalAdvance equivalent (any consistent unit).
+531	  advance(text: string): number;
+532	  // QFontMetrics.height equivalent.
+533	  height(): number;
+534	}
+535	
+536	export interface Rect { x: number; y: number; w: number; h: number }
+537	export interface Pt { x: number; y: number }
+538	
+539	export function wrap_text(text: string, area: Rect, m: Measurer, startY: number): { lines: string[]; end_y: number } {
+540	  const line_h = m.height() + 3;
+541	  // Wrap on spaces where possible, then split overlong words by character
+542	  // width. Chinese subtitles commonly contain no spaces at all.
+543	  const words = text.split(" ");
+544	  const lines: string[] = [];
+545	  let cur = "";
+546	
+547	  const split_word = (word: string): string[] => {
+548	    const parts: string[] = [];
+549	    let part = "";
+550	    for (const ch of word) {
+551	      const candidate = part + ch;
+552	      if (part && m.advance(candidate) > area.w) {
+553	        parts.push(part);
+554	        part = ch;
+555	      } else {
+556	        part = candidate;
+557	      }
+558	    }
+559	    if (part) parts.push(part);
+560	    return parts;
+561	  };
+562	
+563	  for (const w of words) {
+564	    const cand = (cur + " " + w).trim();
+565	    if (m.advance(cand) <= area.w) {
+566	      cur = cand;
+567	    } else {
+568	      if (cur) {
+569	        lines.push(cur);
+570	        cur = "";
+571	      }
+572	      const parts = split_word(w);
+573	      if (parts.length) {
+574	        for (const p of parts.slice(0, -1)) lines.push(p);
+575	        cur = parts[parts.length - 1]!;
+576	      }
+577	    }
+578	  }
+579	  if (cur) lines.push(cur);
+580	
+581	  // The draw loop: vertical budget with the +8 bottom tolerance, 1:1 with
+582	  // _draw_wrapped. Returns only the lines that would be drawn plus end_y.
+583	  const drawn: string[] = [];
+584	  let y = startY;
+585	  for (const ln of lines) {
+586	    if (y + line_h > area.y + area.h + 8) break;
+587	    drawn.push(ln);
+588	    y += line_h;
+589	  }
+590	  return { lines: drawn, end_y: y + 4 };
+591	}
+592	
+593	// ---------------------------------------------------------------------------
+594	// Geometry math (drag + 8-edge resize, LiveSubs-style manual calculation)
+595	// ---------------------------------------------------------------------------
+596	
+597	export type ResizeEdge = "t" | "b" | "l" | "r" | "tl" | "tr" | "bl" | "br";
+598	
+599	export function edge_at(px: number, py: number, w: number, h: number): ResizeEdge | null {
+600	  const m = RESIZE_MARGIN;
+601	  const left = px <= m;
+602	  const right = px >= w - m;
+603	  const top = py <= m;
+604	  const bottom = py >= h - m;
+605	  if (top && left) return "tl";
+606	  if (top && right) return "tr";
+607	  if (bottom && left) return "bl";
+608	  if (bottom && right) return "br";
+609	  if (top) return "t";
+610	  if (bottom) return "b";
+611	  if (left) return "l";
+612	  if (right) return "r";
+613	  return null;
+614	}
+615	
+616	export function apply_resize(edge: ResizeEdge, g: Pt, pressGeom: Rect, pressGlobal: Pt): Rect {
+617	  // min 1x1: guard zero-size only; no user-facing limit. Baseline is the
+618	  // PRESS geometry (not current) - re-applying with the same cursor position
+619	  // returns to the press-time size, which is what the latch regression pins.
+620	  const min_w = 1, min_h = 1;
+621	  const geo: Rect = { ...pressGeom };
+622	  const dx = g.x - pressGlobal.x;
+623	  const dy = g.y - pressGlobal.y;
+624	  if (edge.includes("l")) {
+625	    const new_w = geo.w - dx;
+626	    if (new_w >= min_w) geo.x = geo.x + dx;
+627	  }
+628	  if (edge.includes("r")) {
+629	    geo.w = Math.max(min_w, geo.w + dx);
+630	  }
+631	  if (edge.includes("t")) {
+632	    const new_h = geo.h - dy;
+633	    if (new_h >= min_h) geo.y = geo.y + dy;
+634	  }
+635	  if (edge.includes("b")) {
+636	    geo.h = Math.max(min_h, geo.h + dy);
+637	  }
+638	  return geo;
+639	}

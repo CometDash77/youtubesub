@@ -186,3 +186,25 @@ test("estimate_ms still interpolates with the muted field along for the ride", (
   const est = estimate_ms(s, s.anchor_mono + 1); // clock is seconds, not ms
   assert.ok(Math.abs(est - 3000) < 5, String(est));
 });
+
+// ---- #227: the plan carries the raw hover bit for the external bar -------
+
+test("paint plan exposes the hover bit the bar window consumes", () => {
+  const w = mk();
+  assert.equal(w.paint_plan().overlay_hover, false);
+  w.set_overlay_hover(true);
+  assert.equal(w.paint_plan().overlay_hover, true);
+  // Entering click-through keeps the raw bit: the bar shows the unlock lock
+  // exactly while passthrough && hover (#226 spec §4).
+  w.set_overlay_click_through(true);
+  assert.equal(w.overlay_state, "passthrough");
+  assert.equal(w.paint_plan().overlay_hover, true);
+  // Unlock (!on) clears the bit and lands on subtitles (#211 unchanged).
+  w.set_overlay_click_through(false);
+  assert.equal(w.overlay_state, "subtitles");
+  assert.equal(w.paint_plan().overlay_hover, false);
+  // An explicit leave clears it too.
+  w.set_overlay_hover(true);
+  w.set_overlay_hover(false);
+  assert.equal(w.paint_plan().overlay_hover, false);
+});

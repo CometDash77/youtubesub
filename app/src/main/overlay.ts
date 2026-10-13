@@ -55,7 +55,7 @@ export const DIVIDER_ALPHA = 80;
 // Animation tuning area fallbacks (#222): local mirrors of the anim.*
 // authority defaults in settings.ts (#214 owns the final numbers). This file
 // keeps zero relative imports (conversion register), so they live here.
-const FALLBACK_ANIM_NUMS = { fade_delay: 1.2, dur: 0.24, shrink: 0.72 } as const;
+const FALLBACK_ANIM_NUMS = { fade_delay: 1.2, dur: 0.24 } as const;
 const FALLBACK_ANIM_EASE = "cubic-bezier(.22,1,.36,1)";
 const ANIM_EASES = [FALLBACK_ANIM_EASE, "ease-out", "ease", "linear"] as const;
 
@@ -167,7 +167,6 @@ export type PlanEvent = PlanTextEvent | PlanDividerEvent;
 export interface AnimVars {
   fade_delay: string;
   dur: string;
-  shrink: string;
   ease: string;
 }
 
@@ -189,6 +188,9 @@ export interface PaintPlan {
   // state classes; the playback fields feed the control bar (null = unknown,
   // the bar degrades: seek hidden, buttons render their default face).
   state: OverlayState;
+  // #226: hover bit for the external bar window - it shows the unlock lock
+  // while passthrough + hover, and stays hidden otherwise.
+  overlay_hover: boolean;
   title: string;
   playing: boolean | null;
   position_ms: number | null;
@@ -407,7 +409,8 @@ export class OverlayDisplay {
       if (i === 0 && rows.length === 2) events.push({ kind: "divider", y: 20 * i + 2 });
     });
     return { events, status_text: this.status_text, bg, anim: this.anim_vars(),
-      state: this.overlay_state, title: this.title_text,
+      state: this.overlay_state, overlay_hover: this.overlay_hover,
+      title: this.title_text,
       playing: this.playing, position_ms: this.position_ms,
       duration_ms: this.duration_ms, muted: this.muted };
   }
@@ -420,7 +423,7 @@ export class OverlayDisplay {
     const a = this.settings["anim"];
     const node = (a !== null && typeof a === "object" && !Array.isArray(a)
       ? a : {}) as { [k: string]: unknown };
-    const numOr = (key: "fade_delay" | "dur" | "shrink"): number => {
+    const numOr = (key: "fade_delay" | "dur"): number => {
       const v = node[key];
       return typeof v === "number" && Number.isFinite(v) ? v : FALLBACK_ANIM_NUMS[key];
     };
@@ -429,7 +432,6 @@ export class OverlayDisplay {
     return {
       fade_delay: cssNum(numOr("fade_delay")) + "s",
       dur: cssNum(numOr("dur")) + "s",
-      shrink: cssNum(numOr("shrink")),
       ease: typeof ease === "string" && (ANIM_EASES as readonly string[]).includes(ease)
         ? ease : FALLBACK_ANIM_EASE,
     };
@@ -444,8 +446,9 @@ export class OverlayDisplay {
   // actions and always land. Unlock (click-through off) clears hover so the
   // overlay falls back to subtitles, never straight into controls (#211:
   // 解锁图标点击 → subtitles，不落 controls). Timing is NOT this machine's
-  // business: a state flip is instant here, and the fade-delay/shrink numbers
-  // ride anim_vars into CSS transitions (#214 matrix).
+  // business: a state flip is instant here, and the fade-delay/dur numbers
+  // ride anim_vars into CSS transitions (#214 matrix; #227: the grace wait
+  // lives in main's two-position hover timer, not in a CSS leave delay).
   private overlay_recompute(): void {
     this.overlay_state = this.overlay_click_through
       ? "passthrough"
@@ -636,4 +639,31 @@ export function apply_resize(edge: ResizeEdge, g: Pt, pressGeom: Rect, pressGlob
     geo.h = Math.max(min_h, geo.h + dy);
   }
   return geo;
+}
+
+// #226 spec §2: geometry of the external control-bar window. Pure so the
+// tests run headless: hug the overlay's bottom edge (horizontally centered
+// on it), flip above the overlay when the screen's bottom edge would clip
+// the bar, and clamp into the work area either way.
+export const BAR_GAP = 8;
+export const BAR_MIN_WIDTH = 260;
+export const BAR_HEIGHT = 96;
+
+export function bar_geometry(
+  overlay: Rect,
+  workArea: Rect,
+  opts?: { gap?: number; minW?: number; barH?: number },
+): Rect {
+  const gap = opts?.gap ?? BAR_GAP;
+  const minW = opts?.minW ?? BAR_MIN_WIDTH;
+  const barH = opts?.barH ?? BAR_HEIGHT;
+  const w = Math.max(overlay.w, minW);
+  let x = overlay.x + (overlay.w - w) / 2;
+  x = Math.min(Math.max(x, workArea.x), workArea.x + workArea.w - w);
+  let y = overlay.y + overlay.h + gap;           // 正贴: right below
+  if (y + barH > workArea.y + workArea.h) {      // bottom edge would clip
+    y = overlay.y - gap - barH;                  // 翻转: above the overlay
+    y = Math.min(Math.max(y, workArea.y), workArea.y + workArea.h - barH);
+  }
+  return { x: Math.round(x), y: Math.round(y), w, h: barH };
 }

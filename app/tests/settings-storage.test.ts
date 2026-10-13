@@ -218,3 +218,49 @@ test("[补齐] redact: public summary never leaks base_url or api_key", () => {
   assert.deepEqual(S.redact({ provider: "broken" }),
     { configured: false, host: "", model: "", protocol: "auto" });
 });
+
+// ---------------------------------------------------------------------
+// #232: the debug window's own bounds section (independent of `window`).
+// ---------------------------------------------------------------------
+
+test("#232 default_settings carries the debug_window section, four nulls", () => {
+  assert.deepEqual(S.default_settings()["debug_window"],
+    { x: null, y: null, w: null, h: null });
+});
+
+withTmp("#232 load: file with a debug_window section keeps it", (dir) => {
+  const p = path.join(dir, "setting.json");
+  writeFileSync(p, JSON.stringify({
+    debug_window: { x: 15, y: 25, w: 480, h: 360 },
+    server: { port: 4321 },
+  }), "utf8");
+  const cfg = S.load(p);
+  assert.deepEqual(cfg["debug_window"], { x: 15, y: 25, w: 480, h: 360 });
+  assert.equal((cfg["server"] as S.JsonObject)["port"], 4321);
+});
+
+withTmp("#232 load: old file without the key gets the default section", (dir) => {
+  // The #174 fallback pattern: a missing key is a normal state, not damage.
+  const p = writeLegacy(dir, { active: "default", presets: [], context_groups: 1 });
+  const cfg = S.load(p);
+  assert.deepEqual(cfg["debug_window"], { x: null, y: null, w: null, h: null });
+});
+
+withTmp("#232 save: a bounds write rides the normal save, other sections survive", (dir) => {
+  const p = path.join(dir, "setting.json");
+  const cfg = S.load(p);                       // defaults (missing file writes nothing)
+  const dw = cfg["debug_window"] as S.JsonObject;
+  dw["x"] = 11; dw["y"] = 22; dw["w"] = 460; dw["h"] = 340;
+  S.save(cfg, p);
+  const reloaded = S.load(p);
+  assert.deepEqual(reloaded["debug_window"], { x: 11, y: 22, w: 460, h: 340 });
+  // the bounds write is a section-level poke: everything else is untouched
+  assert.deepEqual(reloaded["provider"], S.default_settings()["provider"]);
+  assert.deepEqual(reloaded["prompt"], { active: "default", presets: [], context_groups: 1 });
+  assert.deepEqual(reloaded["window"], { x: null, y: null, w: 380, h: 64 });
+  assert.equal((reloaded["server"] as S.JsonObject)["port"], 9877);
+});
+
+test("#232 invariant: shell keys stay out of apply_edits (debug_window.x raises)", () => {
+  assert.throws(() => S.apply_edits(S.default_settings(), [[["debug_window", "x"], 0]]));
+});

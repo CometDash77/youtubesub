@@ -18,6 +18,7 @@ import * as S from "./settings.ts";
 import { ConnectionTester } from "./connection-test.ts";
 import {
   DebugWindow, CONFIRM_SAVE, CONFIRM_DISCARD, CONFIRM_STAY,
+  MIN_W, MIN_H, restore_debug_bounds,
   type OverlayNotify,
 } from "./debug/window.ts";
 
@@ -33,11 +34,25 @@ interface Intent {
   [k: string]: unknown;
 }
 
+export interface DebugBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 export interface DebugHost {
   open(page: string): void;
+  // #232: the renderer x/Esc/footer route - model confirm, then OS hide
+  // (the hide event is the bounds write point). False = the user chose STAY.
+  close(): boolean;
   debug: DebugWindow;
   handleIntent(raw: unknown): void;
   markQuitting(): void;
+  // #232: the e2e control surface reads/moves the window for the bounds
+  // persistence test (GET/POST /debug-bounds).
+  bounds(): DebugBounds | null;
+  setBounds(b: DebugBounds): void;
 }
 
 export function createDebugWindowHost(deps: DebugHostDeps): DebugHost {
@@ -111,10 +126,53 @@ export function createDebugWindowHost(deps: DebugHostDeps): DebugHost {
 
   debug.on_change(() => pushState());
 
+  // #232: raw getBounds straight into the shared settings object + one atomic
+  // save - the overlay's persistGeometry pattern (main.ts), pointed at the
+  // debug_window section. No clamping here (display topology may change
+  // after the write; restore_debug_bounds owns that). Never fatal.
+  function persistDebugBounds(): void {
+    const w = win;
+    if (!w) return;
+    const b = w.getBounds();
+    let sec = deps.settings["debug_window"];
+    if (sec === null || typeof sec !== "object" || Array.isArray(sec)) {
+      sec = {};
+      deps.settings["debug_window"] = sec;
+    }
+    const rec = sec as Record<string, unknown>;
+    rec["x"] = b.x;
+    rec["y"] = b.y;
+    rec["w"] = b.width;
+    rec["h"] = b.height;
+    try {
+      S.save(deps.settings);
+    } catch {
+      // OSError: pass - a failed write costs one restore from the last good.
+    }
+  }
+
   function createWindow(): void {
+    // #232: the one restore, at creation. The stored section is clamped into
+    // the work area of the display nearest the stored rect; a null axis
+    // stays null (OS default placement). The model size syncs to the
+    // restored size so the model and the OS window agree from frame one.
+    const restored = restore_debug_bounds(
+      deps.settings["debug_window"],
+      (rect) => {
+        try {
+          return screen.getDisplayMatching(rect).workArea;
+        } catch {
+          return screen.getPrimaryDisplay().workArea;
+        }
+      },
+      MIN_W, MIN_H,
+      debug.width, debug.height,
+    );
     win = new BrowserWindow({
-      width: debug.width,
-      height: debug.height,
+      width: restored.width,
+      height: restored.height,
+      ...(restored.x !== null ? { x: restored.x } : {}),
+      ...(restored.y !== null ? { y: restored.y } : {}),
       minWidth: 420,         // mirrors the model floor (window.ts MIN_W, #231)
       minHeight: 300,        // mirrors the model floor (window.ts MIN_H, #231)
       frame: false,          // frameless, self-drawn chrome
@@ -130,6 +188,7 @@ export function createDebugWindowHost(deps: DebugHostDeps): DebugHost {
         nodeIntegration: false,
       },
     });
+    debug.resize(restored.width, restored.height);   // #232: model rides the restored size
     win.setMenuBarVisibility(false);
     win.webContents.on("preload-error", (_e, p, err) => log("[debug] preload-error " + p + " : " + err.message));
     // The open()-time pushes can fire before the freshly-loading page has its
@@ -140,19 +199,25 @@ export function createDebugWindowHost(deps: DebugHostDeps): DebugHost {
     win.on("show", () => {
       // #231: show never resizes the window. debug.show() only re-takes the
       // model baseline; the refit that used to force the model size back
-      // onto the OS window on every show/open is gone. Restoring bounds on
-      // open belongs to the persistence ticket.
+      // onto the OS window on every show/open is gone. Bounds restore is a
+      // createWindow()-time thing now (#232), not a per-show refit.
       debug.show();
       pushState();
     });
     win.on("hide", () => {
+      // #232: every user-side hide lands here (renderer x/Esc/footer via
+      // closeWindow, Alt+F4 via the close intercept) - write the bounds once.
+      persistDebugBounds();
       debug.hide();
       pushState();
     });
     // Frameless windows still receive a close (Alt+F4, app quit): route it
     // through the model's confirm flow and hide - the instance is permanent.
     win.on("close", (e) => {
-      if (closing) return;   // app quit: let it go
+      if (closing) {         // app quit: last bounds write, then let it go
+        persistDebugBounds();
+        return;
+      }
       e.preventDefault();
       if (debug.close()) {
         pushState();
@@ -160,6 +225,19 @@ export function createDebugWindowHost(deps: DebugHostDeps): DebugHost {
       }
     });
     void win.loadFile(path.join(deps.appRoot, "dist", "renderer", "debug.html"));
+  }
+
+  // #232: the renderer's x/Esc/footer close. The model confirms (three-way
+  // when dirty) and on accept the OS window hides - the hide event is the
+  // bounds write point. STAY keeps the window up. (Before #232 this intent
+  // only closed the model and never hid the OS window.)
+  function closeWindow(): boolean {
+    if (debug.close()) {
+      pushState();
+      win?.hide();
+      return true;
+    }
+    return false;
   }
 
   function open(page: string): void {
@@ -223,7 +301,7 @@ export function createDebugWindowHost(deps: DebugHostDeps): DebugHost {
       case "ctrl-s": debug.save_via_shortcut(); break;
       case "cancel": debug.cancel(); break;
       case "close":
-      case "esc": debug.close(); break;
+      case "esc": closeWindow(); break;
       case "frequency": dp.set_frequency(num(it.seconds, 1.0)); break;
       case "refresh": dp.refresh_now(); break;
       case "ct-expand": dp.set_connection_test_expanded(Boolean(it.expanded)); break;
@@ -308,10 +386,20 @@ export function createDebugWindowHost(deps: DebugHostDeps): DebugHost {
 
   return {
     open,
+    close: closeWindow,
     debug,
     // main.ts wires these: the ipcMain debug-intent listener and the
     // before-quit flag (so a pending close prompt never blocks quitting).
     handleIntent,
     markQuitting() { closing = true; },
+    // #232: the e2e control surface (e2e-control.ts /debug-bounds) reads and
+    // moves the window for the bounds persistence test.
+    bounds(): DebugBounds | null {
+      const w = win;
+      if (!w) return null;
+      const b = w.getBounds();
+      return { x: b.x, y: b.y, width: b.width, height: b.height };
+    },
+    setBounds(b: DebugBounds): void { win?.setBounds(b); },
   };
 }

@@ -10,10 +10,14 @@
 // the Python skipif.
 import assert from "node:assert/strict";
 import http from "node:http";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { after, before, describe, test } from "node:test";
 import {
   CDP,
+  DesktopApp,
   Harness,
   VIDEO_A,
   VIDEO_B,
@@ -419,7 +423,7 @@ suite("browser E2E (real Chrome -> real userscript -> TS app)", () => {
   // #220: the vendored Web Awesome prototype card must come alive over
   // file:// inside the real Electron debug window - module autoloader loads,
   // all five tags define, every instance upgrades, controls accept
-  // interaction, and the backdrop-filter probe publishes numbers for the ADR.
+  // interaction.
   test("WA prototype card upgrades over file:// in the debug window (#220)", { timeout: 60000 }, async () => {
     // Own harness with mode control: open_debug() rides the e2e control
     // surface, which the shared harness does not enable (same as the
@@ -485,17 +489,6 @@ suite("browser E2E (real Chrome -> real userscript -> TS app)", () => {
       // No CORS / module errors surfaced by the window so far.
       const errs = dbg.console_errors().filter((m) => m.includes("CORS") || m.includes("module"));
       assert.deepEqual(errs, [], JSON.stringify(errs));
-      // backdrop-filter probe: support verdict + a measured fps number.
-      // The probe samples 2s of rAF; wait for it to publish.
-      const bfRaw = await wait_for(async () => {
-        const raw = await dbg.evaluate("JSON.stringify(window.__waBfProbe ?? null)");
-        const p = JSON.parse(String(raw)) as { supported: boolean; fps: number | null } | null;
-        return p !== null && p.fps !== null ? raw : null;
-      }, { timeout: 15000, what: "backdrop-filter probe publishes fps" });
-      const bf = JSON.parse(String(bfRaw)) as { supported: boolean; fps: number | null } | null;
-      assert.ok(bf !== null, "__waBfProbe published");
-      assert.equal(bf!.supported, true, "backdrop-filter supported");
-      assert.ok(bf!.fps !== null && bf!.fps > 0, "backdrop-filter probe measured fps=" + String(bf!.fps));
       // The status line rendered a readable verdict for humans.
       const statusText = String(await dbg.evaluate(
         "document.getElementById('waProtoStatus')?.textContent ?? ''"));
@@ -504,4 +497,90 @@ suite("browser E2E (real Chrome -> real userscript -> TS app)", () => {
       dbg.close();
     }
   }
+});
+
+// ---------------------------------------------------------------------
+// #232: the debug window's bounds persistence. No Chrome needed - the REAL
+// Electron app boots twice over one APPDATA: boot 1 moves the window and
+// closes it through the real renderer route (Esc keydown -> debug-intent
+// esc -> model close -> OS hide -> hide-event persist), boot 2 restores
+// from setting.json. A separate top-level describe on purpose: the Chrome
+// gate above must not skip it (electron ships with devDependencies).
+// ---------------------------------------------------------------------
+describe("debug window bounds persistence (#232)", () => {
+  test("hide writes setting.json; a fresh process restores the bounds", { timeout: 180000 }, async () => {
+    const appdata = mkdtempSync(path.join(tmpdir(), "ytus-bounds-"));
+    const settingsPath = path.join(appdata, "SubOverlay", "setting.json");
+    try {
+      // ---- boot 1: open, move, hide through the real close chain ----
+      const app1 = new DesktopApp(await free_port(), { modeControl: true, appdata });
+      await app1.start();
+      try {
+        await app1.wait_healthy();
+        await app1.open_debug();
+        const ws = await app1.debug_page_ws_url();
+        const dbg = await CDP.connect(ws);
+        try {
+          await wait_for(async () => await app1.debug_bounds(), {
+            timeout: 15000,
+            what: "debug window created (bounds non-null)",
+          });
+          await app1.set_debug_bounds({ x: 120, y: 90, width: 460, height: 360 });
+          // The window target appears in /json/list before its module script
+          // finishes; wait for load (all listeners registered) before the
+          // synthetic keydown, or the Esc silently hits no listener.
+          await wait_for(async () =>
+            (await dbg.evaluate("document.readyState")) === "complete"
+              ? true : null,
+          { timeout: 15000, what: "debug renderer loaded" });
+          // The window is clean (no edits), so the three-way close confirm
+          // does not fire and Esc closes straight away.
+          await dbg.evaluate(
+            "window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))");
+          const persisted = await wait_for(async () => {
+            let dw: unknown;
+            try {
+              dw = (JSON.parse(readFileSync(settingsPath, "utf8")) as Record<string, unknown>)["debug_window"];
+            } catch { return null; }   // tmp->rename swap: retry next poll
+            if (dw === undefined || dw === null || typeof dw !== "object") return null;
+            const rec = dw as Record<string, unknown>;
+            return rec["w"] === 460 ? rec : null;
+          }, { timeout: 15000, what: "debug_window persisted on hide" });
+          assert.equal(persisted["x"], 120);
+          assert.equal(persisted["y"], 90);
+          assert.equal(persisted["h"], 360);
+        } finally {
+          dbg.close();
+        }
+      } finally {
+        await app1.stop();   // borrowed appdata: kept on disk for boot 2
+      }
+
+      // ---- boot 2: a fresh process restores what the file holds ----
+      // Rewrite the section to a known rect so the restore assertion does
+      // not depend on boot 1's exact final geometry.
+      const raw = JSON.parse(readFileSync(settingsPath, "utf8")) as Record<string, unknown>;
+      raw["debug_window"] = { x: 111, y: 77, w: 480, h: 360 };
+      writeFileSync(settingsPath, JSON.stringify(raw, null, 2), "utf8");
+
+
+      const app2 = new DesktopApp(await free_port(), { modeControl: true, appdata });
+      await app2.start();
+      try {
+        await app2.wait_healthy();
+        await app2.open_debug();
+        const b = await wait_for(async () => {
+          const cur = await app2.debug_bounds();
+          return cur !== null && cur.width === 480 ? cur : null;
+        }, { timeout: 15000, what: "bounds restored from setting.json" });
+        assert.equal(b.x, 111);
+        assert.equal(b.y, 77);
+        assert.equal(b.height, 360);
+      } finally {
+        await app2.stop();
+      }
+    } finally {
+      rmSync(appdata, { recursive: true, force: true });
+    }
+  });
 });

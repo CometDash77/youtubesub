@@ -19,7 +19,7 @@
 // on the 50ms pump and drives the display layer on the 33ms tick, and
 // /status projects engine + overlay + connection-tester state (the app.py
 // App._status payload, 1:1).
-import { app, BrowserWindow, Tray, Menu, dialog, globalShortcut, ipcMain, nativeImage } from "electron";
+import { app, BrowserWindow, Tray, Menu, dialog, globalShortcut, ipcMain, nativeImage, screen } from "electron";
 import type { MenuItemConstructorOptions } from "electron";
 import path from "node:path";
 import fs from "node:fs";
@@ -27,7 +27,7 @@ import { fileURLToPath } from "node:url";
 import { startSkeletonServer, type WireEvent } from "./ws-server.ts";
 import * as S from "./settings.ts";
 import {
-  OverlayDisplay, apply_resize, edge_at,
+  OverlayDisplay, apply_resize, edge_at, bar_geometry, BAR_HEIGHT, BAR_MIN_WIDTH,
   type Rect, type Pt, type ResizeEdge, type JsonRecord,
 } from "./overlay.ts";
 import { overlay_menu_model, type OverlayMenuAction, type OverlayMenuEntry } from "./overlay-menu.ts";
@@ -80,6 +80,16 @@ let productServer: WSServer | null = null;
 // #211 freeze input from the renderer's DOM context menu (the drag half of
 // the freeze lives in the drag machine below).
 let overlayMenuOpen = false;
+// #226 spec §1: the external control-bar window (second window). Created only
+// by the product stack; scene mode never creates it.
+let barWin: BrowserWindow | null = null;
+let barInteractive = false;
+// #226 spec §3/§4: two hover positions (overlay window + bar window), the
+// grace timer lives HERE in main; the ping timer is the passthrough keep-alive.
+let overlayHovering = false;
+let barHovering = false;
+let hoverGraceTimer: NodeJS.Timeout | null = null;
+let hoverPingTimer: NodeJS.Timeout | null = null;
 
 // #205: the settings/debug window host owns the headless DebugWindow model
 // plus its single permanently-reused BrowserWindow. The menu entries land on
@@ -99,8 +109,64 @@ const debugHost = createDebugWindowHost({
   log: logLine,
 });
 
+// #226: last plan's bar-relevant bits (what should be visible on the bar).
+let barOn = false;      // controls state: title + control row visible
+let lockOn = false;     // passthrough + hover: unlock lock visible
+
 function pushPlan(): void {
-  win?.webContents.send("display-plan", display.paint_plan());
+  const plan = display.paint_plan();
+  win?.webContents.send("display-plan", plan);
+  barWin?.webContents.send("display-plan", plan);
+  barOn = plan.state === "controls";
+  lockOn = plan.state === "passthrough" && plan.overlay_hover;
+  syncBarInteractivity();
+}
+
+// spec §1: main-side interaction gate. The bar window is interactive only
+// while something is visible on it (controls bar, or the passthrough lock);
+// otherwise ignore+forward keeps it click-through (and its renderer keeps
+// reporting no hover while invisible - double gating).
+function syncBarInteractivity(): void {
+  const bw = barWin;
+  if (!bw) return;
+  const interactive = barOn || lockOn;
+  if (interactive === barInteractive) return;
+  barInteractive = interactive;
+  bw.setIgnoreMouseEvents(!interactive, { forward: true });
+  logLine("[bar] interactive " + interactive);
+}
+
+// #226 spec §3: the grace timer lives in MAIN (two hover positions). Any
+// position true -> clear the timer + hover on; both false -> wait fade_delay
+// seconds before hover off; a re-enter during the wait cancels it. The CSS
+// leave transition carries no delay, so there is exactly one wait.
+function fadeDelayMs(): number {
+  const a = settings["anim"];
+  const node = (a !== null && typeof a === "object" && !Array.isArray(a) ? a : {}) as JsonRecord;
+  const v = node["fade_delay"];
+  const d = typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 1.2;
+  return Math.round(d * 1000);
+}
+
+function reevaluateHover(): void {
+  if (overlayHovering || barHovering) {
+    if (hoverGraceTimer !== null) { clearTimeout(hoverGraceTimer); hoverGraceTimer = null; }
+    display.set_overlay_hover(true);
+    pushPlan();
+  } else if (hoverGraceTimer === null) {
+    hoverGraceTimer = setTimeout(() => {
+      hoverGraceTimer = null;
+      if (!overlayHovering && !barHovering) {
+        display.set_overlay_hover(false);
+        pushPlan();
+      }
+    }, fadeDelayMs());
+  }
+}
+
+function clearHoverTimers(): void {
+  if (hoverGraceTimer !== null) { clearTimeout(hoverGraceTimer); hoverGraceTimer = null; }
+  if (hoverPingTimer !== null) { clearTimeout(hoverPingTimer); hoverPingTimer = null; }
 }
 
 function pushMenuModel(): void {
@@ -172,6 +238,11 @@ function setClickThrough(on: boolean): void {
   w.setIgnoreMouseEvents(on, { forward: true });
   w.webContents.send("click-through", on);
   clickThrough = on;
+  // #226 spec §3/§4: explicit flips reset the two-position hover bookkeeping
+  // (stale claims die with the mode change; the renderers re-enter fresh).
+  clearHoverTimers();
+  overlayHovering = false;
+  barHovering = false;
   // #217: the same flip feeds the three-state machine (passthrough in,
   // unlock back to subtitles) and pushes a plan so the renderer fades
   // immediately instead of waiting for the next tick.
@@ -255,14 +326,23 @@ function persistGeometry(w: BrowserWindow): void {
   }
 }
 
-ipcMain.on("overlay-mouse", (_e, raw: unknown) => {
+ipcMain.on("overlay-mouse", (e, raw: unknown) => {
   const w = win;
   if (!w) return;
+  const fromBar = barWin !== null && e.sender === barWin.webContents;
   const ev = (raw ?? {}) as MouseEvt;
   const type = typeof ev.type === "string" ? ev.type : "";
   if (type === "press") {
     const b = w.getBounds();
-    const x = numOr(ev.x, 0), y = numOr(ev.y, 0);
+    // #226 spec §7: a bar-sourced press (title-row drag) reports px/py in BAR
+    // coordinates; rewrite them to the overlay's interior so edge_at sees no
+    // edge and the press becomes a plain window drag. gx/gy stay real: the
+    // drag machine moves the overlay rigidly with the cursor. (spec said
+    // "py >= h makes edge_at return null", but the bottom band actually
+    // matches edge_at - the rewrite is the faithful implementation of the
+    // intent; recorded on the ticket.)
+    const x = fromBar ? b.width / 2 : numOr(ev.x, 0);
+    const y = fromBar ? b.height / 2 : numOr(ev.y, 0);
     const gx = numOr(ev.gx, 0), gy = numOr(ev.gy, 0);
     const edge = edge_at(x, y, b.width, b.height); // latch edge at press
     drag = {
@@ -280,6 +360,7 @@ ipcMain.on("overlay-mouse", (_e, raw: unknown) => {
   } else if (type === "move") {
     const gx = numOr(ev.gx, 0), gy = numOr(ev.gy, 0);
     if (!drag) {
+      if (fromBar) return;   // no resize-cursor feedback through the bar window
       const b = w.getBounds();
       setCursor(cursorFor(edge_at(numOr(ev.x, 0), numOr(ev.y, 0), b.width, b.height)));
       return;
@@ -306,11 +387,30 @@ ipcMain.on("menu-action", (_e, id: unknown) => {
   if (typeof id === "string" && MENU_IDS.has(id)) handleMenuAction(id);
 });
 
-// #217 three-state wiring. Hover: the renderer reports enter/leave only while
-// the window is interactive; the machine derives subtitles <-> controls.
-ipcMain.on("overlay-hover", (_e, hovering: unknown) => {
-  display.set_overlay_hover(hovering === true);
-  pushPlan();
+// #217 three-state wiring, #226 spec §3/§4: still ONE "overlay-hover" IPC
+// channel, now carrying two hover positions (overlay + bar), told apart by
+// e.sender. The grace timer lives in main (reevaluateHover); an overlay-sourced
+// report while click-through is the ct keep-alive ping (re-arms fade_delay).
+ipcMain.on("overlay-hover", (e, hovering: unknown) => {
+  const fromBar = barWin !== null && e.sender === barWin.webContents;
+  const on = hovering === true;
+  if (!fromBar && clickThrough) {
+    // Ping semantics: keep the claim alive and re-arm the expiry timer; when
+    // it expires with no further pings (and no bar hover) the claim dies.
+    overlayHovering = on;
+    if (hoverPingTimer !== null) { clearTimeout(hoverPingTimer); hoverPingTimer = null; }
+    if (on) {
+      hoverPingTimer = setTimeout(() => {
+        hoverPingTimer = null;
+        overlayHovering = false;
+        reevaluateHover();
+      }, fadeDelayMs());
+    }
+    reevaluateHover();
+    return;
+  }
+  if (fromBar) barHovering = on; else overlayHovering = on;
+  reevaluateHover();
 });
 // Menu-open freeze input (the other half lives in the drag machine above).
 ipcMain.on("overlay-menu-open", (_e, open: unknown) => {
@@ -378,6 +478,77 @@ function createWindow(geo: { width: number; height: number; x?: number; y?: numb
   void win.loadFile(path.join(APP_ROOT, "dist", "renderer", "index.html"));
 }
 
+// ---- #226 spec §1/§2: the external control-bar window (second window) ----
+function createBarWindow(): void {
+  barWin = new BrowserWindow({
+    width: BAR_MIN_WIDTH,
+    height: BAR_HEIGHT,
+    // YOUTUBESUB_E2E_OFFSCREEN: same gate as the overlay - the E2E black-box
+    // run creates the bar but never shows it (spec §8: created, not shown,
+    // never interacted with).
+    show: false,
+    frame: false,
+    transparent: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: false,
+    hasShadow: false,
+    focusable: false,    // never steals focus from the video
+    title: "youtubesub-bar",
+    webPreferences: {
+      preload: path.join(APP_ROOT, "dist", "preload", "preload.cjs"),  // same bridge, zero preload changes
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  barWin.setMenuBarVisibility(false);
+  // Hidden until the plan says otherwise (spec §1: visibility = renderer
+  // opacity + this ignore gate; forward keeps the bridge paths alive).
+  barWin.setIgnoreMouseEvents(true, { forward: true });
+  barWin.webContents.on("preload-error", (_e, preloadPath, error) => {
+    logLine("[bar] preload-error " + preloadPath + " : " + error.message);
+  });
+  barWin.webContents.on("did-fail-load", (_e, code, desc) => {
+    logLine("[bar] did-fail-load " + code + " " + desc);
+  });
+  barWin.webContents.once("did-finish-load", () => {
+    logLine("[bar] did-finish-load");
+    pushPlan();            // the bar's first plan (visibility gates engage)
+  });
+  void barWin.loadFile(path.join(APP_ROOT, "dist", "renderer", "bar.html"));
+  // Follow the overlay (spec §2: move + resize + display-metrics fallback,
+  // no throttle). placeBar is idempotent and cheap.
+  win?.on("move", placeBar);
+  win?.on("resize", placeBar);
+  win?.on("show", placeBar);
+  win?.on("hide", () => { if (barWin?.isVisible()) barWin.hide(); });
+  screen.on("display-metrics-changed", placeBar);
+}
+
+// spec §2: hug the overlay's bottom edge, flip above it when the screen's
+// bottom edge would clip the bar, clamp into the work area (the pure
+// bar_geometry in overlay.ts is tested headless). The bar window itself is
+// 常驻 once shown (spec §1): hover-driven visibility is renderer opacity +
+// the ignore gate; hide() only follows the overlay window hiding (tray
+// toggle-overlay), and E2E offscreen never shows it at all.
+function placeBar(): void {
+  const bw = barWin;
+  const w = win;
+  if (!bw || !w) return;
+  const b = w.getBounds();
+  const wa = screen.getDisplayMatching(b).workArea;
+  const geo = bar_geometry(
+    { x: b.x, y: b.y, w: b.width, h: b.height },
+    { x: wa.x, y: wa.y, w: wa.width, h: wa.height },
+  );
+  bw.setBounds({ x: geo.x, y: geo.y, width: geo.w, height: geo.h });
+  if (w.isVisible()) {
+    if (!bw.isVisible()) bw.showInactive();
+  } else if (bw.isVisible()) {
+    bw.hide();
+  }
+}
+
 // ---- #206: the product stack - protocol v1 WSServer -> Engine -> display ----
 // app.py App.__init__/run() 1:1: the ConnectionTester lives once and reports
 // through /status; frames land in a bounded queue; the pump drains it into
@@ -395,6 +566,8 @@ async function startProductStack(): Promise<void> {
   const evq = new EventQueue(2000);
   const tester = new ConnectionTester();
   productEngine = engine;   // #217 overlay-command route target
+  // #226 spec §1: the bar window exists only in the product stack.
+  createBarWindow();
 
   // App._status: engine.status() flattened + overlay state bits.
   function statusPayload(): Record<string, unknown> {
@@ -478,6 +651,12 @@ async function startProductStack(): Promise<void> {
     if (w && w.isVisible() && !clickThrough) {
       w.setAlwaysOnTop(true);
       w.moveTop();
+      // #226 spec §1: the z-order pulse covers BOTH windows (overlay first,
+      // bar right after) so the bar never sinks under other topmost apps.
+      if (barWin && barWin.isVisible()) {
+        barWin.setAlwaysOnTop(true);
+        barWin.moveTop();
+      }
     }
   }, 5000);
 
@@ -487,6 +666,11 @@ async function startProductStack(): Promise<void> {
       engine, display, pushPlan,
       sendCommand: (cmd) => server.sendCommand(cmd),
       debugOpen: () => { debugHost.open("settings"); return true; },
+      debugClose: () => debugHost.close(),
+      debugBounds: {
+        get: () => debugHost.bounds(),
+        set: (b) => { debugHost.setBounds(b); },
+      },
       log: logLine,
     })
       .then((p) => logLine("[e2e] mode control on 127.0.0.1:" + p))
@@ -497,6 +681,7 @@ async function startProductStack(): Promise<void> {
     clearInterval(pump);
     clearInterval(tick);
     clearInterval(topmost);
+    clearHoverTimers();
     void server.stop();
   });
 }
@@ -576,16 +761,21 @@ app.whenReady().then(() => {
     if (w) {
       // All three verdict points land in click-through state. Runner sessions
       // never deliver forwarded OS mousemoves, so the main process drives the
-      // renderer unlock chain with synthetic mousemoves (proven by #193 CI).
+      // renderer chain with synthetic mousemoves (proven by #193 CI). #227:
+      // the in-window hotspot is gone (the unlock lock lives in the bar
+      // window now), so the +2.5s probe moves to the window CENTER and feeds
+      // the ct ping chain (renderer mousemove -> throttled overlay-hover ping
+      // -> main keep-alive) instead of the old .hot hotspot probe; the runner
+      // only observes (no clicks, no assertions), so it stays untouched.
       w.webContents.once("did-finish-load", () => {
         setTimeout(() => {
           setClickThrough(true);
-          const b = w.getBounds();   // hotspot center from live bounds (CSS right/bottom 8 + margins)
-          const hx = b.width - 33, hy = b.height - 33;
+          const b = w.getBounds();
+          const cx = Math.trunc(b.width / 2), cy = Math.trunc(b.height / 2);
           setTimeout(() => {
-            logLine("[main] synthetic mousemove -> hotspot");
-            w.webContents.sendInputEvent({ type: "mouseEnter", x: hx, y: hy });
-            w.webContents.sendInputEvent({ type: "mouseMove", x: hx, y: hy });
+            logLine("[main] synthetic mousemove -> center (ct ping chain)");
+            w.webContents.sendInputEvent({ type: "mouseEnter", x: cx, y: cy });
+            w.webContents.sendInputEvent({ type: "mouseMove", x: cx, y: cy });
           }, 2500);
           setTimeout(() => {
             logLine("[main] synthetic mousemove -> center");

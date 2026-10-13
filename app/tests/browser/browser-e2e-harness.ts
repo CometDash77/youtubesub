@@ -557,6 +557,8 @@ export class Chrome {
 }
 
 export interface DesktopAppOptions {
+  // Reuse an existing APPDATA instead of a private one (#232 boot-2 test).
+  appdata?: string | null;
   offscreen?: boolean;
   mode?: string;
   provider?: Record<string, unknown> | null;
@@ -576,20 +578,29 @@ export class DesktopApp {
   proc: ChildProcess | null = null;
   private readonly offscreen: boolean;
   private readonly modeControl: boolean;
-  constructor(port: number, { offscreen = true, mode = "bilingual", provider = null, modeControl = false }: DesktopAppOptions = {}) {
+  private readonly ownsAppdata: boolean;
+  constructor(port: number, { offscreen = true, mode = "bilingual", provider = null, modeControl = false, appdata = null }: DesktopAppOptions = {}) {
     this.port = port;
     this.offscreen = offscreen;
     this.modeControl = modeControl;
-    this.appdata = fs.mkdtempSync(path.join(os.tmpdir(), "ytus-appdata-"));
+    this.ownsAppdata = appdata === null;
+    this.appdata = appdata ?? fs.mkdtempSync(path.join(os.tmpdir(), "ytus-appdata-"));
     this.logPath = path.join(this.appdata, "app.log");
     const d = path.join(this.appdata, "SubOverlay");
     fs.mkdirSync(d, { recursive: true });
-    const settings = {
+    // Reused appdata (#232): keep every persisted key of the existing
+    // setting.json and overlay only what this boot must own - above all the
+    // new server port. A fresh dir starts from the empty base.
+    let settings: Record<string, unknown> = {};
+    try {
+      settings = JSON.parse(fs.readFileSync(path.join(d, "setting.json"), "utf8")) as Record<string, unknown>;
+    } catch { /* fresh dir */ }
+    Object.assign(settings, {
       server: { port },
       provider: provider ?? { base_url: "", api_key: "", model: "", protocol: "auto", mock: true },
       display: { mode },
       window: { x: 220, y: 150, w: 780, h: 130 },
-    };
+    });
     fs.writeFileSync(path.join(d, "setting.json"), JSON.stringify(settings, null, 2));
   }
   async start(): Promise<void> {
@@ -656,6 +667,20 @@ export class DesktopApp {
     if (this.modePort === null) throw new Error("mode control is available only in the test harness");
     await this.control("/debug-open", {});
   }
+  // #232: the debug window's current bounds (null = window not created).
+  async debug_bounds(): Promise<{ x: number; y: number; width: number; height: number } | null> {
+    if (this.modePort === null) throw new Error("mode control is available only in the test harness");
+    const res = await fetch("http://127.0.0.1:" + this.modePort + "/debug-bounds", {
+      signal: AbortSignal.timeout(3000),
+    });
+    if (res.status !== 200) throw new Error("E2E app rejected /debug-bounds: HTTP " + res.status);
+    const body = await res.json() as { bounds?: { x: number; y: number; width: number; height: number } | null };
+    return body.bounds ?? null;
+  }
+  // #232: move/resize the debug window to a known rect (via /debug-bounds).
+  async set_debug_bounds(b: { x: number; y: number; width: number; height: number }): Promise<void> {
+    await this.control("/debug-bounds", b);
+  }
   // #220: CDP ws url of the debug window target. The window exists only
   // after open_debug(), so poll /json/list until the debug.html page shows up.
   async debug_page_ws_url(timeoutMs = 25000): Promise<string> {
@@ -704,7 +729,9 @@ export class DesktopApp {
         try { proc.kill("SIGKILL"); } catch { /* already gone */ }
       }
     }
-    fs.rmSync(this.appdata, { recursive: true, force: true });
+    // #232: a borrowed appdata (the bounds restore test's second boot) is
+    // owned by the test; only remove what this instance created.
+    if (this.ownsAppdata) fs.rmSync(this.appdata, { recursive: true, force: true });
   }
 }
 
