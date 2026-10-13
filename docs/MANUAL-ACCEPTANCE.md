@@ -13,14 +13,13 @@
 ## L0 · 自动基线（不需要人，先跑这个）
 
 ```
-python -m pytest desktop/tests -q                       # 当前 366 passed + 1 条既有 E2E 时序失败（见下；无 Chrome 会 skip，不算通过）
 cd userscript; node --test "tests/*.test.mjs"           # 期望全绿：当前 48 pass / 0 fail（必须用 glob 形式）
 node --check userscript/youtubesub.user.js              # 语法检查
-cd app; npm run typecheck; npm test                     # TS 栈（#206）：期望 typecheck 0 error + 390 pass / 0 fail
-cd app; npm run test:e2e                                # TS 栈 10 条真 Chrome E2E（黑盒 /status），已知失败同 Python 那条
+cd app; npm run typecheck; npm test                     # 期望 typecheck 0 error + 390 pass / 0 fail
+cd app; npm run test:e2e                                # 10 条真 Chrome E2E（黑盒 /status），已知失败见下
 ```
 
-通过标准：pytest **0 failed / 0 skipped** 为目标（当前 366 passed，数字随提交增长）；node 48 pass 0 fail；10 条 E2E 没有被 skip。
+通过标准：TS 栈 typecheck 0 error 且 `npm test` **0 failed**（当前 390 passed，数字随提交增长）；node 48 pass 0 fail；10 条 E2E 没有被 skip。
 已知例外（2026-10-08 合并时记账）：`test_browser_waiting_and_capture_diagnostics_preempt_translation_waiting` 在 CSP 夹具页（script-src 'nonce-fixture'）上的注入失败上浮超时——**master 分支同样失败**（worktree 实证），属既有 E2E 时序问题，合并没有引入回归，留待 E2E 专项修复。TS 栈移植（#206）已做奇偶校验：同一条、同一等待点超时，last observed /status 逐字段一致（frames 89 / sources 3 / title eee / hook_error 空），移植忠实复现既有失败，非移植引入。
 （skip 说明 harness 没找到 Chrome，这时浏览器侧**等于没验**，要记下来）。
 
@@ -35,16 +34,13 @@ E2E 用的测试特权（`--disable-web-security`、CDP `Page.setBypassCSP`）**
 **状态**：上一会话已实测通过（Python 栈）；TS 栈（#206）同一夹具、同一 userscript、同一 10 条 E2E 口径自动验证 9 绿 + 1 条已知失败（见 L0）。
 
 ```
-# TS 栈（#206 起为主入口；先构建一次，E2E 直接拉起 Electron 主进程）
+# 先构建一次，E2E 直接拉起 Electron 主进程
 cd app; npm run build
 node tests\browser\browser-e2e-harness.ts --demo [--seconds 30]
-
-# Python 栈（#207 退役前的对照入口）
-python desktop/tests/browser_e2e.py --demo [--seconds 30]
 ```
 
 会弹出一个 Chrome 窗口（独立 profile、CORS 检查关闭，用来顶替 Tampermonkey 的 GM 授权）和一个真浮窗
-（真桌面端子进程，临时 APPDATA + mock 翻译；TS 栈 = Electron 主进程 `app/dist/main/main.js`，
+（临时 APPDATA + mock 翻译；Electron 主进程 `app/dist/main/main.js`，
 harness 会自动剔除 `ELECTRON_RUN_AS_NODE`——agent/IDE 宿主进程常带这个变量，会把 electron.exe 降级成纯 Node）。夹具页自带按钮：
 `Load captions / Play / Pause / +2s / -2s / 2.0x / 1.0x / "SPA: switch video"`。
 
@@ -66,7 +62,7 @@ harness 会自动剔除 `ELECTRON_RUN_AS_NODE`——agent/IDE 宿主进程常带
 随时可看机器可读状态（另开一个终端）：`Invoke-RestMethod http://127.0.0.1:<harness 打印的端口>/status`。
 harness 只 kill 自己启动的 Chrome；**不要 kill 你自己常驻的 chrome.exe**。
 
-自动验收补充：当前有 10 条真实 Chrome + userscript + desktop app 黑盒 E2E，其中保留原有 7 条；新增用例通过 `/status` 验证翻译状态、失败后 seek 恢复、hook/capture 诊断到达及原文-only 请求拦截。浮窗状态行优先级由 `desktop/tests/test_overlay_status.py` 单测覆盖。受控 provider 是本机测试服务，不代表真实 AI 服务或 Tampermonkey 已验证。
+自动验收补充：当前有 10 条真实 Chrome + userscript + desktop app 黑盒 E2E，其中保留原有 7 条；新增用例通过 `/status` 验证翻译状态、失败后 seek 恢复、hook/capture 诊断到达及原文-only 请求拦截。浮窗状态行优先级由 `app/tests/overlay-status.test.ts` 单测覆盖。受控 provider 是本机测试服务，不代表真实 AI 服务或 Tampermonkey 已验证。
 
 **失败时记什么**：哪一步、`/status` 的 `state/orig/trans/playing/rate/hook_error` 原文、控制台里 `[youtubesub]` 开头的行。
 
@@ -75,7 +71,7 @@ harness 只 kill 自己启动的 Chrome；**不要 kill 你自己常驻的 chrom
 ### L1b · 未配置 provider（issue #1：没有译文时原文必须还看得见）
 
 **目的**：base_url / model 都空、也没勾 Mock（= 装完第一次运行的状态）时，「没有译文」不得表现成「没有字幕」。
-**状态**：显示层已改，自动验证见 `desktop/tests/test_overlay_labels.py`；**待你本人眼看一次**。
+**状态**：显示层已改，自动验证见 `app/tests/overlay-labels.test.ts`；**待你本人眼看一次**。
 
 ```
 start-desktop.cmd          # 默认设置，不填任何模型
@@ -108,7 +104,7 @@ start-desktop.cmd          # 默认设置，不填任何模型
 
 ### L1d · 设置与调试窗口（#164 / #170：一个窗口、三页、一个页脚）
 
-**自动状态**：`desktop/tests/test_debug_menu.py`（双入口同实例落不同页、整窗一次写盘、取消全回滚、关窗三分支、`Ctrl+S`、重开重取基线）、`desktop/tests/test_settings_page.py`（设置页文案与脏计数）、`desktop/tests/test_debug_tuning_page.py`（调参页范围与徽标）、`desktop/tests/test_app_lifecycle.py`（保存 / 取消 / × 关窗都不结束 App）已覆盖。
+**自动状态**：`app/tests/debug-menu.test.ts`（双入口同实例落不同页、整窗一次写盘、取消全回滚、关窗三分支、`Ctrl+S`、重开重取基线；App 壳的 保存 / 取消 / × 关窗都不结束 App 由同一文件的 App-driving 断言钉住）、`app/tests/settings-page.test.ts`（设置页文案与脏计数）、`app/tests/debug-tuning-page.test.ts`（调参页范围与徽标）已覆盖。
 
 **仍需真人眼验**：
 
@@ -132,13 +128,9 @@ start-desktop.cmd          # 默认设置，不填任何模型
 证据留档：`.scratch/probe/logs/20260921-o3-evidence-summary.md`。
 
 ```
-# TS 栈（#206 起为主入口）
+# 先构建一次
 cd app; npm run build
 node tests\browser\browser-e2e-harness.ts --live "https://www.youtube.com/watch?v=<带CC的视频>" --proxy http://127.0.0.1:10809 [--headless] [--seconds 20]
-
-# Python 栈（#207 退役前的对照入口）
-python desktop/tests/browser_e2e.py --live "https://www.youtube.com/watch?v=<带CC的视频>" ^
-    --proxy http://127.0.0.1:10809 [--headless] [--seconds 20]
 ```
 
 本机 DNS 被污染，**必须走代理** `127.0.0.1:10809`。
@@ -171,7 +163,7 @@ python desktop/tests/browser_e2e.py --live "https://www.youtube.com/watch?v=<带
 前置：
 
 1. Chrome 装 Tampermonkey，导入 `userscript/youtubesub.user.js`（`@run-at document-start`）。
-2. 起真桌面端：双击 `start-desktop.cmd`，或 `python desktop/app.py`（监听 `127.0.0.1:9877`）。
+2. 起真桌面端：双击 `start-desktop.cmd`，或在 `app/` 下 `npm start`（监听 `127.0.0.1:9877`）。
 3. `Invoke-RestMethod http://127.0.0.1:9877/health` 应回 `{"ok":true,"version":1}`。
 
 手测项：
@@ -244,5 +236,5 @@ Protocol 先留 `auto`，**取消勾选** "Mock mode (no real API)" → OK（写
 | L3 真 Tampermonkey | | | | |
 | L4 真实 Key | | | | |
 
-配套：`requirements.txt`（依赖）、`start-desktop.cmd`（一键起桌面端）、`README.md`（运行章节）。
+配套：`app/package.json`（依赖）、`start-desktop.cmd`（一键起桌面端）、`README.md`（运行章节）。
 计划与断点见 `.scratch/handoff/` 下的交接文档与 `PROGRESS.md`。

@@ -64,7 +64,7 @@ YouTube 页面 (Tampermonkey 脚本, userscript/youtubesub.user.js)
   **mock 是身份的维度** (ADR-008): Mock 回显与真实译文是两个不可能互相命中的命名空间; 身份方案随之上到 version 2, 旧方案写下的行全部不可达.
 
 ## 4. 验证计划 (摘要, 证据为准)
-- 单元: 解析/分句/映射/cachekey/时钟/输出校验/脱敏 — pytest 全绿.
+- 单元: 解析/分句/映射/cachekey/时钟/输出校验/脱敏 — app/ TS 测试全绿 (`npm test`).
 - 集成: 模拟浏览器客户端按 PROTOCOL 发 cues+sync, 跑真实 server+clock+queue+Mock 翻译, 断言 overlay 文本.
 - 真实: 经代理抓真实 timedtext (人工轨 + 自动轨); 真实 Chrome + Tampermonkey 跑脚本 (最小化/遮挡/seek/变速/SPA/断线重连);
   真实 Key 到位后补翻译成功链路, 在此之前记为部分验证.

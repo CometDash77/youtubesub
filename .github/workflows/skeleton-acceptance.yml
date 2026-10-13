@@ -47,7 +47,7 @@ jobs:
         run: npm test
 
       - name: Browser E2E (real Chrome -> real userscript -> TS app)
-        # Same ten criteria as desktop/tests/test_browser_e2e.py, black-box
+        # Same ten criteria as the original Python browser E2E, black-box
         # over GET /status. The CSP/HOOK_ERROR fixture criterion is a known
         # environmental timing failure on current local Chrome in BOTH the
         # Python original and this port (docs/MANUAL-ACCEPTANCE.md L0 note);
