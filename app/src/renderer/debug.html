@@ -112,6 +112,20 @@
     #debugWindow, #debugHeader, #debugFooter, .page { -webkit-app-region: drag; }
     #debugScroll, #pageswitch, #closeBtn, #footerButtons, .debugCard,
     #renameModal { -webkit-app-region: no-drag; }
+    /* #235: narrow windows - the default-size h1 wraps to three lines and
+       the version hint under it fills the whole first screen before any
+       form card shows. At <=480px put title and hint on one baseline row,
+       shrink the h1, ellipsize the hint. Layout-only override: no token
+       changes, and above 480px nothing moves. */
+    @media (max-width: 480px) {
+      #debugHeader { gap: 10px; }
+      #debugHeader > div:first-child {
+        flex: 1; min-width: 0;
+        display: flex; align-items: baseline; gap: 8px;
+      }
+      #debugTitle { font-size: 15px; white-space: nowrap; }
+      #debugHint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    }
     /* diag page */
     #diagBar { display: flex; gap: 14px; align-items: center; font-size: 13px; }
     #diagBar .debugBadgeOk, #diagBar .debugBadgeWarn, #diagBar .debugBadgeError

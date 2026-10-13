@@ -148,7 +148,12 @@ test("#231: show/open never resizes the window - the refit is gone", () => {
   const host = fs.readFileSync(
     new URL("../src/main/debug-window-host.ts", import.meta.url), "utf8");
   assert.ok(!host.includes("applyBounds"), "the show/open refit must be deleted");
-  assert.ok(!host.includes("setBounds"), "the debug host must never write window bounds");
+  // #232 narrows the old blanket ban ("never write bounds") to "no refit":
+  // restore runs once at createWindow() time and the only bounds writer left
+  // is the e2e hook (DebugHost.setBounds -> win.setBounds). A second call
+  // site would be the refit sneaking back in.
+  assert.equal([...host.matchAll(/\.setBounds\(/g)].length, 1,
+    "the sole bounds writer must be the e2e hook");
 });
 
 test("#231: blank areas drag the window, interactive surfaces opt out", () => {
@@ -164,6 +169,17 @@ test("#231: blank areas drag the window, interactive surfaces opt out", () => {
     html.includes("#debugScroll, #pageswitch, #closeBtn, #footerButtons, .debugCard,")
     && html.includes("#renameModal { -webkit-app-region: no-drag; }"),
     "scroll region + tab pill + close + footer buttons + cards + modal must opt out");
+});
+
+test("#235: narrow windows compress the title block to one row", () => {
+  const html = fs.readFileSync(
+    new URL("../src/renderer/debug.html", import.meta.url), "utf8");
+  // 420x300 下首屏要能看到表单：标题单行 15px + hint 省略号（#235 实测）。
+  assert.ok(html.includes("@media (max-width: 480px)"), "narrow-width media query must exist");
+  assert.ok(html.includes("#debugTitle { font-size: 15px; white-space: nowrap; }"),
+    "title must be single-line 15px in narrow windows");
+  assert.ok(html.includes("text-overflow: ellipsis; white-space: nowrap; }"),
+    "version hint must ellipsize in narrow windows");
 });
 
 test("#231: at the 420x300 floor all three pages stay usable", () => {
