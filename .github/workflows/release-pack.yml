@@ -1,0 +1,61 @@
+name: release-pack
+
+# Issue #196: tag v* -> build Electron desktop (onedir + zip, x64) -> attach zip
+# to the GitHub Release. Version single source of truth: app/package.json.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  pack:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Locked decision (#196): package.json version is the single source of
+      # truth; a tag must match it exactly or the Release would lie.
+      - name: "Guard: tag matches package.json version"
+        shell: pwsh
+        run: |
+          $tag = '${{ github.ref_name }}'
+          $ver = (Get-Content package.json | ConvertFrom-Json).version
+          if ($tag -ne "v$ver") { throw "tag $tag != package.json version v$ver" }
+
+      - name: Install deps
+        shell: cmd
+        run: |
+          npm ci --no-audit --no-fund || npm install --no-audit --no-fund
+
+      - name: Build
+        run: npm run build
+
+      - name: Pack (onedir + zip, x64)
+        run: npx electron-builder --win --publish never
+
+      - name: Verify pack artifacts
+        shell: pwsh
+        run: |
+          $ver = (Get-Content package.json | ConvertFrom-Json).version
+          $zip = "release/youtubesub-$ver-win64.zip"
+          if (-not (Test-Path $zip)) { throw "missing $zip" }
+          if (-not (Test-Path "release/win-unpacked/youtubesub.exe")) { throw "missing release/win-unpacked/youtubesub.exe" }
+          $len = (Get-Item $zip).Length
+          if ($len -lt 50MB) { throw "zip suspiciously small: $len bytes" }
+          "artifact OK: $zip ($([math]::Round($len/1MB)) MB)"
+
+      - name: Attach zip to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/youtubesub-*-win64.zip
+          fail_on_unmatched_files: true

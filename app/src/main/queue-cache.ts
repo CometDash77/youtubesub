@@ -30,8 +30,9 @@
 //   "RATE_LIMITED" compared with ===.
 // - dict(cached) / dict(first_err) shallow copies -> object spread.
 // - type(e).__name__ + ": " + str(e) -> `${e.name}: ${e.message}` for Errors.
-// - The default db path mirrors the Python __file__-relative
-//   ../../data/translations.db default.
+// - The default db path mirrors the Python __file__-relative default, one
+//   level deeper (dist/main -> repo root): the real data/translations.db the
+//   Python build wrote, taken over in place (#207). Not an app-local copy.
 // - resolve_workers (provider.max_concurrent clamp to [1,16]) stays in
 //   engine.py and is ported by the engine-assembly ticket; the queue takes
 //   `workers` as-is, exactly like the Python constructor. Batch chunking
@@ -43,6 +44,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { settings_dir } from "./settings.ts";
 import { DatabaseSync } from "node:sqlite";
 
 // ---------------------------------------------------------------------
@@ -126,8 +128,19 @@ export function cache_identity(
 // TranslationCache
 // ---------------------------------------------------------------------
 
-const DEFAULT_DB = path.join(path.dirname(fileURLToPath(import.meta.url)),
-                             "..", "..", "data", "translations.db");
+// Resolved once: the dev tree keeps the #207 repo-root data/ layout
+// (dist/main -> up three -> data); a packaged run's import.meta.url lives
+// inside app.asar, a read-only pseudo-fs node:sqlite cannot open, so the
+// default lands beside setting.json in %APPDATA%/SubOverlay instead.
+// YOUTUBESUB_DATA_DIR (main.ts) still overrides for portable installs.
+const ASAR_RE = /[\\/]app\.asar[\\/]/;
+export function resolve_default_db(here: string): string {
+  if (!ASAR_RE.test(here)) {
+    return path.join(path.dirname(here), "..", "..", "..", "data", "translations.db");
+  }
+  return path.join(settings_dir(), "translations.db");
+}
+const DEFAULT_DB = resolve_default_db(fileURLToPath(import.meta.url));
 
 export type CachedResult = Record<string, unknown>;
 

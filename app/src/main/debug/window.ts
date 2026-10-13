@@ -158,6 +158,7 @@ export class DebugWindow {
   visible = false;
   width = PREFERRED_W;
   height = PREFERRED_H;
+  readonly app_version: string;
   status_label_text = "没有未保存的改动";
   save_button_enabled = false;
 
@@ -168,10 +169,12 @@ export class DebugWindow {
     save?: SaveFn;
     page?: string;
     ask_unsaved_changes?: AskUnsavedChanges;
+    app_version?: string;
     screen_avail?: (() => { w: number; h: number } | null) | null;
     poll_timer?: { start(): void; stop(): void } | null;
   } = {}) {
     this.settings = settings;
+    this.app_version = opts.app_version ?? "";
     this.overlay = opts.overlay ?? null;
     this._save = opts.save ?? S.save;
     this._ask = opts.ask_unsaved_changes ?? (() => {
@@ -402,6 +405,12 @@ export class DebugWindow {
 
   env_label(): string {
     return default_os_label();
+  }
+
+  // #196: the app version (app.getVersion(), single source package.json) for
+  // the window title row; empty in headless tests that do not inject it.
+  version_label(): string {
+    return this.app_version ? "v" + this.app_version : "";
   }
 }
 

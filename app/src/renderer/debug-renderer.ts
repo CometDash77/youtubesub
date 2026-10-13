@@ -410,7 +410,8 @@ function apply(s: unknown): void {
   const foot = st.footer as Record<string, unknown>;
   document.getElementById("footerStatus")!.textContent = String(foot.status);
   (document.getElementById("saveBtn") as HTMLButtonElement).disabled = !foot.save_enabled;
-  document.getElementById("debugHint")!.textContent = String(st.env ?? "");
+  document.getElementById("debugHint")!.textContent =
+    [String(st.version ?? ""), String(st.env ?? "")].filter(Boolean).join(" · ");
   const geo = st.geometry as Record<string, number>;
   void geo; // geometry is owned by the OS window; model fit happens main-side
   buildSettingsPage(document.getElementById("page-settings")!, st.settings as Record<string, unknown>);

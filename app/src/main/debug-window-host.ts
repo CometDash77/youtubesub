@@ -12,7 +12,7 @@
 // through the same debug.close() confirm flow; a real window close (Alt+F4)
 // is intercepted and routed identically (hide, never destroy - the model
 // instance is permanent).
-import { BrowserWindow, dialog, screen } from "electron";
+import { app, BrowserWindow, dialog, screen } from "electron";
 import path from "node:path";
 import * as S from "./settings.ts";
 import { ConnectionTester } from "./connection-test.ts";
@@ -63,6 +63,7 @@ export function createDebugWindowHost(deps: DebugHostDeps): DebugHost {
 
   const debug = new DebugWindow(deps.settings, {
     overlay: deps.overlay,
+    app_version: app.getVersion(),
     tester: new ConnectionTester(),
     save: (cfg) => { S.save(cfg as S.Settings); },
     poll_timer: poll_seam,
@@ -243,6 +244,7 @@ export function createDebugWindowHost(deps: DebugHostDeps): DebugHost {
       geometry: { width: w.width, height: w.height },
       footer: { status: w.status_label_text, save_enabled: w.save_button_enabled },
       env: w.env_label(),
+      version: w.version_label(),
       settings: {
         fields: {
           base_url: sp.base_url, api_key: sp.api_key, model: sp.model,

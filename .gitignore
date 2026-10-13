@@ -1,8 +1,3 @@
-# Python
-__pycache__/
-*.py[cod]
-.pytest_cache/
-
 # DSH config snapshots may contain account/endpoint data - never commit them
 harness/backups/
 
@@ -23,5 +18,6 @@ node_modules/
 app/dist/
 app/skeleton.log
 app/acceptance/evidence/
-# TS-stack translation cache (created on first app run; E2E isolates its own)
-app/data/
+# electron-builder output (#196)
+app/release/
+app/eb-out.txt
