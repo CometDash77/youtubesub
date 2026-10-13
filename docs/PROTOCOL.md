@@ -18,7 +18,7 @@
 `sample`(常量原句与真实译文) / `model_list` / `warnings`(如 MOCK_MASKS_REAL_CONFIG) / `skipped` / `quota_notice` / `notes`(未验证对齐协议) /
 `snapshot`(点击那一刻的输入, **永不含 api_key**, 只记 api_key_set 布尔) / `duration_ms`。
 被取消/过期的运行不写该键; 不落盘、不建日志子系统; 与 /status 同为仅回环。
-只绑定 loopback; 鉴权见 ADR-003 (v1 先做 Origin 检查 + 可选 token, 见下).
+只绑定 loopback; 鉴权见 ADR-003 (v1 先做 Origin 检查 + 可选 token, 见下). Origin 白名单自 #219 起按 URL hostname 精确后缀匹配 (youtube.com 及其子域、localhost/127.0.0.1/[::1]); 旧字符串 endsWith 匹配放行的 notyoutube.com 类同形域名一律拒绝.
 
 状态对象还可能包含可选的 `connection_test` 字段：用户从设置与调试窗口的**设置页**手动运行连接测试后，它等于最近一次测试报告；尚未运行时省略。报告保留 `verdict`（pass/fail/mock）、layer id、error code、skipped step id 和 `warnings` 中的机器值。报告中的标题、人类说明、quota notice 与 note 使用中文。`warning_messages` 是可选对象，以 warning code 为键提供中文说明；消费者应继续以 `warnings` 识别机器告警，展示时可按 code 查找说明，未命中则显示 code。此字段可向后兼容地忽略。
 
@@ -63,8 +63,24 @@
 ### deactivate
 `{"type":"deactivate","source_id":"<uuid>"}` — 页面卸载/脚本停用时发送 (beforeunload 不可靠, 桌面端收到 cues 可重新激活 source).
 
-## desktop -> browser (v1 保留, 暂不用)
-`{"type":"play_pause","source_id":"<uuid>"}` — 预留.
+## desktop -> browser (v1 增量命令通道, #219)
+
+四条命令帧, 桌面端 -> 脚本, 沿同一条 WS 连接反向下发; v1 附加帧不升协议版本 (兼容规则见 register 一节).
+v1 预留的 `play_pause` 占位由这四帧取代 (播放/暂停按显式态拆分, issue #215 定案 B): 旧桌面不发命令、旧脚本把白名单外帧静默丢弃, 两个方向的兼容都成立.
+
+### play / pause (显式态, 幂等)
+`{"type":"play","source_id":"<uuid>"}` / `{"type":"pause","source_id":"<uuid>"}`
+
+### seek (相对偏移)
+`{"type":"seek","source_id":"<uuid>","delta_ms":15000}` — `delta_ms` 为相对当前播放位置的毫秒数, 可负; 桌面端 ±15s 按钮即 `±15000`. 越界由脚本侧钳制 (0 ~ duration). 生效后脚本经既有 `seeked` 监听自动回发 sync, 无需确认帧.
+
+### mute (显式态)
+`{"type":"mute","source_id":"<uuid>","muted":true}`
+
+### 发送与执行约定
+- 桌面端发送校验: type 白名单 (`play|pause|seek|mute`); `source_id` 必带且非空; `seek` 必带有限数值 `delta_ms`, `mute` 必带布尔 `muted`, 不合形判废不发送.
+- 路由: 桌面端维护 `source_id -> 连接` 映射 (register/cues/sync 建立, deactivate/断开移除), 命令只发给注册该 source 的连接, **永不广播**.
+- 脚本执行面: 白名单外的 type、`source_id` 不匹配 (SPA 旧 source)、video 未绑定时一律静默丢弃; seek 按当前时长钳边; 播放状态经既有 play/pause/seeked 监听以 sync 自动回传, mute 无需回传.
 
 ## 错误处理
 解析失败的帧只记日志 (不记敏感字段), 不断开 socket. 未知 type 忽略并计数.

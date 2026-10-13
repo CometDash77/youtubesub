@@ -162,11 +162,52 @@ export const PROTOCOL_VERSION = 1;
 export const WS_PATH = "/ws";
 export const HEALTH_PATH = "/health";
 export const STATUS_PATH = "/status";
+export const TOKEN_PATH = "/token";
 export const DEFAULT_PORT = 9877;
 
-// Python module-level set constant.
+// Python module-level set constant. play_pause retired by #219: the v1
+// reserved outbound placeholder is replaced by the four command frames
+// below (inbound play_pause is now just an unknown type - ignored/counted).
 export const VALID_TYPES: ReadonlySet<string> =
-  new Set(["register", "cues", "sync", "deactivate", "play_pause"]);
+  new Set(["register", "cues", "sync", "deactivate"]);
+
+// Desktop->userscript command channel (#219). These types never arrive
+// inbound; they ride the same WS connection in the opposite direction.
+// v1-additive frames, no version bump (docs/PROTOCOL.md compat rule).
+export const COMMAND_TYPES: ReadonlySet<string> =
+  new Set(["play", "pause", "seek", "mute"]);
+
+export interface CommandFrame {
+  type: "play" | "pause" | "seek" | "mute";
+  source_id: string;
+  // seek only: relative offset in milliseconds.
+  delta_ms?: number;
+  // mute only: explicit target state (issue #215 decision B).
+  muted?: boolean;
+}
+
+// Validate a desktop->userscript command frame; null for junk (never
+// raises). source_id is mandatory: an unaddressed command is unroutable
+// and the server never broadcasts (issue #219).
+export function coerce_command(raw: unknown): CommandFrame | null {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const rec = raw as Record<string, unknown>;
+  const t = rec["type"];
+  if (typeof t !== "string" || !COMMAND_TYPES.has(t)) return null;
+  const sid = rec["source_id"];
+  if (typeof sid !== "string" || !sid) return null;
+  const cmd = { type: t as CommandFrame["type"], source_id: sid } as CommandFrame;
+  if (t === "seek") {
+    const d = rec["delta_ms"];
+    if (typeof d !== "number" || !Number.isFinite(d)) return null;
+    cmd.delta_ms = d;
+  } else if (t === "mute") {
+    const m = rec["muted"];
+    if (typeof m !== "boolean") return null;
+    cmd.muted = m;
+  }
+  return cmd;
+}
 
 export interface SourceState {
   source_id: string;

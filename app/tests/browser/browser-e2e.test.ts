@@ -330,6 +330,68 @@ suite("browser E2E (real Chrome -> real userscript -> TS app)", () => {
     assert.equal(st.orig, CUE2, JSON.stringify(st));
   });
 
+  test("desktop commands drive the fixture video over the real channel (#219)", { timeout: 120000 }, async () => {
+    // Its own app: the shared harness has no mode control port. Everything
+    // else is the same real stack - the command goes desktop /command -> real
+    // WSServer -> real WebSocket -> real userscript onmessage -> the video.
+    const harness = new Harness({ headed: false, desktopOptions: { modeControl: true } });
+    try {
+      await harness.start();
+      await harness.open(VIDEO_A);
+      const sid = await wait_for(async () => {
+        const v = await harness.cdp!.evaluate(
+          "window.__youtubesub && window.__youtubesub.instance && window.__youtubesub.instance.ws && window.__youtubesub.instance.ws.readyState === 1 ? window.__youtubesub.instance.sourceId : null");
+        return typeof v === "string" && v ? v : null;
+      }, { timeout: 30000, what: "the userscript instance sourceId with a live socket" });
+
+      // The fixture page starts its own playback ~400ms after DOM ready and the
+      // userscript binds the video on its poll, so a command sent before either
+      // lands is silently dropped or overwritten by the page autoplay. playing
+      // === true on the black-box port proves videoEl is bound, the socket is
+      // live and the page autoplay already happened - a pause after that sticks.
+      await wait_for(async () => (await harness.status()).playing === true ? true : null,
+        { what: "the fixture autoplay visible to the desktop (video bound, sync flowing)" });
+
+      // pause: video and the desktop clock agree.
+      assert.equal(await harness.app!.send_command({ type: "pause", source_id: sid }), true,
+        "pause delivered to the live source");
+      await wait_for(async () => ((await harness.cdp!.evaluate("document.getElementById('v').paused")) === true) ? true : null,
+        { what: "video paused by desktop command" });
+      await wait_for(async () => (await harness.status()).playing === false ? true : null,
+        { what: "/status playing=false after the pause command" });
+
+      // play again.
+      assert.equal(await harness.app!.send_command({ type: "play", source_id: sid }), true,
+        "play delivered");
+      await wait_for(async () => ((await harness.cdp!.evaluate("document.getElementById('v').paused")) === false) ? true : null,
+        { what: "video resumed by desktop command" });
+
+      // relative seek: forward only, from whatever the playback reached.
+      const before = Number(await harness.cdp!.evaluate("document.getElementById('v').currentTime"));
+      assert.equal(await harness.app!.send_command({ type: "seek", source_id: sid, delta_ms: 5000 }), true,
+        "seek delivered");
+      await wait_for(async () =>
+        (Number(await harness.cdp!.evaluate("document.getElementById('v').currentTime")) >= before + 4.5) ? true : null,
+        { what: "video advanced by the seek command (before=" + before + ")" });
+
+      // mute / unmute both directions.
+      assert.equal(await harness.app!.send_command({ type: "mute", source_id: sid, muted: true }), true,
+        "mute delivered");
+      await wait_for(async () => ((await harness.cdp!.evaluate("document.getElementById('v').muted")) === true) ? true : null,
+        { what: "video muted by desktop command" });
+      assert.equal(await harness.app!.send_command({ type: "mute", source_id: sid, muted: false }), true,
+        "unmute delivered");
+      await wait_for(async () => ((await harness.cdp!.evaluate("document.getElementById('v').muted")) === false) ? true : null,
+        { what: "video unmuted by desktop command" });
+
+      // An unknown source is a silent no-op on the desktop side.
+      assert.equal(await harness.app!.send_command({ type: "play", source_id: "ghost-source" }), false,
+        "unknown source is not delivered");
+    } finally {
+      await harness.stop();
+    }
+  });
+
   test("SPA navigation creates a new source without stale cues", { timeout: 120000 }, async () => {
     // Runs last (same as the Python order): it navigates the shared page away.
     const before = await h.status();

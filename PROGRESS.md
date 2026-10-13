@@ -1,9 +1,9 @@
 # PROGRESS — youtubesub 进度与交接记录
 
-最后更新: 2026-09-22 (**#41 注入自证 + 文档刷新之后**)。
-状态一句话: 桌面端与浏览器侧**都已在真实浏览器里跑过** —— pytest **215 passed / 0 failed / 0 skipped** (~35s)、node **46 pass / 0 fail**,
-真 Chrome E2E 7 条全绿 (夹具页 + 真 userscript + 真 app.py, 只经 `/status` 黑盒观察)。
-仍未验证的两件: **真 Tampermonkey 全场景** (L3; #41 之后无论成败都给可判读结论) 与 **真实 AI Key 翻译链路** (L4, 等 Key);
+最后更新: 2026-10-13 (**#207 Python 退役清理之后**)。
+状态一句话: 桌面端 = Electron (TypeScript) 栈 (#207 起 Python + PySide6 栈退役, `desktop/` 与 `requirements.txt` 已删), 真库 (仓库根 `data/translations.db` + `%APPDATA%/SubOverlay/setting.json`) 由 TS 栈接管。
+app TS 测试 **390 passed / 0 failed**, userscript **48 pass / 0 fail**; 真 Chrome E2E 10 条 (9 绿 + 1 条已知夹具时序失败, 见 docs/MANUAL-ACCEPTANCE.md L0), 只经 `/status` 黑盒观察。
+仍未验证的两件: **真 Tampermonkey 全场景** (L3) 与 **真实 AI Key 翻译链路** (L4, 等 Key);
 真实 youtube.com「抓不到 cue」**已定论为 headless 指纹**, 不再是未定论项。
 
 > 恢复入口: 先读交接文档 [.scratch/handoff/20260921-111208-E2E与手测入口.md](.scratch/handoff/20260921-111208-E2E与手测入口.md)
@@ -12,6 +12,16 @@
 > 本文件第 0.1 节及以下保留为历史记录。
 
 ---
+
+## 0.0000 本次会话的增量 (2026-10-13: #207 Python 退役清理)
+
+| # | 做了什么 | 证据 |
+|---|---|---|
+| 1 | **Python 退役清理** (wayfinder 票 [#207](https://github.com/CometDash77/youtubesub/issues/207), map #181): `desktop/` 整删 (app.py + suboverlay 19 模块 + tests 28+3 + prototype/157)、`requirements.txt` 删、根 `.pytest_cache` 清、`.gitignore` Python 段删 | `git rm -r desktop; git rm requirements.txt` |
+| 2 | **真库一次性接管**: `queue-cache.ts` DEFAULT_DB 按 Python 同款 `__file__`-相对语义上移一级 (dist/main → 仓库根), 生产默认 = 仓库根 `data/translations.db` (Python 栈写的同一份); `%APPDATA%/SubOverlay/setting.json` 早已直连; E2E 隔离不变 (harness 显式 `YOUTUBESUB_DATA_DIR` + 私有 APPDATA) | `app/src/main/queue-cache.ts` / `app/src/main/main.ts` |
+| 3 | **工具链切换**: `start-desktop.cmd` 改 TS 入口 (node 检查 + npm install + electron 二进制兜底 + build + 直启 electron.exe); ADR-001 加退役标注 (文件保留作历史) | `start-desktop.cmd`; `docs/adr/ADR-001-desktop-stack-pyside6.md` |
+| 4 | 文档同步: README / CONTEXT.md (增量并列, 过双模型静态清单) / MANUAL-ACCEPTANCE (L0-L4 引用面 TS 化) / DESIGN / SPEC / THIRD-PARTY-NOTICES (Python 运行时依赖段删, GPLv3 Fluent-Widgets 随栈退役) / CI 注释 / PROGRESS 本节 | 各文件 diff; 清单快照见票 #207 |
+| 5 | 验收: pytest/PySide6/websockets 活引用零残留 (provenance 豁免); typecheck 0 error; npm test 390/0; userscript 48/0; E2E 9 绿 + 1 已知; start-desktop.cmd 一键启动冒烟过 | 见票 #207 验收记录 |
 
 ## 0.000 本次会话的增量 (2026-09-22: #41 注入自证 + 文档刷新)
 
@@ -255,15 +265,23 @@ E2E 7 条全绿, 并因此修掉 Trusted Types 静默失败等 4 个 bug (见交
 - PowerShell 执行策略会拦住 `.ps1` (截图脚本等), 需 `-ExecutionPolicy Bypass`; `npm.ps1` 同样受限, 用 `npm.cmd` 或 node 直接调。
 - 浮窗渲染字号与描边都走 `QPainterPath` 描边+填充; 窗口很小时按行裁剪, 属预期。
 - 本机浏览器是用户自己在用的 (有若干 `chrome.exe` 常驻), **不要 kill 它们**; E2E 必须用独立 `--user-data-dir` + 独立调试端口。
-- `__pycache__` 与 `data/translations.db` 是运行产物 (**已被 git 跟踪**, 跑测试会改动它, 提交前留意); 项目**已是 git 仓库** (origin = github.com/CometDash77/youtubesub, 分支 master), 改动走提交与评审。
+- `data/translations.db` 是运行产物 (**已被 git 跟踪**, 跑测试/跑 App 会改动它, 提交前留意; #207 起 TS 栈直连真库); 项目**已是 git 仓库** (origin = github.com/CometDash77/youtubesub, 分支 master), 改动走提交与评审。
 
 ---
 
 ## 5. 如何运行 (恢复开发用, 均可直接复制)
 
-跑 Python 测试 (215 passed / 0 failed / 0 skipped, ~35s; 含 7 条真浏览器 E2E, 无 Chrome 则 skip):
+跑 TS 测试 (app/; typecheck 0 error, 390 passed / 0 failed):
 ```
-python -m pytest D:\Documents\vibe\youtubesub\desktop\tests -q
+cd D:\Documents\vibe\youtubesub\app
+npm run typecheck
+npm test
+```
+
+跑真 Chrome E2E (10 条; 9 绿 + 1 条已知夹具时序失败, 见 docs/MANUAL-ACCEPTANCE.md L0):
+```
+cd D:\Documents\vibe\youtubesub\app
+npm run test:e2e
 ```
 
 跑 Node 测试 (46 pass / 0 fail, ~0.3s) —— 注意用 glob 形式:
@@ -279,7 +297,8 @@ node --check D:\Documents\vibe\youtubesub\userscript\youtubesub.user.js
 
 启动桌面端 (会弹出浮窗并监听 127.0.0.1:9877):
 ```
-python D:\Documents\vibe\youtubesub\desktop\app.py
+cd D:\Documents\vibe\youtubesub\app
+npm start
 ```
 
 探测存活 / 看浮窗当前状态 (PowerShell):
@@ -288,18 +307,20 @@ Invoke-RestMethod http://127.0.0.1:9877/health
 Invoke-RestMethod http://127.0.0.1:9877/status
 ```
 
-用假浏览器驱动做 GUI 验证 (另开一个终端, App 已启动时):
+E2E harness 驱动 GUI 验证 (TS 栈自拉起 Electron 主进程, 不需要先手动起 App):
 ```
-python D:\Documents\vibe\youtubesub\desktop\tests\fake_browser.py 9877
+cd D:\Documents\vibe\youtubesub\app
+node tests\browser\browser-e2e-harness.ts --demo [--seconds 30]
 ```
 
 人工验收入口 (临时 APPDATA + mock 翻译, **不碰你的设置与 Key**):
 ```
-python D:\Documents\vibe\youtubesub\desktop\tests\browser_e2e.py --demo [--seconds 30]
-python D:\Documents\vibe\youtubesub\desktop\tests\browser_e2e.py --live "<url>" --proxy http://127.0.0.1:10809 [--headless] [--seconds 20]
+cd D:\Documents\vibe\youtubesub\app
+node tests\browser\browser-e2e-harness.ts --demo [--seconds 30]
+node tests\browser\browser-e2e-harness.ts --live "<url>" --proxy http://127.0.0.1:10809 [--headless] [--seconds 20]
 ```
 
-一键启动桌面端 (真设置, 端口 9877): `start-desktop.cmd`; 依赖: `pip install -r requirements.txt`。
+一键启动桌面端 (真设置, 端口 9877): `start-desktop.cmd`; 依赖: `app/` 内 `npm install` (首启自动)。
 
 截图 (PowerShell 执行策略需绕过):
 ```
@@ -332,3 +353,4 @@ powershell -NoProfile -ExecutionPolicy Bypass -File D:\vibe-research\shot.ps1 -o
 5. 剩余 P2 打磨: 历史字幕行渲染、打包分发、多标签 source UI。
 6. (已完成) 双轴评审已按替代 fixed point (交接文档 §1 的 11 文件清单) 跑过: 0 硬违规 + 9 条判定 smell; Spec 9 条, 其中两条红线 (`test_hotkey` 读真实设置、TT 回退从未在真 TT 下触发) 已修其一。详见新断点文档 §2.2。
 7. (2026-09-22) **#41 已实施, 待 L3**: 代码 + 自动化全绿 (提交 `81cf035`), issue #41 停在 95%; 维护者按 `docs/MANUAL-ACCEPTANCE.md` 的 L3 手跑真 Tampermonkey —— 浮窗显示字幕 → 100% + close; 仍失败 → 面板与 `/status` 已点名失败级别, 据此分流。文档刷新见 #43。
+8. (2026-10-13) **#207 Python 退役清理完成**: `desktop/` / `requirements.txt` 删除, `start-desktop.cmd` → TS 入口, 真库接管 (仓库根 `data/translations.db`), 文档面 TS 化; ADR/PROGRESS 历史行保留。map #181 Phase 1 判据「pytest 套件照跑到退役票」兑现完毕 —— 测试真相只剩 TS 一套。

@@ -336,7 +336,7 @@ export class Engine {
       const now_ms = Date.now();
       Clock.apply_sync(src.sync, Number(ev["video_time_ms"] || 0),
                        Boolean(ev["playing"]), Number(ev["playback_rate"] || 1),
-                       ts, now_ms);
+                       ts, now_ms, ev["duration_ms"]);
       const new_est = Clock.estimate_ms(src.sync);
       if (Math.abs(new_est - prev_est) > SEEK_JUMP_MS) {
         // Pending prefetch is dropped and the window refill waits out the

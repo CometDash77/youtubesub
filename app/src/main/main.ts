@@ -325,9 +325,10 @@ function createWindow(geo: { width: number; height: number; x?: number; y?: numb
 // drives the display layer (33ms), and a 5s pulse re-asserts topmost while
 // the window is visible and not click-through.
 async function startProductStack(): Promise<void> {
-  // The cache default lives beside the app (app/data/translations.db, the
-  // TS-stack equivalent of the repo-root data dir); YOUTUBESUB_DATA_DIR
-  // relocates it (portable installs, E2E isolation under a private APPDATA).
+  // The cache default is the repo-root data/translations.db - the real
+  // library the Python build wrote, taken over in place by the TS stack
+  // (#207); YOUTUBESUB_DATA_DIR relocates it (portable installs, E2E
+  // isolation under a private APPDATA).
   const dataDir = process.env.YOUTUBESUB_DATA_DIR;
   const cache = new TranslationCache(dataDir ? path.join(dataDir, "translations.db") : null);
   const engine = new Engine(settings as unknown as Record<string, unknown>, cache);
@@ -417,7 +418,7 @@ async function startProductStack(): Promise<void> {
 
   // e2e_app.py port: the mode/provider control surface (env-gated).
   if (process.env.YOUTUBESUB_E2E_MODE_PORT) {
-    startE2EControl({ engine, display, pushPlan, log: logLine })
+    startE2EControl({ engine, display, pushPlan, sendCommand: (cmd) => server.sendCommand(cmd), log: logLine })
       .then((p) => logLine("[e2e] mode control on 127.0.0.1:" + p))
       .catch((e: unknown) => logLine("[e2e] control start failed: " + String(e)));
   }

@@ -8,7 +8,11 @@
 // Wire contract (byte-compatible with e2e_app.py):
 //   POST /mode     {"mode": "orig" | "trans" | "bilingual"} -> 202
 //   POST /provider {"provider": {...}}                      -> 202
+//   POST /command  {"type": "...", "source_id": "...", ...} -> 202 {"delivered": bool}
 //   unknown path -> 404; unparseable body or invalid value -> 400.
+// /command is the #219 addition (no e2e_app.py counterpart): it forwards the
+// body through WSServer.sendCommand so tests drive the downstream command
+// channel exactly the way a future desktop UI would.
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 
@@ -18,6 +22,7 @@ export interface E2EControlDeps {
   engine: { settings: Record<string, unknown> };
   display: { mode: string };
   pushPlan: () => void;
+  sendCommand?: (cmd: Record<string, unknown>) => boolean;
   log?: (msg: string) => void;
 }
 
@@ -39,6 +44,28 @@ function handlePost(
   res: ServerResponse,
 ): void {
   const path = (req.url ?? "").split("?")[0]!;
+  if (path === "/command") {
+    let body = "";
+    req.on("data", (c: Buffer) => { body += c.toString("utf8"); });
+    req.on("end", () => {
+      let cmd: Record<string, unknown>;
+      try {
+        cmd = JSON.parse(body || "{}") as Record<string, unknown>;
+        if (typeof cmd["type"] !== "string" || typeof cmd["source_id"] !== "string") {
+          throw new Error("invalid command");
+        }
+      } catch {
+        res.writeHead(400);
+        res.end();
+        return;
+      }
+      const delivered = deps.sendCommand ? deps.sendCommand(cmd) : false;
+      res.writeHead(202, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ delivered }));
+      deps.log?.("[e2e] command " + String(cmd["type"]) + " delivered=" + delivered);
+    });
+    return;
+  }
   if (path !== "/mode" && path !== "/provider") {
     res.writeHead(404);
     res.end();

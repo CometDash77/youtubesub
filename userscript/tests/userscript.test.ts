@@ -203,9 +203,21 @@ function load(opts?: any) {
 const api = (sb: any) => sb.__youtubesub;
 const bridge = (sb: any) => sb.__youtubesub.instance;
 
-// Sanity probe (health probe OK) then onopen -> register + sync.
-function goLive(sb: any) {
-  sb.__lastXhr.onload({ status: 200 });
+// Complete the connect() probe sequence: health first, then the /token fetch
+// (#219). token=null models a desktop without the token endpoint (the frame
+// then stays upstream-only). Default hands out a token like the real desktop.
+function finishProbe(sb: any, token: string | null = 'test-token') {
+  sb.__lastXhr.onload({ status: 200 }); // /health
+  if (sb.__lastXhr.url.endsWith('/token')) {
+    sb.__lastXhr.onload(token === null
+      ? { status: 404 }
+      : { status: 200, responseText: JSON.stringify({ token }) });
+  }
+}
+
+// Probe OK (health + token) then onopen -> register + sync.
+function goLive(sb: any, token: string | null = 'test-token') {
+  finishProbe(sb, token);
   const ws = sb.__sockets[sb.__sockets.length - 1];
   ws.open();
   return ws;
@@ -796,6 +808,107 @@ test('bridge: status panel click retries, double-click stops', () => {
   assert.equal(panel.style.color, '#f88');
 });
 
+// ------------------------------------------------- desktop->userscript commands ---
+// The command channel (#219): whitelist + source_id + video-bound gating in
+// the script, mirroring the desktop-side routing contract in docs/PROTOCOL.md.
+
+test('bridge: register carries the /token token, sync carries duration_ms (#219)', () => {
+  const sb = load();
+  goLive(sb);
+  const b = bridge(sb);
+  // The probe sequence hit both endpoints, in order.
+  assert.ok(sb.__lastXhr.url.endsWith('/token'), 'token fetch is part of connect()');
+  const v = fakeVideo({ duration: 100.25 });
+  b.bindVideo(v);
+  b.sendSync();
+  const reg = lastFrame(sb, 'register');
+  assert.equal(reg.token, 'test-token', 'register authenticates the connection');
+  const sync = lastFrame(sb, 'sync');
+  assert.equal(sync.duration_ms, 100250, 'finite duration rides the sync frame');
+  sb.__sent.forEach(assertWireFrame);
+});
+
+test('bridge: a failed /token fetch degrades to upstream-only, not a crash (#219)', () => {
+  const sb = load();
+  goLive(sb, null); // desktop without /token (older version) or junk response
+  const b = bridge(sb);
+  assert.equal(b.wsToken, null, 'no token held');
+  assert.equal(lastFrame(sb, 'register').token, undefined,
+               'register omits the key instead of sending an empty token');
+  const v = fakeVideo({ duration: Number.NaN });
+  b.bindVideo(v);
+  b.sendSync();
+  assert.equal(lastFrame(sb, 'sync').duration_ms, undefined,
+               'NaN duration is omitted, never sent as NaN');
+  sb.__sent.forEach(assertWireFrame);
+});
+
+test('bridge: commands execute against the bound video (#219)', () => {
+  const sb = load();
+  goLive(sb);
+  const b = bridge(sb);
+  const v = fakeVideo({ currentTime: 10, duration: 100, muted: false });
+  let played = 0, paused = 0;
+  v.play = function () { played++; return Promise.resolve(); };
+  v.pause = function () { paused++; };
+  b.bindVideo(v);
+
+  b.onCommand(JSON.stringify({ type: 'play', source_id: b.sourceId }));
+  assert.equal(played, 1, 'play is an explicit state command');
+  b.onCommand(JSON.stringify({ type: 'pause', source_id: b.sourceId }));
+  assert.equal(paused, 1, 'pause is an explicit state command');
+
+  b.onCommand(JSON.stringify({ type: 'seek', source_id: b.sourceId, delta_ms: 2500 }));
+  assert.equal(v.currentTime, 12.5, 'relative seek forwards');
+  b.onCommand(JSON.stringify({ type: 'seek', source_id: b.sourceId, delta_ms: -30000 }));
+  assert.equal(v.currentTime, 0, 'seek clamps at 0');
+  b.onCommand(JSON.stringify({ type: 'seek', source_id: b.sourceId, delta_ms: 500000 }));
+  assert.equal(v.currentTime, 100, 'seek clamps at duration');
+
+  b.onCommand(JSON.stringify({ type: 'mute', source_id: b.sourceId, muted: true }));
+  assert.equal(v.muted, true);
+  b.onCommand(JSON.stringify({ type: 'mute', source_id: b.sourceId, muted: false }));
+  assert.equal(v.muted, false);
+
+  // The transport surface is wired: frames through ws.onmessage reach onCommand.
+  const ws = sb.__sockets[sb.__sockets.length - 1];
+  assert.equal(typeof ws.onmessage, 'function', 'openSocket wires ws.onmessage');
+  ws.onmessage({ data: JSON.stringify({ type: 'mute', source_id: b.sourceId, muted: true }) });
+  assert.equal(v.muted, true, 'ws.onmessage drives command execution');
+});
+
+test('bridge: commands are gated by whitelist, source_id and payload shape', () => {
+  const sb = load();
+  goLive(sb);
+  const b = bridge(sb);
+  const v = fakeVideo({ currentTime: 10, duration: 100, muted: false });
+  v.play = function () { throw new Error('play must never fire'); };
+  v.pause = function () { throw new Error('pause must never fire'); };
+  b.bindVideo(v);
+
+  b.onCommand(JSON.stringify({ type: 'pause', source_id: 'other-source' }),
+              'a stale SPA source must not act on its predecessor mail');
+  b.onCommand(JSON.stringify({ type: 'rewind', source_id: b.sourceId }), 'outside the whitelist');
+  b.onCommand('not json at all');
+  b.onCommand(JSON.stringify([{ type: 'pause', source_id: b.sourceId }]), 'array junk');
+  b.onCommand(JSON.stringify({ type: 'seek', source_id: b.sourceId }), 'seek without delta_ms');
+  b.onCommand(JSON.stringify({ type: 'seek', source_id: b.sourceId, delta_ms: 'fast' }));
+  b.onCommand(JSON.stringify({ type: 'mute', source_id: b.sourceId }), 'mute without muted');
+  assert.equal(v.currentTime, 10, 'gated commands never touched the player');
+  assert.equal(v.muted, false);
+  assert.equal(v.paused, false, 'no pause slipped through the gates');
+});
+
+test('bridge: commands before a video is bound are dropped silently', () => {
+  const sb = load();
+  goLive(sb);
+  const b = bridge(sb);
+  assert.equal(b.videoEl, null);
+  assert.doesNotThrow(() => {
+    b.onCommand(JSON.stringify({ type: 'pause', source_id: b.sourceId }));
+  }, 'an unbound video is a drop, never a crash');
+});
+
 test('bridge: sync reflects live player state (time/playing/rate)', () => {
   const sb = load();
   goLive(sb);
@@ -825,7 +938,7 @@ test('bridge: send() is a no-op while the socket is not open', () => {
   const sb = load();
   const b = bridge(sb);
   assert.equal(b.send({ type: 'sync', source_id: 'x' }), false);
-  sb.__lastXhr.onload({ status: 200 });
+  finishProbe(sb, null); // token result is irrelevant here; finish the probes
   const ws = sb.__sockets[0];
   assert.equal(b.send({ type: 'sync', source_id: 'x' }), false, 'still connecting');
   ws.open();
@@ -910,7 +1023,7 @@ test('bridge: reconnect replays cached register/cues and KEEPS the sync timestam
   const t = sb.__timers[sb.__timers.length - 1];
   assert.equal(t.ms, 3000);
   t.fn();
-  sb.__lastXhr.onload({ status: 200 });
+  finishProbe(sb, 'test-token');
   const ws2 = sb.__sockets[sb.__sockets.length - 1];
   assert.notEqual(ws2, sb.__sockets[0]);
   ws2.open();

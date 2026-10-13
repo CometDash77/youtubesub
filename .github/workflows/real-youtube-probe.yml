@@ -1,0 +1,73 @@
+name: real-youtube-probe
+
+# CONTEXT.md (2026-10-13): real-YouTube probes NEVER run on a maintainer's
+# machine. They run here: xvfb + HEADED Chrome (headless is fingerprinted by
+# YouTube and returns empty caption tracks - settled 2026-09-21). When the CI
+# IP hits the YouTube bot wall the probe DEGRADES to a documented verdict
+# instead of failing; the fixture browser E2E (skeleton-acceptance) stays the
+# always-green functional gate. First case: #219 acceptance.
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: "YouTube watch URL to probe"
+        default: "https://www.youtube.com/watch?v=jNQXAC9IVRw"
+      seconds:
+        description: "Probe duration in seconds"
+        default: "45"
+  schedule:
+    - cron: "17 5 * * 1"  # weekly, Monday 05:17 UTC
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: app
+    env:
+      # The E2E Electron needs no chrome-sandbox helper on hosted runners.
+      ELECTRON_DISABLE_SANDBOX: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build userscript artifact
+        working-directory: userscript
+        run: |
+          npm ci --no-audit --no-fund || npm install --no-audit --no-fund
+          npm run build
+
+      - name: Build app
+        run: |
+          npm ci --no-audit --no-fund || npm install --no-audit --no-fund
+          npm run build
+
+      - name: Probe real YouTube (headed Chrome under xvfb)
+        run: |
+          xvfb-run -a node tests/browser/browser-e2e-harness.ts --live "${{ github.event.inputs.url || 'https://www.youtube.com/watch?v=jNQXAC9IVRw' }}" --seconds "${{ github.event.inputs.seconds || '45' }}" 2>&1 | tee probe.log
+
+      - name: Verdict
+        run: |
+          if grep -q "CAPTURED" probe.log; then
+            echo "::notice::REAL CAPTURE - the userscript delivered real YouTube captions to the desktop app."
+            exit 0
+          fi
+          if grep -Eq "consent\\.youtube\\.com|unusual traffic|Before you continue|not a bot" probe.log; then
+            echo "::warning::BOT WALL - the CI IP was challenged by YouTube. Degraded per CONTEXT.md: fixture E2E remains the functional gate; this run is archived as ecosystem evidence."
+            exit 0
+          fi
+          echo "::error::Probe finished without CAPTURED and without a bot-wall signature - real regression signal. Inspect probe.log."
+          exit 1
+
+      - name: Upload probe evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: youtube-probe-evidence
+          path: app/probe.log
+          if-no-files-found: error

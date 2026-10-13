@@ -3,10 +3,12 @@
 ## 事实
 - 用户工作目录 D:\Documents\vibe 建项目时为空; 落地目录为 `d:\Documents\vibe\youtubesub`. 现为 **git 仓库** (origin: github.com/CometDash77/youtubesub, 分支 master; 早期"不是 git 仓库"的记录已过时)。
 - 本机: Windows 10, Node 22.23.1, Python 3.12.10 (pytest 9.1.1 / websockets 16.1.1 / requests / PySide6_Essentials 6.11.2 已装)。无 Rust/.NET。
+- **栈退役 (2026-10-13, map #181 / 执行票 #207)**: Python + PySide6 桌面栈已整体退役并从仓库删除（`desktop/`、`requirements.txt`、pytest 依赖面）。现行唯一桌面运行时 = Electron (TypeScript) 栈 [app/](app/)（退役决定与移植史见 [ADR-001](docs/adr/ADR-001-desktop-stack-pyside6.md) 退役标注）。真库一次性接管：翻译缓存直连仓库根 [data/translations.db](data/translations.db)，设置直连 `%APPDATA%/SubOverlay/setting.json`——与退役栈读写同一份，字节续用。上文「本机 Python 环境」行保留作历史。
 - 浏览器: Chrome **153.0.8010.48** 位于 `C:\Program Files\Google\Chrome\Application\chrome.exe`; Edge 153。
   Chrome User Data 里**没有 Tampermonkey** (未装任何扩展) -> "真 Tampermonkey" 场景需要用户手动装。
 - DNS 污染, 直连 YouTube 失败; 代理 `127.0.0.1:10809` 可用 (实测 youtube.com 200)。环境变量已设 HTTP(S)_PROXY 与 NO_PROXY=localhost,127.0.0.1,::1,...。
   凡访问公网的 HTTP 客户端必须代理感知; loopback 流量不走代理 (测试里用 `http.client` 最稳, `urllib` 会读代理环境变量)。
+- **维护者工作机不做真实 YouTube 探针** (2026-10-13 定, 工作机不能被占用): 此类探针一律走 GitHub Actions —— xvfb + 有头 Chrome, 禁 --headless (headless 会被 YouTube 指纹识别返回空字幕, 既有定论); CI 机房 IP 撞 YouTube 机器人墙时降级为夹具 E2E + 生态证据留档。首例: [#219](https://github.com/CometDash77/youtubesub/issues/219) 验收。
 - 实测: 裸 `https://www.youtube.com/api/timedtext?v=...&lang=en` (无 pot) -> 200 且 **0 字节** -> 印证必须页内复用播放器带 pot 的请求。
 
 ## 访谈结论 (grill-with-docs, 已锁定)
@@ -52,6 +54,13 @@
 - **回退式兼容**: 老配置没有这 6 个键是**正常状态**，不是损坏 —— 浮窗按今天硬编码的观感画，调参页显示表默认值，保存时只写真正被改过的键；不强制迁移。
 - **失败态红（`#FF5A5A`）不在键族内**: 译文失败那几行恒红，是既有契约（[desktop/tests/test_overlay_labels.py:154](desktop/tests/test_overlay_labels.py#L154)），用户自定义字色只管正常那几行。 译文的状态占位行（等待 / 翻译中 / 未配置）算正常行、吃 `trans_text_color`；原文侧占位行吃 `orig_text_color`；失败行描边照常吃 `trans_stroke_color`。
 - 用语落定后：`display.stroke`（描边宽度）不再只管「黑边」—— 描边色可调，宽度为 0 时看不到描边。上一条「调参页（16 项）」在 6 键落地前仍是当下事实，落地后为 22 项。
+
+### 浮窗三态（#211；术语 + 状态机形状，不含实现）
+- **三态（overlay_state）**: 浮窗**同一个窗口内**的三个交互态 —— `subtitles`（字幕态，常驻纯字幕）/ `controls`（控制态，标题+控制条淡入、字幕自动缩小）/ `passthrough`（穿透态，只留解锁小图标）。`/status` 以 `overlay_state` 键上浮三态。
+- **控制条**: `controls` 态窗口底部的按钮条，按钮集合**严格** = 播放/暂停、±15 秒、进度条 seek、静音切换四语义（无爱心、无音量条），图标内联 SVG。进度条 duration/进度不可用时整条隐藏；无活动 source 时按钮 no-op。
+- **标题区**: `controls` 态的视频标题行（`title`，源头 `tab_title`），单行 ellipsis，只在 `controls` 态出现。
+- **态转移**: 进窗即 `controls`、出窗回 `subtitles`、穿透经右键菜单或 Ctrl+Alt+U、解锁小图标回 `subtitles`；拖拽/resize 进行中与右键菜单打开中自动转移冻结。淡出延迟、字幕缩小系数等数值归 #214。
+- **静音回显**: sync 帧需增 `muted`（v1 additive，归属 #215/#219），否则控制条只能回显本地最后命令。
 
 ## 许可证边界
 - dkitle: Rust 端无 LICENSE (GitHub license:null) -> 只参考设计, 不抄代码; 其 userscript 有 @license MIT 头, 可改写适配。

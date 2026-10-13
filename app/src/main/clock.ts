@@ -23,6 +23,10 @@ export interface SyncState {
   video_time_ms: number;
   playing: boolean;
   playback_rate: number;
+  // Total video duration in ms, as reported by the browser sync (#219).
+  // null when the frame omitted it or carried a non-finite value (duration
+  // is unknown until metadata loads). Display-only; never used for cues.
+  duration_ms: number | null;
   anchor_mono: number;
 }
 
@@ -37,6 +41,7 @@ export function make_sync_state(init: Partial<SyncState> = {}): SyncState {
     video_time_ms: init.video_time_ms ?? 0.0,
     playing: init.playing ?? false,
     playback_rate: init.playback_rate ?? 1.0,
+    duration_ms: init.duration_ms ?? null,
     anchor_mono: init.anchor_mono ?? monotonic(),
   };
 }
@@ -46,7 +51,8 @@ export function make_sync_state(init: Partial<SyncState> = {}): SyncState {
 // replay).
 export function apply_sync(state: SyncState, video_time_ms: number,
                            playing: boolean, playback_rate: number,
-                           sender_ts_ms: number, now_epoch_ms: number): SyncState {
+                           sender_ts_ms: number, now_epoch_ms: number,
+                           duration_ms?: unknown): SyncState {
   const rate = typeof playback_rate === "number" && playback_rate > 0
     ? playback_rate : 1.0;
   let transit = 0.0;
@@ -57,6 +63,10 @@ export function apply_sync(state: SyncState, video_time_ms: number,
   state.video_time_ms = Number(video_time_ms) + transit;
   state.playing = Boolean(playing);
   state.playback_rate = Number(rate);
+  // Missing or non-finite duration -> null (#219: desktop treats an absent
+  // key as null; the browser omits duration_ms until metadata is loaded).
+  state.duration_ms = typeof duration_ms === "number" && Number.isFinite(duration_ms)
+    ? duration_ms : null;
   state.anchor_mono = monotonic();
   return state;
 }

@@ -414,6 +414,8 @@ class Bridge {
   trackKind = '';
   trackLang = '';
   captureError = '';
+  // Command-channel token (#219): connection-level, survives video changes.
+  wsToken: string | null = null;
   cache: Record<CacheSlot, WireFrame | null> = { register: null, cues: null, sync: null };
 
   constructor() {
@@ -444,6 +446,28 @@ class Bridge {
     });
   }
 
+  // Command-channel token (#219). The desktop serves GET /token with no CORS
+  // headers, so page-world JS cannot read it; GM_xmlhttpRequest can. Failure
+  // is not fatal: null keeps this connection upstream-only (frames flow,
+  // commands do not) - also the compatibility path against an older desktop.
+  fetchToken(done: (token: string | null) => void) {
+    if (typeof GM_xmlhttpRequest !== 'function') { done(null); return; }
+    (GM_xmlhttpRequest as any)({
+      method: 'GET',
+      url: 'http://' + CFG.host + ':' + CFG.port + '/token',
+      timeout: 2000,
+      onload: function (response: any) {
+        if (response.status < 200 || response.status >= 300) { done(null); return; }
+        try {
+          const data = JSON.parse(response.responseText);
+          done(typeof data.token === 'string' && data.token ? data.token : null);
+        } catch (error) { done(null); }
+      },
+      onerror: function () { done(null); },
+      ontimeout: function () { done(null); }
+    });
+  }
+
   send(frame: WireFrame): boolean {
     if (!this.ws || this.ws.readyState !== 1) return false;
     try { this.ws.send(JSON.stringify(frame)); return true; }
@@ -460,8 +484,12 @@ class Bridge {
     this.setState('probing');
     this.health((healthy) => {
       if (this.stopped) return;
-      if (healthy) this.openSocket();
-      else this.scheduleReconnect();
+      if (!healthy) { this.scheduleReconnect(); return; }
+      this.fetchToken((token) => {
+        if (this.stopped) return;
+        this.wsToken = token;
+        this.openSocket();
+      });
     });
   }
 
@@ -479,6 +507,7 @@ class Bridge {
       this.scheduleReconnect();
     };
     this.ws!.onerror = () => { this.setState('error'); };
+    this.ws!.onmessage = (ev: MessageEvent) => { this.onCommand(ev.data); };
   }
 
   replay() {
@@ -511,12 +540,16 @@ class Bridge {
   }
 
   buildRegister(): WireFrame {
-    return Object.assign({
+    const frame: WireFrame = Object.assign({
       type: 'register', provider: 'youtube', source_id: this.sourceId,
       video_id: this.videoId,
       track_kind: this.trackKind, track_lang: this.trackLang,
       hook_error: this.hookError, capture_error: this.captureError
     }, videoMetadata());
+    // Token only when we hold one (#219): an absent key keeps the frame
+    // byte-compatible with an older desktop (v1-additive optional key).
+    if (this.wsToken) frame.token = this.wsToken;
+    return frame;
   }
 
   setHookError(msg: string) {
@@ -537,13 +570,63 @@ class Bridge {
   sendSync() {
     const video = this.videoEl;
     if (!video) return;
-    this.cacheAndSend('sync', {
+    const frame: WireFrame = {
       type: 'sync', source_id: this.sourceId, video_id: this.videoId,
       video_time_ms: Math.round(video.currentTime * 1000),
       playing: !video.paused && !video.ended,
       playback_rate: video.playbackRate || 1,
       timestamp: Date.now()
-    });
+    };
+    // duration_ms only when metadata is loaded (#219): before that duration
+    // is NaN, and the desktop reads an absent key as null.
+    if (typeof video.duration === 'number' && Number.isFinite(video.duration)) {
+      frame.duration_ms = Math.round(video.duration * 1000);
+    }
+    this.cacheAndSend('sync', frame);
+  }
+
+  // ---- desktop->userscript commands (#219) --------------------------------
+  // The desktop drives playback through four frame types: play/pause
+  // (explicit states, issue #215 decision B), seek (relative delta_ms) and
+  // mute (explicit state). Enforcement mirrors the desktop routing
+  // contract: whitelist first, then the source_id check (a stale SPA source
+  // must not act on mail addressed to its predecessor), then a bound video.
+  // Everything else is dropped silently - the desktop owns routing, the
+  // script owns execution. Playback state resyncs through the existing
+  // play/pause/seeked listeners installed by bindVideo; mute needs no
+  // report-back (the desktop does not track mute state).
+  onCommand(raw: unknown) {
+    let msg: WireFrame;
+    try { msg = JSON.parse(String(raw)); }
+    catch (error) { return; }
+    if (!msg || typeof msg !== 'object' || Array.isArray(msg)) return;
+    if (msg.source_id !== this.sourceId) return;
+    const video = this.videoEl;
+    if (!video) return;
+    switch (msg.type) {
+      case 'play':
+        video.play().catch(function () { /* autoplay policy may refuse; the play event reports what really happened */ });
+        break;
+      case 'pause':
+        video.pause();
+        break;
+      case 'seek': {
+        const delta = msg.delta_ms;
+        if (typeof delta !== 'number' || !Number.isFinite(delta)) return;
+        const dur = (typeof video.duration === 'number' && Number.isFinite(video.duration))
+          ? video.duration : Number.POSITIVE_INFINITY;
+        const target = Math.min(Math.max(video.currentTime + delta / 1000, 0), dur);
+        try { video.currentTime = target; }
+        catch (error) { /* seeking before metadata is loaded can throw in some engines */ }
+        break;
+      }
+      case 'mute':
+        if (typeof msg.muted !== 'boolean') return;
+        video.muted = msg.muted;
+        break;
+      default:
+        return; // outside the whitelist: noise, ignore
+    }
   }
 
   onTimedtextFailure(url: string, reason: unknown) {

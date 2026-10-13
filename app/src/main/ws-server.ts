@@ -4,14 +4,17 @@
 // /status) are carried 1:1 from the cap-check evidence draft; the real
 // protocol v1 service (cue pipeline, full state machine) lands with the
 // protocol-service ticket, which owns semantics from desktop/suboverlay/server.py.
-// Known quirk kept on purpose for fidelity: "https://notyoutube.com" passes
-// originAllowed (endsWith match) - same as the placeholder this ports.
+// Origin allowlist tightened by #219: URL-hostname precise suffix match on
+// youtube.com. The ported endsWith quirk let "https://notyoutube.com" through;
+// both the quirk and its "kept on purpose" note are retired with this change.
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { VALID_TYPES as PROTO_VALID_TYPES, WS_PATH, HEALTH_PATH, STATUS_PATH } from "./protocol.ts";
+import { randomBytes, timingSafeEqual } from "node:crypto";
+import { VALID_TYPES as PROTO_VALID_TYPES, WS_PATH, HEALTH_PATH, STATUS_PATH, TOKEN_PATH, coerce_command } from "./protocol.ts";
 import type { AddressInfo } from "node:net";
-import { WebSocketServer, type WebSocket } from "ws";
+import { WebSocketServer, WebSocket } from "ws";
 
-export const VALID_TYPES = ["register", "cues", "sync", "deactivate", "play_pause"] as const;
+// play_pause retired by #219 (replaced by the coerce_command command frames).
+export const VALID_TYPES = ["register", "cues", "sync", "deactivate"] as const;
 export type WireType = (typeof VALID_TYPES)[number];
 
 // Wire frames come from the browser as arbitrary JSON; the placeholder only
@@ -24,15 +27,18 @@ export interface WireEvent {
   playing?: unknown;
   video_time_ms?: unknown;
   playback_rate?: unknown;
+  // v1-additive optional keys (#219): token authenticates the connection for
+  // the downstream command channel; duration_ms reports the video duration.
+  // Both are optional on the wire - old senders omit them, the desktop reads
+  // a missing key as null. Additional keys stay opaque (see index signature).
+  token?: unknown;
+  duration_ms?: unknown;
   timestamp?: unknown;
   [key: string]: unknown;
 }
 
 export function originAllowed(origin: string | undefined): boolean {
-  if (!origin) return true;
-  const o = origin.toLowerCase();
-  if (o.includes("localhost") || o.includes("127.0.0.1") || o.includes("[::1]")) return true;
-  return o.endsWith("youtube.com") || o.endsWith(".youtube.com");
+  return origin_allowed(origin);
 }
 
 // Mirrors server.py sanitize_event: junk frames return null, never throw.
@@ -41,7 +47,7 @@ export function sanitizeEvent(msg: unknown): WireEvent | null {
   const rec = msg as Record<string, unknown>;
   const t = rec.type;
   if (typeof t !== "string") return null;
-  if (!(VALID_TYPES as readonly string[]).includes(t) || t === "play_pause") return null;
+  if (!(VALID_TYPES as readonly string[]).includes(t)) return null;
   const sid = rec.source_id;
   if ((t === "sync" || t === "deactivate") && (typeof sid !== "string" || !sid)) return null;
   if ((t === "register" || t === "cues") && typeof sid !== "string") return null;
@@ -188,12 +194,17 @@ export function startSkeletonServer(port: number, handlers: SkeletonServerHandle
 
 export const MAX_FRAME_BYTES = 8 * 1024 * 1024;
 
-// Allow empty (non-browser client), localhost, or *.youtube.com.
+// Allow empty (non-browser client), loopback hosts, or *.youtube.com.
+// Precise hostname suffix match (#219): the origin is URL-parsed, so
+// "notyoutube.com" / "youtube.com.evil.com" / "localhost.evil.com" fail
+// where the old substring/endsWith string checks passed them.
 export function origin_allowed(origin: string | null | undefined): boolean {
   if (!origin) return true;
-  const o = origin.toLowerCase();
-  if (o.includes("localhost") || o.includes("127.0.0.1") || o.includes("[::1]")) return true;
-  return o.endsWith("youtube.com") || o.endsWith(".youtube.com");
+  let host: string;
+  try { host = new URL(origin.toLowerCase()).hostname; }
+  catch { return false; }
+  if (host === "localhost" || host === "127.0.0.1" || host === "[::1]" || host === "::1") return true;
+  return host === "youtube.com" || host.endsWith(".youtube.com");
 }
 
 // Validate an inbound frame into a plain event record; null for junk.
@@ -202,7 +213,7 @@ export function sanitize_event(msg: unknown): Record<string, unknown> | null {
   if (msg === null || typeof msg !== "object" || Array.isArray(msg)) return null;
   const rec = msg as Record<string, unknown>;
   const t = rec["type"];
-  if (typeof t !== "string" || !PROTO_VALID_TYPES.has(t) || t === "play_pause") return null;
+  if (typeof t !== "string" || !PROTO_VALID_TYPES.has(t)) return null;
   const sid = rec["source_id"];
   if ((t === "sync" || t === "deactivate") && (typeof sid !== "string" || !sid)) return null;
   if ((t === "register" || t === "cues") && typeof sid !== "string") return null;
@@ -256,6 +267,19 @@ export class WSServer {
   private _http: Server | null = null;
   private _wss: WebSocketServer | null = null;
   private _closed = false;
+  // Outbound command routing (#219): live source_id -> the socket that
+  // registered it. register/cues/sync refresh the mapping, deactivate and
+  // close evict it, so a command only ever reaches the connection that
+  // registered that source - never a broadcast. Only token-authenticated
+  // connections enter the mapping (issue #215 decision E): a connection
+  // without the token stays upstream-only - its frames flow, but the desktop
+  // never sends commands back down that pipe.
+  private readonly _commands = new Map<string, WebSocket>();
+  private readonly _authed = new WeakSet<WebSocket>();
+  // Per-process command-channel secret (#219). Served over GET /token, which
+  // deliberately carries no CORS headers: a cross-origin page fetch cannot
+  // read the response, while GM_xmlhttpRequest (userscript privilege) can.
+  readonly token: string = randomBytes(32).toString("hex");
 
   constructor(port: number, events: EventQueue, opts: WSServerOptions = {}) {
     this.port = port;
@@ -337,6 +361,14 @@ export class WSServer {
       res.end(JSON.stringify(this._status_payload()));
       return;
     }
+    if (path === TOKEN_PATH) {
+      // No CORS headers on purpose (#219): the browser same-origin policy must
+      // keep page-world JS from reading the token; only the privileged
+      // userscript (GM_xmlhttpRequest) is meant to consume this endpoint.
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true, version: 1, token: this.token }));
+      return;
+    }
     res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
     res.end("not found");
   }
@@ -358,10 +390,34 @@ export class WSServer {
         this._frame_errors++;
         return;
       }
+      // Command routing registry (#219). A re-registered id belongs to the
+      // newcomer; deactivate only evicts when the mapping still points here.
+      // register also (re)checks the command-channel token: a matching token
+      // marks the connection authenticated and thus eligible for downstream
+      // commands; anything else stays upstream-only.
+      if (ev["type"] === "register" && token_ok(ev["token"], this.token)) {
+        this._authed.add(ws);
+      }
+      const sid = ev["source_id"];
+      if (typeof sid === "string" && sid && this._authed.has(ws)) {
+        if (ev["type"] === "deactivate") {
+          if (this._commands.get(sid) === ws) this._commands.delete(sid);
+        } else {
+          this._commands.set(sid, ws);
+        }
+      } else if (ev["type"] === "deactivate" && typeof sid === "string" && sid) {
+        // Unauthenticated deactivate still cleans up (no-op if unmapped).
+        if (this._commands.get(sid) === ws) this._commands.delete(sid);
+      }
       // events.put_nowait(ev) except queue.Full: pass
       this.events.put(ev);
     });
     ws.on("error", () => {});
+    ws.on("close", () => {
+      for (const [sid, sock] of this._commands) {
+        if (sock === ws) this._commands.delete(sid);
+      }
+    });
   }
 
   // Loopback diagnostics: transport stats + whatever the UI is showing.
@@ -385,6 +441,33 @@ export class WSServer {
   stats(): Record<string, unknown> {
     return { frames: this._frames_seen, bad_frames: this._frame_errors, error: this._error };
   }
+
+  // Desktop->userscript command delivery (#219). Validates the frame
+  // (coerce_command), routes it to the socket that registered source_id,
+  // and reports whether it was delivered. Unknown source, junk frame or a
+  // closing socket all return false; nothing is ever broadcast.
+  sendCommand(cmd: unknown): boolean {
+    const frame = coerce_command(cmd);
+    if (frame === null) return false;
+    const ws = this._commands.get(frame.source_id);
+    if (ws === undefined || ws.readyState !== WebSocket.OPEN) return false;
+    try {
+      ws.send(JSON.stringify(frame));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
+// Constant-time comparison for the command-channel token (#219): equal
+// length is a precondition of timingSafeEqual, and a length mismatch on a
+// 64-hex-char token leaks nothing an attacker can amortize.
+function token_ok(candidate: unknown, expected: string): boolean {
+  if (typeof candidate !== "string" || !candidate) return false;
+  const a = Buffer.from(candidate, "utf8");
+  const b = Buffer.from(expected, "utf8");
+  return a.length === b.length && timingSafeEqual(a, b);
 }
 
 function to_buffer(data: unknown): Buffer {

@@ -157,8 +157,12 @@ window.GM_addElement = function (tag, attrs) {
   return el;
 };
 window.GM_xmlhttpRequest = function (o) {
+  // Real Tampermonkey hands back the full body in responseText; the #219
+  // token fetch parses it, so the shim must return the actual text.
   fetch(o.url, { method: o.method || 'GET' }).then(function (r) {
-    if (o.onload) o.onload({ status: r.status, responseText: '', finalUrl: r.url });
+    return r.text().then(function (t) {
+      if (o.onload) o.onload({ status: r.status, responseText: t, finalUrl: r.url });
+    });
   }).catch(function (e) {
     if (o.onerror) o.onerror({ error: String(e), errorText: String(e) });
   });
@@ -625,6 +629,20 @@ export class DesktopApp {
     if (this.modePort === null) throw new Error("provider control is available only in the test harness");
     await this.control("/provider", { provider });
   }
+  // #219: drive the downstream command channel through the real WSServer.
+  // Returns whether the command was delivered (false = no such live source).
+  async send_command(cmd: Record<string, unknown>): Promise<boolean> {
+    if (this.modePort === null) throw new Error("mode control is available only in the test harness");
+    const res = await fetch("http://127.0.0.1:" + this.modePort + "/command", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(cmd),
+      signal: AbortSignal.timeout(3000),
+    });
+    const body = await res.json() as { delivered?: boolean };
+    if (res.status !== 202) throw new Error("E2E app rejected /command: HTTP " + res.status);
+    return body.delivered === true;
+  }
   log_tail(limit = 3000): string {
     try { return fs.readFileSync(this.logPath).subarray(-limit).toString("utf8"); }
     catch { return ""; }
@@ -809,6 +827,8 @@ export const LIVE_PROBE = `
   var urls = (window.__e2e_urls || []).filter(function (u) { return /timedtext|srv3|json3/i.test(u); });
   var ys = window.__youtubesub;
   return JSON.stringify({
+    url: String(location.href).slice(0, 120),
+    title: document.title.slice(0, 80),
     player: !!p,
     playerState: p && p.getPlayerState ? p.getPlayerState() : null,
     t: p && p.getCurrentTime ? Math.round(p.getCurrentTime() * 10) / 10 : null,

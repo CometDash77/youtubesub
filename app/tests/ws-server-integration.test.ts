@@ -65,6 +65,16 @@ function ws_send(ws: WsSocket, frame: unknown): Promise<void> {
     ws.send(typeof frame === "string" ? frame : JSON.stringify(frame), () => resolve()));
 }
 
+// GET /token (#219): the command-channel secret. Returns the raw token plus
+// the response headers so tests can assert the no-CORS contract.
+async function fetch_token(port: number): Promise<{ ok: boolean; token: string; headers: Record<string, string> }> {
+  const res = await fetch("http://127.0.0.1:" + port + "/token");
+  const body = await res.json() as { ok: boolean; version: number; token: string };
+  const headers: Record<string, string> = {};
+  res.headers.forEach((v, k) => { headers[k] = v; });
+  return { ok: body.ok, token: body.token, headers };
+}
+
 function withTmp(name: string, fn: (dir: string) => Promise<void>): void {
   test(name, async () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), "ws-int-test-"));
@@ -144,6 +154,9 @@ test("sanitize and origin unit", () => {
   assert.equal(origin_allowed("https://www.youtube.com"), true);
   assert.equal(origin_allowed("https://evil.example.com"), false);
   assert.equal(origin_allowed(""), true);
+  // #219: precise hostname suffix match retires the endsWith quirk.
+  assert.equal(origin_allowed("https://notyoutube.com"), false);
+  assert.equal(origin_allowed("https://youtube.com.evil.com"), false);
 });
 
 async function client_flow(port: number): Promise<string> {
@@ -352,6 +365,127 @@ test("status without provider leaks nothing and survives provider failure", asyn
     assert.equal(data["status_error"], "RuntimeError");
   } finally {
     await broken.stop();
+  }
+});
+
+test("token gate: no token means upstream-only, /token serves the secret (#219)", async () => {
+  const evq = new EventQueue(100);
+  const srv = new WSServer(0, evq);
+  const port = await srv.start();
+  try {
+    // Endpoint shape: same token twice, 64 hex chars, and deliberately no
+    // CORS headers (a page-world fetch cannot read it; GM_xmlhttpRequest can).
+    const first = await fetch_token(port);
+    const second = await fetch_token(port);
+    assert.equal(first.token, second.token, "the token is per-process, stable");
+    assert.match(first.token, /^[0-9a-f]{64}$/, "token is 64 hex chars (32 bytes)");
+    assert.equal(first.headers["access-control-allow-origin"], undefined,
+                 "no CORS header by design");
+    assert.equal(first.ok, true);
+
+    // Authenticated connection: commands deliver.
+    const wsAuth = await ws_open(port, "https://www.youtube.com");
+    await ws_send(wsAuth, { type: "register", provider: "youtube", source_id: "s1", video_id: "v",
+                            token: first.token });
+    await sleep(150);
+    assert.equal(srv.sendCommand({ type: "play", source_id: "s1" }), true,
+                 "token-authenticated source is commandable");
+
+    // Tokenless connection: upstream frames still flow (events queue), but the
+    // source is never commandable.
+    const wsBare = await ws_open(port, "https://www.youtube.com");
+    await ws_send(wsBare, { type: "register", provider: "youtube", source_id: "s2", video_id: "v" });
+    await sleep(150);
+    assert.equal(srv.sendCommand({ type: "play", source_id: "s2" }), false,
+                 "tokenless register stays upstream-only");
+    assert.equal(srv.sendCommand({ type: "play", source_id: "s1" }), true,
+                 "the bare register did not clobber the authed mapping");
+
+    // Wrong token: same treatment as no token.
+    await ws_send(wsBare, { type: "register", provider: "youtube", source_id: "s3", video_id: "v",
+                            token: "deadbeef".repeat(8) });
+    await sleep(150);
+    assert.equal(srv.sendCommand({ type: "play", source_id: "s3" }), false,
+                 "a wrong token is upstream-only");
+    assert.equal(srv.sendCommand({ type: "play", source_id: "s1" }), true,
+                 "a wrong token did not clobber the authed mapping");
+
+    // Upstream frames from the tokenless connection still reach the queue.
+    await ws_send(wsBare, { type: "sync", source_id: "s2", playing: false });
+    await sleep(150);
+    const drained = evq.drain();
+    assert.ok(drained.some((e) => e["type"] === "sync" && e["source_id"] === "s2"),
+              "upstream frames flow regardless of token");
+
+    // Late authentication: a tokenless connection that re-registers with the
+    // token becomes commandable (userscript retry path).
+    await ws_send(wsBare, { type: "register", provider: "youtube", source_id: "s2", video_id: "v",
+                            token: first.token });
+    await sleep(150);
+    assert.equal(srv.sendCommand({ type: "play", source_id: "s2" }), true,
+                 "re-register with the token upgrades the connection");
+
+    wsAuth.close();
+    wsBare.close();
+    await sleep(100);
+  } finally {
+    await srv.stop();
+  }
+});
+
+test("commands route to the registered source's socket only (#219)", async () => {
+  const evq = new EventQueue(100);
+  const srv = new WSServer(0, evq);
+  const port = await srv.start();
+  try {
+    const wsA = await ws_open(port, "https://www.youtube.com");
+    const wsB = await ws_open(port, null);
+    const { token } = await fetch_token(port);
+    await ws_send(wsA, { type: "register", provider: "youtube", source_id: "sA", video_id: "v", token });
+    await ws_send(wsB, { type: "register", provider: "youtube", source_id: "sB", video_id: "v", token });
+    await sleep(150);
+
+    const got = new Promise<Record<string, unknown>>((resolve, reject) => {
+      wsA.once("message", (data: unknown) => {
+        try { resolve(JSON.parse(String(data))); } catch (e) { reject(e); }
+      });
+      wsA.once("close", () => reject(new Error("closed before the command arrived")));
+    });
+    assert.equal(srv.sendCommand({ type: "seek", source_id: "sA", delta_ms: -15000 }), true);
+    assert.deepEqual(await got, { type: "seek", source_id: "sA", delta_ms: -15000 });
+
+    // Delivery is addressed, never broadcast: B hears nothing of A's mail.
+    let bCount = 0;
+    wsB.on("message", () => { bCount++; });
+    const got2 = new Promise<Record<string, unknown>>((resolve, reject) => {
+      wsA.once("message", (data: unknown) => {
+        try { resolve(JSON.parse(String(data))); } catch (e) { reject(e); }
+      });
+    });
+    assert.equal(srv.sendCommand({ type: "pause", source_id: "sA" }), true);
+    assert.deepEqual(await got2, { type: "pause", source_id: "sA" });
+    await sleep(100);
+    assert.equal(bCount, 0, "a command for sA must not leak to sB");
+
+    assert.equal(srv.sendCommand({ type: "play", source_id: "missing" }), false,
+                 "unknown source is unreachable");
+    assert.equal(srv.sendCommand({ type: "seek", source_id: "sA" }), false,
+                 "junk command (no delta_ms) is dropped");
+    assert.equal(srv.sendCommand("nonsense"), false, "non-object command is dropped");
+    assert.equal(srv.sendCommand({ type: "seek", source_id: "sA", delta_ms: 15000 }), true,
+                 "valid commands still deliver after junk attempts");
+
+    await ws_send(wsA, { type: "deactivate", source_id: "sA" });
+    await sleep(100);
+    assert.equal(srv.sendCommand({ type: "play", source_id: "sA" }), false,
+                 "deactivated source is unreachable");
+    wsA.close();
+    wsB.close();
+    await sleep(100);
+    assert.equal(srv.sendCommand({ type: "play", source_id: "sB" }), false,
+                 "closed socket is unreachable");
+  } finally {
+    await srv.stop();
   }
 });
 

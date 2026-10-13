@@ -8,6 +8,7 @@ import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import WebSocket from "ws";
 import { originAllowed, sanitizeEvent, startSkeletonServer } from "../src/main/ws-server.ts";
+import { coerce_command } from "../src/main/protocol.ts";
 
 type Json = Record<string, any>;
 type WsSocket = any;
@@ -55,6 +56,11 @@ withServer("A5.1 /health returns 200 ok true version 1", async (port) => {
 withServer("A5.2 origin allowlist: non-whitelisted rejected 403, whitelisted pass", async (port) => {
   await assert.rejects(
     wsOpen(port, { headers: { Origin: "https://evil.example.com" } }),
+    (err: Error & { statusCode?: number }) => err.statusCode === 403,
+  );
+  // #219: the retired endsWith quirk - a same-shape lookalike origin must fail.
+  await assert.rejects(
+    wsOpen(port, { headers: { Origin: "https://notyoutube.com" } }),
     (err: Error & { statusCode?: number }) => err.statusCode === 403,
   );
   for (const origin of [undefined, "http://localhost:5173", "https://www.youtube.com"]) {
@@ -120,6 +126,12 @@ test("unit: originAllowed table and sanitizeEvent guards", () => {
   assert.equal(originAllowed("http://127.0.0.1:9877"), true);
   assert.equal(originAllowed("https://www.youtube.com"), true);
   assert.equal(originAllowed("https://evil.example.com"), false);
+  // #219: precise hostname suffix match retires the endsWith quirk.
+  assert.equal(originAllowed("https://youtube.com"), true);
+  assert.equal(originAllowed("https://m.youtube.com"), true);
+  assert.equal(originAllowed("https://notyoutube.com"), false);
+  assert.equal(originAllowed("https://youtube.com.evil.com"), false);
+  assert.equal(originAllowed("http://localhost.evil.com:3000"), false);
   assert.equal(sanitizeEvent(null), null);
   assert.equal(sanitizeEvent([1, 2]), null);
   assert.equal(sanitizeEvent({ type: "mystery" }), null);
@@ -127,4 +139,30 @@ test("unit: originAllowed table and sanitizeEvent guards", () => {
   assert.equal(sanitizeEvent({ type: "sync", source_id: "" }), null);
   assert.equal(sanitizeEvent({ type: "cues" }), null);
   assert.ok(sanitizeEvent({ type: "cues", source_id: "" }), "register/cues allow empty source_id");
+});
+
+test("unit: coerce_command table (#219 desktop->userscript commands)", () => {
+  assert.deepEqual(coerce_command({ type: "play", source_id: "s1" }),
+                   { type: "play", source_id: "s1" });
+  assert.deepEqual(coerce_command({ type: "pause", source_id: "s1" }),
+                   { type: "pause", source_id: "s1" });
+  assert.deepEqual(coerce_command({ type: "seek", source_id: "s1", delta_ms: 15000 }),
+                   { type: "seek", source_id: "s1", delta_ms: 15000 });
+  assert.deepEqual(coerce_command({ type: "mute", source_id: "s1", muted: true }),
+                   { type: "mute", source_id: "s1", muted: true });
+  assert.equal(coerce_command({ type: "seek", source_id: "s1" }), null, "seek needs delta_ms");
+  assert.equal(coerce_command({ type: "seek", source_id: "s1", delta_ms: "150" }), null,
+               "delta_ms must be a number");
+  assert.equal(coerce_command({ type: "seek", source_id: "s1", delta_ms: Number.NaN }), null,
+               "delta_ms must be finite");
+  assert.equal(coerce_command({ type: "mute", source_id: "s1" }), null, "mute needs muted");
+  assert.equal(coerce_command({ type: "mute", source_id: "s1", muted: "yes" }), null,
+               "muted must be a boolean");
+  assert.equal(coerce_command({ type: "play" }), null, "source_id is mandatory");
+  assert.equal(coerce_command({ type: "play", source_id: "" }), null, "empty source_id is unroutable");
+  assert.equal(coerce_command({ type: "mystery", source_id: "s1" }), null, "whitelist holds");
+  assert.equal(coerce_command({ type: "play_pause", source_id: "s1" }), null,
+               "retired v1 placeholder is not a command");
+  assert.equal(coerce_command("play"), null);
+  assert.equal(coerce_command(null), null);
 });
