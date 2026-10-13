@@ -57,8 +57,11 @@ export const SHADOW_MARGIN = 24;
 // stays on screen.
 export const PREFERRED_W = 1120;
 export const PREFERRED_H = 760;
-export const MIN_W = 560;
-export const MIN_H = 360;
+// #231 free-shell floor (down from the 560x360 prototype): the outer scroll
+// region carries any page taller than the viewport, so the window may shrink
+// to 420x300 and every page stays usable (footer always on screen).
+export const MIN_W = 420;
+export const MIN_H = 300;
 // Fixed height of the title row + footer + inner/outer margins (page-content
 // independent; measured 1015 - 858 = 157 in Qt, 160 in the DOM model).
 export const CHROME_H = 160;

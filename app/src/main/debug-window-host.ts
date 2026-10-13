@@ -111,21 +111,12 @@ export function createDebugWindowHost(deps: DebugHostDeps): DebugHost {
 
   debug.on_change(() => pushState());
 
-  function applyBounds(): void {
-    const w = win;
-    if (!w) return;
-    const b = w.getBounds();
-    if (b.width !== debug.width || b.height !== debug.height) {
-      w.setBounds({ x: b.x, y: b.y, width: debug.width, height: debug.height });
-    }
-  }
-
   function createWindow(): void {
     win = new BrowserWindow({
       width: debug.width,
       height: debug.height,
-      minWidth: 560,
-      minHeight: 360,
+      minWidth: 420,         // mirrors the model floor (window.ts MIN_W, #231)
+      minHeight: 300,        // mirrors the model floor (window.ts MIN_H, #231)
       frame: false,          // frameless, self-drawn chrome
       transparent: true,     // the panel inside is opaque cream (tokens.ts);
                              // transparency only serves the rounded corners
@@ -147,8 +138,11 @@ export function createDebugWindowHost(deps: DebugHostDeps): DebugHost {
     // intermittently in E2E.
     win.webContents.on("did-finish-load", () => pushState());
     win.on("show", () => {
-      debug.show();          // first show after hide: resnapshot + refit
-      applyBounds();
+      // #231: show never resizes the window. debug.show() only re-takes the
+      // model baseline; the refit that used to force the model size back
+      // onto the OS window on every show/open is gone. Restoring bounds on
+      // open belongs to the persistence ticket.
+      debug.show();
       pushState();
     });
     win.on("hide", () => {
@@ -175,8 +169,7 @@ export function createDebugWindowHost(deps: DebugHostDeps): DebugHost {
       win.show();
     } else {
       // Already visible: show() would not refire the show-event in Qt either.
-      applyBounds();
-      pushState();
+      pushState();           // #231: no refit - open never resizes either
     }
   }
 

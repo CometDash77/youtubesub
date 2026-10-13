@@ -48,8 +48,10 @@ test("fit_to_screen never exceeds the available area", () => {
     [800 - SCREEN_MARGIN, 800 - SCREEN_MARGIN]);
   // 大屏：原样保留想要的尺寸，不放大
   assert.deepEqual(fit_to_screen(1120, 1015, 1920, 1080), [1120, 1015]);
-  // 屏小到装不下下限时退回下限，不缩成 0
-  assert.deepEqual(fit_to_screen(1120, 1015, 400, 400), [MIN_W, MIN_H]);
+  // 屏小到装不下下限时退回下限，不缩成 0（#231 后下限 420x300：双维都
+  // 要低于下限才整体退回；400x400 屏上高度已装得下，由 avail 收敛）。
+  assert.deepEqual(fit_to_screen(1120, 1015, 360, 360), [MIN_W, MIN_H]);
+  assert.deepEqual(fit_to_screen(1120, 1015, 400, 400), [MIN_W, 400 - SCREEN_MARGIN]);
   for (const [avail_w, avail_h] of [[1920, 1080], [1366, 768], [1280, 720], [800, 800]]) {
     const [w, h] = fit_to_screen(1120, 1015, avail_w!, avail_h!);
     assert.ok(w >= MIN_W && h >= MIN_H);
@@ -121,5 +123,61 @@ test("every page can be scrolled to its last row", () => {
   }
   // 设置页在矮屏上一定得靠外层滚动区才到底，滚到底后最后一项「测试连接」
   // 在窗口内 —— 由上面的内容底边断言与页脚结构断言共同钉住。
+  w.close();
+});
+
+// ---- #231: whole-window free shell (blank-drag / 420x300 floor / no refit) ----
+
+test("#231: the window minimum is 420x300, model and host agree", () => {
+  assert.equal(MIN_W, 420);
+  assert.equal(MIN_H, 300);
+  // The Electron window mirrors the model floor (host structure scan).
+  const host = fs.readFileSync(
+    new URL("../src/main/debug-window-host.ts", import.meta.url), "utf8");
+  assert.ok(host.includes("minWidth: 420"), "host minWidth must mirror MIN_W");
+  assert.ok(host.includes("minHeight: 300"), "host minHeight must mirror MIN_H");
+  // The floor really is the floor: the model clamps into it.
+  const w = windowModel();
+  w.resize(100, 100);
+  assert.equal(w.width, MIN_W);
+  assert.equal(w.height, MIN_H);
+  w.close();
+});
+
+test("#231: show/open never resizes the window - the refit is gone", () => {
+  const host = fs.readFileSync(
+    new URL("../src/main/debug-window-host.ts", import.meta.url), "utf8");
+  assert.ok(!host.includes("applyBounds"), "the show/open refit must be deleted");
+  assert.ok(!host.includes("setBounds"), "the debug host must never write window bounds");
+});
+
+test("#231: blank areas drag the window, interactive surfaces opt out", () => {
+  const html = fs.readFileSync(
+    new URL("../src/renderer/debug.html", import.meta.url), "utf8");
+  // 空白可拖：面板整体 + 两行 chrome + 活动页盒（卡片间隙留在 drag 区里）。
+  assert.ok(
+    html.includes("#debugWindow, #debugHeader, #debugFooter, .page { -webkit-app-region: drag; }"),
+    "panel + chrome rows + page boxes must be drag regions");
+  // 交互面排除：滚动区（滚动条拇指要能抓）、页签胶囊、关闭按钮、页脚按钮、
+  // 每张卡片（控件与 user-select:text 读数）、重命名弹窗。
+  assert.ok(
+    html.includes("#debugScroll, #pageswitch, #closeBtn, #footerButtons, .debugCard,")
+    && html.includes("#renameModal { -webkit-app-region: no-drag; }"),
+    "scroll region + tab pill + close + footer buttons + cards + modal must opt out");
+});
+
+test("#231: at the 420x300 floor all three pages stay usable", () => {
+  const w = windowModel();
+  w.show();
+  w.resize(MIN_W, MIN_H);
+  for (const name of ["settings", "tuning", "diag"]) {
+    const st = w.scroll_state(name);
+    // 视口不许塌成 0（chrome 之下还得留出滚动空间），最后一行都得能到。
+    assert.ok(st.viewport_h > 0, name + ": viewport must not collapse at the floor");
+    assert.ok(
+      st.content_h <= st.viewport_h ||
+      (st.scroll_max > 0 && st.content_h - st.scroll_max <= st.viewport_h),
+      name + ": last row reachable at the floor");
+  }
   w.close();
 });

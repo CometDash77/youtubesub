@@ -101,6 +101,17 @@
     #debugFooter { display: flex; align-items: center; gap: 10px; }
     #footerStatus { font-size: 12px; }
     #footerButtons { margin-left: auto; display: flex; gap: 10px; }
+    /* #231 whole-window free shell: the panel surface drags everywhere that
+       is not interactive - the padding rim, the two chrome rows, the gaps
+       between rows and between cards (the active .page box is drag; cards
+       opt out, so the 10px card gaps stay grabbable). Interactive surfaces
+       opt out: the scroll region itself (its scrollbar thumb must remain
+       grabbable - the page content drags via .page), the tab pill, the
+       close button, the save/cancel cluster, each card (its controls and
+       the user-select:text readouts), and the rename modal. */
+    #debugWindow, #debugHeader, #debugFooter, .page { -webkit-app-region: drag; }
+    #debugScroll, #pageswitch, #closeBtn, #footerButtons, .debugCard,
+    #renameModal { -webkit-app-region: no-drag; }
     /* diag page */
     #diagBar { display: flex; gap: 14px; align-items: center; font-size: 13px; }
     #diagBar .debugBadgeOk, #diagBar .debugBadgeWarn, #diagBar .debugBadgeError
@@ -119,17 +130,6 @@
        this row/status styling. */
     #waProtoRow { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 8px; }
     #waProtoStatus { font-size: 12px; color: #355044; user-select: text; white-space: pre-wrap; }
-    #waBfWrap {
-      position: relative; height: 72px; border-radius: 8px; overflow: hidden; margin-top: 8px;
-      background: repeating-linear-gradient(45deg, #DAD6C8 0 12px, #C9C4B6 12px 24px);
-    }
-    #waBfGlass {
-      position: absolute; inset: 10px 30%; display: flex; align-items: center; justify-content: center;
-      border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.43);
-      background: rgba(246, 243, 235, 0.35);
-      backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
-      color: #2D3662; font-size: 12px;
-    }
     #renameModal wa-input { width: 100%; }
   </style>
   <!-- #220 WA prototype: vendored dist-cdn theme closure (pulls
