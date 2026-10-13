@@ -8,8 +8,10 @@
        values here mirror it for the static shell - cards / text roles /
        badges are applied from the pushed state via the same class names). */
     html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }
-    body { /* SHADOW_MARGIN: the soft shadow needs transparent margin around the panel */
-      padding: 24px; box-sizing: border-box; height: 100vh;
+    /* #236: no SHADOW_MARGIN ring - the window rect IS the visible panel
+       rect, so no alpha=0 margin band exists to swallow or forward clicks. */
+    body {
+      box-sizing: border-box; height: 100vh;
       font-family: "Microsoft YaHei UI", sans-serif; user-select: none;
     }
     #debugWindow {
@@ -23,7 +25,6 @@
       background: rgb(246, 243, 235);
       border: 1px solid rgba(255, 255, 255, 0.43);
       border-radius: 24px;
-      box-shadow: 0 8px 48px rgba(0, 0, 0, 0.27);
       /* repo palette -> WA custom properties: the token mapping the #220 ADR
          prototyped on the trial card, promoted to the whole window by #216 so
          every migrated control speaks the same recipe (values mirror
@@ -101,17 +102,18 @@
     #debugFooter { display: flex; align-items: center; gap: 10px; }
     #footerStatus { font-size: 12px; }
     #footerButtons { margin-left: auto; display: flex; gap: 10px; }
-    /* #231 whole-window free shell: the panel surface drags everywhere that
-       is not interactive - the padding rim, the two chrome rows, the gaps
-       between rows and between cards (the active .page box is drag; cards
-       opt out, so the 10px card gaps stay grabbable). Interactive surfaces
-       opt out: the scroll region itself (its scrollbar thumb must remain
-       grabbable - the page content drags via .page), the tab pill, the
-       close button, the save/cancel cluster, each card (its controls and
-       the user-select:text readouts), and the rename modal. */
-    #debugWindow, #debugHeader, #debugFooter, .page { -webkit-app-region: drag; }
-    #debugScroll, #pageswitch, #closeBtn, #footerButtons, .debugCard,
-    #renameModal { -webkit-app-region: no-drag; }
+    /* #236 drag contract (revised from #231's whole-window free shell): only
+       the title row drags the window. Everything else is plain client area -
+       a press on the padding rim, a row/card gap, the footer band or any
+       page box must never move the window. Interactive surfaces keep explicit
+       opt-outs: the scroll region (its scrollbar thumb must stay grabbable),
+       the tab pill, the close button, the save/cancel cluster, each card
+       (its controls and the user-select:text readouts), and the rename
+       modal. #debugWindow / #debugFooter / .page pin the #231 offenders
+       as no-drag on purpose. */
+    #debugHeader { -webkit-app-region: drag; }
+    #debugWindow, #debugFooter, .page, #debugScroll, #pageswitch, #closeBtn,
+    #footerButtons, .debugCard, #renameModal { -webkit-app-region: no-drag; }
     /* #235: narrow windows - the default-size h1 wraps to three lines and
        the version hint under it fills the whole first screen before any
        form card shows. At <=480px put title and hint on one baseline row,

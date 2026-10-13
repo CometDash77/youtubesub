@@ -30,7 +30,7 @@ import * as TOKENS from "../src/main/debug/tokens.ts";
 import { overlay_menu_model } from "../src/main/overlay-menu.ts";
 import {
   DebugWindow, open_or_reuse, CONFIRM_STAY, CONFIRM_SAVE, CONFIRM_DISCARD,
-  PAGE_TITLES, PAGES, SHADOW_MARGIN, type ConfirmChoice,
+  PAGE_TITLES, PAGES, type ConfirmChoice,
 } from "../src/main/debug/window.ts";
 
 // The autouse fixture's stance: the close prompt must never block; tests
@@ -163,7 +163,8 @@ test("the close affordance hides the frameless window", () => {
 });
 
 test("the window paints the documented opaque chrome", () => {
-  // 外层 = 不透明奶油底 + 24 圆角 + 1px 内描边 + 48px 柔阴影,内层卡片保留。
+  // 外层 = 不透明奶油底 + 24 圆角 + 1px 内描边,内层卡片保留。#236: 柔阴影和
+  // 它的 24px 透明环已删——窗口矩形即可见面板矩形,环区不再吞/转点击。
   const [window] = _window();
   try {
     const sheet = TOKENS.window_sheet();
@@ -175,16 +176,20 @@ test("the window paints the documented opaque chrome", () => {
     assert.ok(block[1]!.includes("border-radius: " + TOKENS.RADIUS + "px"));
     assert.ok(/border:\s*1px solid rgba\(\s*\d+,\s*\d+,\s*\d+,\s*\d+\s*\)/.test(block[1]!),
       "1px 内描边");
-    // 柔阴影 + 阴影边距(渲染层结构;模型钉数值)
+    // #236: 阴影与其透明边距环双双移除(渲染层结构断言;模型侧 CHROME_H=112)。
+    // 负向匹配只钉 body / #debugWindow 两个规则块:其余卡片、弹窗将来合法的
+    // 内边距与装饰阴影不归这条检查管。
     const html = fs.readFileSync(
       new URL("../src/renderer/debug.html", import.meta.url), "utf8");
-    assert.ok(html.includes("padding: 24px"), "阴影需要边距,去掉就看不见了");
-    assert.ok(html.includes("0 8px 48px"), "柔阴影两版都留");
+    const bodyBlock = html.match(/(^|\n)\s*body\s*\{([^}]*)\}/);
+    assert.ok(bodyBlock, "debug.html 必须有 body 规则");
+    assert.ok(!bodyBlock[2]!.includes("padding:"), "#236: 24px 透明环已删,窗口矩形即可见面板矩形");
     // #209 防回归:静态外壳自身必须涂上令牌的不透明窗口底——透明窗口层的
     // alpha=0 像素在 Windows 上命中测试直接穿透(整窗点不到、透出桌面)。
     // 值与 tokens 配方锁死同步,防止手工镜像再漂移。
     const winBlock = html.match(/#debugWindow\s*\{([^}]*)\}/);
     assert.ok(winBlock, "debug.html 必须有 #debugWindow 规则");
+    assert.ok(!winBlock[1]!.includes("box-shadow"), "#236: 柔阴影已删,不再留 alpha=0 边距");
     const [wr, wg, wb, wa] = TOKENS.WINDOW_RGBA;
     const [sr, sg, sb, sa] = TOKENS.WINDOW_STROKE_RGBA;
     assert.equal(wa, 255, "令牌窗口底必须不透明(透明/磨砂配方已废)");

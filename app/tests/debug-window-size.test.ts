@@ -156,19 +156,24 @@ test("#231: show/open never resizes the window - the refit is gone", () => {
     "the sole bounds writer must be the e2e hook");
 });
 
-test("#231: blank areas drag the window, interactive surfaces opt out", () => {
+test("#236: only the title row drags, every other surface is client area", () => {
   const html = fs.readFileSync(
     new URL("../src/renderer/debug.html", import.meta.url), "utf8");
-  // 空白可拖：面板整体 + 两行 chrome + 活动页盒（卡片间隙留在 drag 区里）。
+  // #236 收缩 #231 的整窗 drag 壳：拖拽区只剩标题行（含版本行空白）。
+  // 面板内边距圈、卡片间隙、页脚带、页盒按下去必须是 client——不再整窗搬家。
   assert.ok(
-    html.includes("#debugWindow, #debugHeader, #debugFooter, .page { -webkit-app-region: drag; }"),
-    "panel + chrome rows + page boxes must be drag regions");
-  // 交互面排除：滚动区（滚动条拇指要能抓）、页签胶囊、关闭按钮、页脚按钮、
-  // 每张卡片（控件与 user-select:text 读数）、重命名弹窗。
+    html.includes("#debugHeader { -webkit-app-region: drag; }"),
+    "only the title row may drag the window");
+  assert.equal(
+    [...html.matchAll(/-webkit-app-region:\s*drag\b/g)].length, 1,
+    "no other element may declare a drag region");
+  // 交互面 + #231 的旧 drag 区显式 no-drag：面板盒（内边距圈与行间隙）、
+  // 页脚带、页盒（卡片间隙）、滚动区（滚动条拇指要能抓）、页签胶囊、关闭
+  // 按钮、页脚按钮、每张卡片（控件与 user-select:text 读数）、重命名弹窗。
   assert.ok(
-    html.includes("#debugScroll, #pageswitch, #closeBtn, #footerButtons, .debugCard,")
-    && html.includes("#renameModal { -webkit-app-region: no-drag; }"),
-    "scroll region + tab pill + close + footer buttons + cards + modal must opt out");
+    html.includes("#debugWindow, #debugFooter, .page, #debugScroll, #pageswitch, #closeBtn,")
+    && html.includes("#footerButtons, .debugCard, #renameModal { -webkit-app-region: no-drag; }"),
+    "panel rim + footer + pages + interactive surfaces must be no-drag");
 });
 
 test("#235: narrow windows compress the title block to one row", () => {

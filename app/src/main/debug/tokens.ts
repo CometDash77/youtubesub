@@ -30,11 +30,11 @@ export const ERROR = TERRACOTTA;
 // Window surface: OPAQUE cream. The outer layer is never translucent/frosted
 // (user ruling 2026-10-03: "the frosted-glass effect is not necessary"); the
 // visual structure lives in the inner cards. Recipe = cream + 24 radius +
-// 1px inner stroke + 48px soft shadow.
+// 1px inner stroke. #236: the 48px soft shadow and its transparent margin
+// ring are gone - the window rect is the visible panel rect.
 export const WINDOW_RGBA: readonly [number, number, number, number] = [246, 243, 235, 255];
 export const WINDOW_STROKE_RGBA: readonly [number, number, number, number] = [255, 255, 255, 110];
 export const RADIUS = 24;
-export const SHADOW_BLUR = 48;
 
 // Hover/pressed steps of the primary button: one step lighter/darker of the
 // indigo primary (the token document only pins the static colors).

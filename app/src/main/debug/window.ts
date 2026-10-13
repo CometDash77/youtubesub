@@ -49,8 +49,6 @@ export type PageName = (typeof PAGES)[number];
 export const PAGE_TITLES: Record<string, string> = {
   settings: "设置", tuning: "调参", diag: "排障",
 };
-export const SHADOW_MARGIN = 24;
-
 // Design size (the prototype's 1120x760) and the short-screen fallback
 // (#180): page content goes to the outer scroll region, the window only
 // shrinks to the screen's available area, so the footer (Cancel / Save)
@@ -62,9 +60,10 @@ export const PREFERRED_H = 760;
 // to 420x300 and every page stays usable (footer always on screen).
 export const MIN_W = 420;
 export const MIN_H = 300;
-// Fixed height of the title row + footer + inner/outer margins (page-content
-// independent; measured 1015 - 858 = 157 in Qt, 160 in the DOM model).
-export const CHROME_H = 160;
+// Fixed height of the title row + footer + inner margins (page-content
+// independent; #180 measured 160 in the DOM model WITH the 24px shadow
+// ring, #236 deleted the ring: 160 - 2 * 24 = 112).
+export const CHROME_H = 112;
 export const SCREEN_MARGIN = 64;
 
 export function fit_to_screen(wanted_w: number, wanted_h: number,
